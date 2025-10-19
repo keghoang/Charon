@@ -1,23 +1,23 @@
 # Charon – ComfyUI ⇄ Nuke Integration
 
 ## 1. High-Level Overview
-Charon is a modular Nuke add-on that bridges Nuke’s node graph to ComfyUI’s API workflows. The tool now lives as a small launcher script (`ComfyUI_Nuke_Standalone.py`) plus a `charon/` package that owns all functionality:
+Charon is a modular Nuke add-on that bridges Nuke’s node graph to ComfyUI’s API workflows. The tool now lives as a small launcher script (`main.py`) plus a `charon_core/` package that owns all functionality:
 
-- **UI (`charon/ui.py`)** – PySide2/6 panel that manages workflow browsing, connection status, caching, and CharonOp node generation.
-- **Workflow pipeline (`charon/workflow_pipeline.py`)** – Mandatory external conversion that shells into ComfyUI’s embedded Python, loads every custom node, runs Seth Robinson’s converter, flattens `SetNode/GetNode` pairs, and emits API-ready prompts. No heuristic fallbacks remain; failures raise immediately with detailed logs.
-- **Workflow analysis (`charon/workflow_analysis.py`)** – Two sets of helpers: one for raw UI JSON (used to build knobs and display summaries) and one for converted API graphs.
-- **Path utilities (`charon/paths.py`)** – Discovers ComfyUI install paths, extends `sys.path`, creates temp dirs (`D:\Nuke\charon\{temp,results,status,debug}`), and resolves embedded python executables.
-- **Node factory (`charon/node_factory.py`)** + **processor script (`charon/processor_script.py`)** – Build CharonOp group nodes, generate the embedded PyScript that renders inputs, uploads images, monitors results, and drops Read nodes back into the graph.
-- **Workflow loader (`charon/workflow_loader.py`)** – Small helpers to list preset JSON workflows and read files without conversion.
-- **HTTP client (`charon/comfy_client.py`)** – Minimal urllib-based REST client for ComfyUI (`/upload/image`, `/prompt`, `/history`, `/view`). Used by the processing script and panel tests.
+- **UI (`charon_core/ui.py`)** – PySide2/6 panel that manages workflow browsing, connection status, caching, and CharonOp node generation.
+- **Workflow pipeline (`charon_core/workflow_pipeline.py`)** – Mandatory external conversion that shells into ComfyUI’s embedded Python, loads every custom node, runs Seth Robinson’s converter, flattens `SetNode/GetNode` pairs, and emits API-ready prompts. No heuristic fallbacks remain; failures raise immediately with detailed logs.
+- **Workflow analysis (`charon_core/workflow_analysis.py`)** – Two sets of helpers: one for raw UI JSON (used to build knobs and display summaries) and one for converted API graphs.
+- **Path utilities (`charon_core/paths.py`)** – Discovers ComfyUI install paths, extends `sys.path`, creates temp dirs (`D:\Nuke\charon\{temp,results,status,debug}`), and resolves embedded python executables.
+- **Node factory (`charon_core/node_factory.py`)** + **processor script (`charon_core/processor_script.py`)** – Build CharonOp group nodes, generate the embedded PyScript that renders inputs, uploads images, monitors results, and drops Read nodes back into the graph.
+- **Workflow loader (`charon_core/workflow_loader.py`)** – Small helpers to list preset JSON workflows and read files without conversion.
+- **HTTP client (`charon_core/comfy_client.py`)** – Minimal urllib-based REST client for ComfyUI (`/upload/image`, `/prompt`, `/history`, `/view`). Used by the processing script and panel tests.
 
 ## 2. Workflow
 1. **Launch** – In Nuke’s Script Editor run:
    ```python
    import sys; sys.path.insert(0, r"D:\Coding\Nuke_ComfyUI")
-   exec(open(r"D:\Coding\Nuke_ComfyUI\ComfyUI_Nuke_Standalone.py").read(), globals())
+   exec(open(r"D:\Coding\Nuke_ComfyUI\main.py").read(), globals())
    ```
-   The entry script imports `charon.create_charon_panel()` and ensures a single instance is reused.
+   The entry script imports `charon_core.create_charon_panel()` and ensures a single instance is reused.
 2. **Panel** – On init the panel:
    - Creates logs (`self.log(...)` prints `[HH:MM:SS] [LEVEL] message` into the console).
    - Stores caches (`self.workflow_cache`, `self.current_workflow_path/name`, raw JSON).
@@ -48,13 +48,22 @@ Charon is a modular Nuke add-on that bridges Nuke’s node graph to ComfyUI’s 
 - **Caching & debug dumps** – `self.workflow_cache[path] = {"prompt": converted, "debug_path": file}` stores the converted prompt. `write_debug_prompt` saves JSON snapshots (e.g. `rgb2x_albedo_GET_converted.json`), mirrored in console prints, so prompt mismatches are easy to reproduce outside Nuke.
 - **Deferred conversion** – Raw UI JSON is analysed for knob names, but conversion is only triggered at process time (and cached). This eliminates the lag when browsing workflows.
 - **Node placement** – Newly generated CharonOp nodes appear near selected nodes, improving user ergonomics.
+<<<<<<< HEAD
 - **Panel reuse** – `charon/__init__.py` keeps a singleton panel instance; subsequent loads simply raise the existing window instead of reinitializing caches/connections.
+=======
+- **Panel reuse** – `charon_core/__init__.py` keeps a singleton panel instance; subsequent loads simply raise the existing window instead of reinitializing caches/connections.
+>>>>>>> eda09a3 (Initial commit: Move Nuke ComfyUI codebase to Git repository)
 - **Error transparency** – Console log messages highlight missing dependencies (e.g. custom nodes failing to import) but those don’t block converted prompts. All crucial errors now bubble up with full stack traces.
 
 ## 4. Current Repository Layout
 ```
+<<<<<<< HEAD
 ComfyUI_Nuke_Standalone.py   # thin launcher
 charon/
+=======
+main.py                      # thin launcher
+charon_core/
+>>>>>>> eda09a3 (Initial commit: Move Nuke ComfyUI codebase to Git repository)
   __init__.py                # singleton entry point
   comfy_client.py            # REST client
   node_factory.py            # CharonOp builder
@@ -70,7 +79,11 @@ D:\Nuke\charon\              # runtime temp/output/debug directory
 ```
 
 ## 5. Recent Fixes & QoL Enhancements
+<<<<<<< HEAD
 - Replaced monolithic script with modular `charon` package for maintainability.
+=======
+- Replaced monolithic script with modular `charon_core` package for maintainability.
+>>>>>>> eda09a3 (Initial commit: Move Nuke ComfyUI codebase to Git repository)
 - Enforced external conversion path; removed heuristic fallback; raises explicit errors with logging.
 - Added caching for both raw UI JSON and converted prompts; conversions run only when needed.
 - Deferred conversion from workflow selection to process time, eliminating UI lag.
@@ -82,4 +95,8 @@ D:\Nuke\charon\              # runtime temp/output/debug directory
 ## 6. Next Steps
 - Optional: capture raw UI JSON + cached prompt on the CharonOp node so third parties can relaunch conversion without reopening the panel.
 - Optional: introduce conversion job queue / progress UI if future workflows become heavier.
+<<<<<<< HEAD
 - Optional: provide a CLI utility for testing conversions outside Nuke using the same `charon.workflow_pipeline`.
+=======
+- Optional: provide a CLI utility for testing conversions outside Nuke using the same `charon_core.workflow_pipeline`.
+>>>>>>> eda09a3 (Initial commit: Move Nuke ComfyUI codebase to Git repository)
