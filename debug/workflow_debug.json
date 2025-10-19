@@ -1,0 +1,76 @@
+{
+  "21": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "widgets_values": [
+      "ComfyUI"
+    ],
+    "properties": {
+      "enableTabs": false,
+      "tabWidth": 65,
+      "tabXOffset": 10,
+      "hasSecondTab": false,
+      "secondTabText": "Send Back",
+      "secondTabOffset": 80,
+      "secondTabWidth": 65,
+      "cnr_id": "comfy-core",
+      "ver": "0.3.40"
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "20250708_1214_Realistic Living Room Transformation_remix_01jznq9wqnfh7apb8mzg5a0kxe.png"
+    },
+    "widgets_values": [
+      "20250708_1214_Realistic Living Room Transformation_remix_01jznq9wqnfh7apb8mzg5a0kxe.png",
+      "image"
+    ],
+    "properties": {
+      "enableTabs": false,
+      "tabWidth": 65,
+      "tabXOffset": 10,
+      "hasSecondTab": false,
+      "secondTabText": "Send Back",
+      "secondTabOffset": 80,
+      "secondTabWidth": 65,
+      "cnr_id": "comfy-core",
+      "ver": "0.3.40",
+      "Node name for S&R": "LoadImage"
+    }
+  },
+  "1": {
+    "class_type": "rgb2x",
+    "inputs": {
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "widgets_values": [
+      "albedo",
+      677912913805145,
+      "randomize",
+      50
+    ],
+    "properties": {
+      "enableTabs": false,
+      "tabWidth": 65,
+      "tabXOffset": 10,
+      "hasSecondTab": false,
+      "secondTabText": "Send Back",
+      "secondTabOffset": 80,
+      "secondTabWidth": 65,
+      "cnr_id": "comfyui_rgbx_wrapper",
+      "ver": "06fdd728252588839f2bfad5d9a3567a2ba7c2e7",
+      "Node name for S&R": "rgb2x",
+      "aux_id": "toyxyz/ComfyUI_rgbx_Wrapper"
+    }
+  }
+}
