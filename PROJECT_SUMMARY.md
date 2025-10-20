@@ -22,6 +22,7 @@ Charon is a modular Nuke add-on that bridges Nuke’s node graph to ComfyUI’s 
    - Creates logs (`self.log(...)` prints `[HH:MM:SS] [LEVEL] message` into the console).
    - Stores caches (`self.workflow_cache`, `self.current_workflow_path/name`, raw JSON).
    - Builds the UI (connection controls, workflow dropdown + custom loader, status display, CharonOp generator).
+   - Adds a “Scene Nodes” tab that lists every CharonOp in the current script, surfaces each node’s live `charon_status`, and recenters the graph when a row is selected.
    - Extends `sys.path` using the value in “ComfyUI Path” (defaults to `D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat`).
    - Auto tests the connection via `ComfyUIClient.test_connection()`.
 3. **Workflow selection** – Selecting a preset/custom JSON:
@@ -49,6 +50,7 @@ Charon is a modular Nuke add-on that bridges Nuke’s node graph to ComfyUI’s 
 - **Deferred conversion** – Raw UI JSON is analysed for knob names, but conversion is only triggered at process time (and cached). This eliminates the lag when browsing workflows.
 - **Node placement** – Newly generated CharonOp nodes appear near selected nodes, improving user ergonomics.
 - **Panel reuse** – `charon_core/__init__.py` keeps a singleton panel instance; subsequent loads simply raise the existing window instead of reinitializing caches/connections.
+- **Runtime status tracking** – Each generated CharonOp stores a hidden `charon_status` knob that is updated by the processing script (`Processing`, `Completed`, `Error`), allowing the UI overview tab to reflect live progress.
 - **Error transparency** – Console log messages highlight missing dependencies (e.g. custom nodes failing to import) but those don’t block converted prompts. All crucial errors now bubble up with full stack traces.
 
 ## 4. Current Repository Layout
@@ -78,6 +80,7 @@ D:\Nuke\charon\              # runtime temp/output/debug directory
 - Auto-position CharonOp nodes near user selections; fallback to graph center if none.
 - Ensured converted prompts are logged and saved (`D:\Nuke\charon\debug\*.json`) for reproducible debugging.
 - Stabilized panel lifecycle: caches initialized before workflow loading, existing panel instances reused on relaunch.
+- Added node overview tab with refresh shortcut, status coloring, and graph focus helpers to keep multi-Charon workflows organized.
 
 ## 6. Next Steps
 - Optional: capture raw UI JSON + cached prompt on the CharonOp node so third parties can relaunch conversion without reopening the panel.

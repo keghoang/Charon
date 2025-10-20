@@ -557,10 +557,25 @@ class CharonPanel(QWidget):
                         auto_import = self.read_node_auto_import(node)
                     auto_import_values.append(auto_import)
                     
-                    # Extract workflow name from path or node label
-                    workflow_name = "Unknown"
-                    if workflow_path:
+                    # Extract workflow name from metadata/knob/path
+                    workflow_name = ""
+                    try:
+                        workflow_name = node.metadata('charon/workflow_name') or ""
+                    except Exception:
+                        workflow_name = ""
+                    if not workflow_name:
+                        try:
+                            name_knob = node.knob('charon_workflow_name')
+                            if name_knob:
+                                workflow_name = name_knob.value()
+                        except Exception:
+                            workflow_name = ""
+                    if not workflow_name and payload.get('workflow_name'):
+                        workflow_name = payload.get('workflow_name')
+                    if not workflow_name and workflow_path:
                         workflow_name = os.path.splitext(os.path.basename(workflow_path))[0]
+                    if not workflow_name:
+                        workflow_name = node.name()
                     
                     current_data[node.name()] = {
                         'node': node,

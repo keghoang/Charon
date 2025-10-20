@@ -10,7 +10,7 @@ DEFAULT_CHARON_DIR = r"D:\Nuke\charon"
 
 
 def get_charon_temp_dir(base_dir=DEFAULT_CHARON_DIR):
-    subdirs = ["temp", "exports", "results", "status", "debug"]
+    subdirs = ["temp", "exports", "results", "debug"]
     for subdir in subdirs:
         path = os.path.join(base_dir, subdir)
         os.makedirs(path, exist_ok=True)
