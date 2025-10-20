@@ -1,0 +1,17 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Generates a grid of prompt variations for internal reviews.",
+  "dependencies": [
+    {
+      "name": "prompt-tools",
+      "repo": "https://github.com/example/prompt-tools",
+      "ref": "main"
+    }
+  ],
+  "last_changed": "2025-10-03T09:32:14Z",
+  "tags": [
+    "comfy",
+    "prompt",
+    "Nano-Banana"
+  ]
+}

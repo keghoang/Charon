@@ -1,0 +1,17 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Applies film grain presets and exports side-by-side comparisons.",
+  "dependencies": [
+    {
+      "name": "grain-library",
+      "repo": "https://github.com/example/grain-library",
+      "ref": "v1.0.5"
+    }
+  ],
+  "last_changed": "2025-10-13T14:18:00Z",
+  "tags": [
+    "comfy",
+    "grain",
+    "InfernoXL"
+  ]
+}

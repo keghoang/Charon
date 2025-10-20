@@ -1,0 +1,17 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Applies curated style prompts to key art assets for look exploration.",
+  "dependencies": [
+    {
+      "name": "stylebank",
+      "repo": "https://github.com/example/stylebank",
+      "ref": "v1.4.1"
+    }
+  ],
+  "last_changed": "2025-10-05T18:40:00Z",
+  "tags": [
+    "comfy",
+    "style",
+    "FLUX"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Performs plate cleanup with inpainting and grain restore.",
+  "dependencies": [
+    {
+      "name": "cleanup-tools",
+      "repo": "https://github.com/example/cleanup-tools",
+      "ref": "v2.1.0"
+    }
+  ],
+  "last_changed": "2025-09-29T22:10:00Z",
+  "tags": [
+    "comfy",
+    "cleanup",
+    "InfernoXL"
+  ]
+}

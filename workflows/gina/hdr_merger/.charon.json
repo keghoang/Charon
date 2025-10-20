@@ -1,0 +1,17 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Combines exposure brackets into a single HDR preview.",
+  "dependencies": [
+    {
+      "name": "hdr-kit",
+      "repo": "https://github.com/example/hdr-kit",
+      "ref": "main"
+    }
+  ],
+  "last_changed": "2025-10-16T07:25:00Z",
+  "tags": [
+    "comfy",
+    "hdr",
+    "MergeMaster"
+  ]
+}

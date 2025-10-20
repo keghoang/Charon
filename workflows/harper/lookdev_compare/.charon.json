@@ -1,0 +1,17 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Generates a contact sheet comparing multiple look presets.",
+  "dependencies": [
+    {
+      "name": "look-pack",
+      "repo": "https://github.com/example/look-pack",
+      "ref": "main"
+    }
+  ],
+  "last_changed": "2025-10-18T10:00:00Z",
+  "tags": [
+    "comfy",
+    "lookdev",
+    "FLUX"
+  ]
+}
