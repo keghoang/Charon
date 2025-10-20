@@ -76,6 +76,123 @@ def process_charonop_node():
     try:
         log_debug('Starting CharonOp node processing...')
         node = nuke.thisNode()
+        
+        # Set initial status
+        try:
+            node.knob('charon_status').setValue('Preparing node')
+            node.knob('charon_progress').setValue(0.0)
+        except Exception:
+            pass
+
+        try:
+            status_payload_knob = node.knob('charon_status_payload')
+        except Exception:
+            status_payload_knob = None
+
+        def resolve_auto_import():
+            try:
+                knob = node.knob('charon_auto_import')
+                if knob is not None:
+                    try:
+                        return bool(int(knob.value()))
+                    except Exception:
+                        return bool(knob.value())
+            except Exception:
+                pass
+            try:
+                meta = node.metadata('charon/auto_import')
+                if isinstance(meta, str):
+                    lowered = meta.strip().lower()
+                    if lowered in {'0', 'false', 'off', 'no'}:
+                        return False
+                    if lowered in {'1', 'true', 'on', 'yes'}:
+                        return True
+                elif meta is not None:
+                    return bool(meta)
+            except Exception:
+                pass
+            return True
+
+        current_run_id = str(uuid.uuid4())
+        run_started_at = time.time()
+
+        def load_status_payload():
+            raw = None
+            try:
+                raw = node.metadata("charon/status_payload")
+            except Exception:
+                pass
+            if not raw and status_payload_knob:
+                try:
+                    raw = status_payload_knob.value()
+                except Exception:
+                    raw = None
+            if not raw:
+                return {}
+            try:
+                return json.loads(raw)
+            except Exception:
+                return {}
+
+        def save_status_payload(payload):
+            serialized = json.dumps(payload)
+            try:
+                node.setMetaData("charon/status_payload", serialized)
+            except Exception as metadata_error:
+                log_debug(f'Failed to persist status metadata: {metadata_error}', 'WARNING')
+            if status_payload_knob:
+                try:
+                    status_payload_knob.setValue(serialized)
+                except Exception as payload_error:
+                    log_debug(f'Failed to store status payload knob: {payload_error}', 'WARNING')
+
+        def ensure_history(payload):
+            runs = payload.get('runs')
+            if not isinstance(runs, list):
+                runs = []
+            payload['runs'] = runs
+            return runs
+
+        def update_last_output(path_value):
+            try:
+                knob = node.knob('charon_last_output')
+                if knob is not None:
+                    knob.setValue(path_value or "")
+            except Exception:
+                pass
+            try:
+                node.setMetaData('charon/last_output', path_value or "")
+            except Exception:
+                pass
+
+        def initialize_status(message='Initializing'):
+            payload = load_status_payload()
+            runs = ensure_history(payload)
+            now = run_started_at
+            auto_flag = resolve_auto_import()
+            payload['current_run'] = {
+                'id': current_run_id,
+                'status': 'Processing',
+                'message': message,
+                'progress': 0.0,
+                'started_at': now,
+                'updated_at': now,
+                'auto_import': auto_flag,
+            }
+            payload.update({
+                'status': message,
+                'state': 'Processing',
+                'message': message,
+                'progress': 0.0,
+                'run_id': current_run_id,
+                'started_at': now,
+                'updated_at': now,
+                'auto_import': auto_flag,
+            })
+            payload['runs'] = runs
+            save_status_payload(payload)
+
+        initialize_status('Preparing node')
 
         workflow_data_str = node.knob('workflow_data').value()
         input_mapping_str = node.knob('input_mapping').value()
@@ -87,7 +204,7 @@ def process_charonop_node():
 
         if not workflow_data_str or not input_mapping_str:
             log_debug('No workflow data found on CharonOp node', 'ERROR')
-            return
+            raise RuntimeError('Missing workflow data on CharonOp node')
 
         workflow_data = json.loads(workflow_data_str)
         input_mapping = json.loads(input_mapping_str)
@@ -96,7 +213,7 @@ def process_charonop_node():
 
         if not temp_root:
             log_debug('Temp directory not configured', 'ERROR')
-            return
+            raise RuntimeError('Charon temp directory is not configured')
 
         temp_root = temp_root.replace('\\\\', '/')
         temp_dir = os.path.join(temp_root, 'temp')
@@ -111,7 +228,7 @@ def process_charonop_node():
 
         if not connected_inputs:
             log_debug('Please connect at least one input node', 'ERROR')
-            return
+            raise RuntimeError('Please connect at least one input node before processing')
 
         render_jobs = []
         if isinstance(input_mapping, list):
@@ -186,19 +303,104 @@ def process_charonop_node():
                     break
         if not charon_panel or not charon_panel.client:
             log_debug('ComfyUI client not available', 'ERROR')
-            return
+            raise RuntimeError('ComfyUI client is not available')
 
         if needs_conversion and not hasattr(charon_panel, 'convert_workflow_on_request'):
             log_debug('Charon panel does not expose conversion helper', 'ERROR')
-            return
+            raise RuntimeError('Conversion helper is unavailable on the Charon panel')
 
         results_dir = os.path.join(temp_root, 'results')
         os.makedirs(results_dir, exist_ok=True)
-        result_file = os.path.join(results_dir, f\"charon_result_{int(time.time())}.json\")
+        result_file = os.path.join(results_dir, f"charon_result_{int(time.time())}.json")
+
+        def update_progress(progress, status='Processing', error=None, extra=None):
+            try:
+                node.knob('charon_progress').setValue(progress)
+                node.knob('charon_status').setValue(status)
+            except Exception:
+                pass
+
+            lifecycle = 'Processing'
+            normalized = (status or '').lower()
+            if progress < 0 or normalized.startswith('error'):
+                lifecycle = 'Error'
+            elif progress >= 1.0:
+                lifecycle = 'Completed'
+
+            payload = load_status_payload()
+            runs = ensure_history(payload)
+            current_run = payload.get('current_run')
+            if not isinstance(current_run, dict) or current_run.get('id') != current_run_id:
+                current_run = {
+                    'id': current_run_id,
+                    'started_at': run_started_at,
+                }
+            now = time.time()
+            auto_import_flag = resolve_auto_import()
+            current_run.update({
+                'status': lifecycle,
+                'message': status,
+                'progress': progress,
+                'updated_at': now,
+                'auto_import': auto_import_flag,
+            })
+            if extra and isinstance(extra, dict):
+                current_run.update(extra)
+                if 'output_path' in extra:
+                    update_last_output(extra.get('output_path'))
+            if lifecycle == 'Completed':
+                current_run['completed_at'] = now
+            if error:
+                current_run['error'] = error
+
+            payload.update({
+                'status': status,
+                'state': lifecycle,
+                'message': status,
+                'progress': progress,
+                'run_id': current_run_id,
+                'updated_at': now,
+                'current_run': current_run,
+                'auto_import': auto_import_flag,
+            })
+            if extra and isinstance(extra, dict):
+                payload.update(extra)
+            if error:
+                payload['last_error'] = error
+
+            if lifecycle in ('Completed', 'Error'):
+                if lifecycle == 'Error':
+                    update_last_output(None)
+                summary = {
+                    'id': current_run_id,
+                    'status': lifecycle,
+                    'message': status,
+                    'progress': progress,
+                    'started_at': current_run.get('started_at', run_started_at),
+                    'completed_at': current_run.get('completed_at', now),
+                    'error': current_run.get('error'),
+                    'auto_import': auto_import_flag,
+                }
+                for key in ('output_path', 'elapsed_time', 'prompt_id'):
+                    if key in current_run:
+                        summary[key] = current_run[key]
+                runs.append(summary)
+                payload['runs'] = runs[-10:]
+                payload.pop('current_run', None)
+            else:
+                payload['runs'] = runs
+                payload['current_run'] = current_run
+
+            save_status_payload(payload)
+
+            log_debug(f'Updated progress: {progress:.1%} - {status}')
 
         def background_process():
             try:
+                update_progress(0.05, 'Starting processing')
+                
                 if needs_conversion:
+                    update_progress(0.1, 'Converting workflow')
                     try:
                         converted_prompt = charon_panel.convert_workflow_on_request(workflow_data, workflow_path or None)
                     except Exception as exc:
@@ -209,6 +411,8 @@ def process_charonop_node():
                     prompt_data = converted_prompt
                 else:
                     prompt_data = workflow_data
+                
+                update_progress(0.2, 'Uploading images')
 
                 workflow_copy = copy.deepcopy(prompt_data)
 
@@ -225,6 +429,8 @@ def process_charonop_node():
                         raise Exception(f\"Failed to upload '{friendly_name}' to ComfyUI\")
                     uploaded_assets[idx] = uploaded_filename
                     log_debug(f\"Uploaded '{friendly_name}' as {uploaded_filename}\")
+                    progress = 0.2 + (0.2 * (len(uploaded_assets) / len(render_jobs)))
+                    update_progress(progress, f'Uploaded {len(uploaded_assets)}/{len(render_jobs)} images')
 
                 def assign_to_node(target_node_id, filename, target_socket=None):
                     node_key = str(target_node_id)
@@ -283,13 +489,37 @@ def process_charonop_node():
                                 assign_to_node(target_id, filename)
                                 break
 
+                update_progress(0.5, 'Submitting workflow')
                 prompt_id = charon_panel.client.submit_workflow(workflow_copy)
                 if not prompt_id:
                     raise Exception('Failed to submit workflow')
+                
+                node.knob('charon_prompt_id').setValue(prompt_id)
 
                 start_time = time.time()
                 timeout = 300
+                update_progress(
+                    0.6,
+                    'Processing on ComfyUI',
+                    extra={
+                        'prompt_id': prompt_id,
+                        'prompt_submitted_at': start_time,
+                    },
+                )
+                
                 while time.time() - start_time < timeout:
+                    # Check progress via queue status
+                    if hasattr(charon_panel.client, 'get_progress_for_prompt'):
+                        progress_val = charon_panel.client.get_progress_for_prompt(prompt_id)
+                        if progress_val > 0:
+                            # Map progress from 0.6 to 0.9 during execution
+                            mapped_progress = 0.6 + (progress_val * 0.3)
+                            update_progress(
+                                mapped_progress,
+                                f'ComfyUI processing ({progress_val:.1%})',
+                                extra={'prompt_id': prompt_id},
+                            )
+                    
                     history = charon_panel.client.get_history(prompt_id)
                     if history and prompt_id in history:
                         history_data = history[prompt_id]
@@ -299,29 +529,44 @@ def process_charonop_node():
                             if outputs:
                                 output_filename = None
                                 for node_id, node_data in workflow_copy.items():
-                                    if node_data.get('class_type') == 'SaveImage':
-                                        if outputs and node_id in outputs:
-                                            images = outputs[node_id].get('images', [])
-                                            if images:
-                                                output_filename = images[0].get('filename')
-                                                break
-                                if output_filename:
-                                    output_dir = os.path.join(temp_root, 'results')
-                                    os.makedirs(output_dir, exist_ok=True)
-                                    output_path = os.path.join(output_dir, f'comfyui_result_{int(time.time())}.png')
-                                    output_path = output_path.replace('\\\\', '/')
-                                    success = charon_panel.client.download_image(output_filename, output_path)
-                                    if success:
-                                        result_data = {
-                                            'success': True,
-                                            'output_path': output_path,
-                                            'node_x': node.xpos(),
-                                            'node_y': node.ypos(),
-                                            'elapsed_time': time.time() - start_time
-                                        }
-                                        with open(result_file, 'w') as fp:
-                                            json.dump(result_data, fp)
-                                        return
+                                    if node_data.get('class_type') == 'SaveImage' and node_id in outputs:
+                                        images = outputs[node_id].get('images', [])
+                                        if images:
+                                            output_filename = images[0].get('filename')
+                                            break
+                                if not output_filename:
+                                    raise Exception('ComfyUI did not return an output filename')
+                                update_progress(
+                                    0.95,
+                                    'Downloading result',
+                                    extra={'prompt_id': prompt_id},
+                                )
+                                output_dir = os.path.join(temp_root, 'results')
+                                os.makedirs(output_dir, exist_ok=True)
+                                output_path = os.path.join(output_dir, f'comfyui_result_{int(time.time())}.png')
+                                output_path = output_path.replace('\\\\', '/')
+                                success = charon_panel.client.download_image(output_filename, output_path)
+                                if not success:
+                                    raise Exception('Failed to download result image from ComfyUI')
+                                elapsed = time.time() - start_time
+                                update_progress(
+                                    1.0,
+                                    'Completed',
+                                    extra={
+                                        'output_path': output_path,
+                                        'elapsed_time': elapsed,
+                                    },
+                                )
+                                result_data = {
+                                    'success': True,
+                                    'output_path': output_path,
+                                    'node_x': node.xpos(),
+                                    'node_y': node.ypos(),
+                                    'elapsed_time': elapsed
+                                }
+                                with open(result_file, 'w') as fp:
+                                    json.dump(result_data, fp)
+                                return
                         elif status_str == 'error':
                             error_msg = history_data.get('status', {}).get('status_message', 'Unknown error')
                             raise Exception(f'ComfyUI failed: {error_msg}')
@@ -329,6 +574,8 @@ def process_charonop_node():
                 raise Exception('Processing timed out')
 
             except Exception as exc:
+                message = f'Error: {exc}'
+                update_progress(-1.0, message, error=str(exc))
                 result_data = {
                     'success': False,
                     'error': str(exc),
@@ -349,26 +596,41 @@ def process_charonop_node():
                         with open(result_file, 'r') as fp:
                             result_data = json.load(fp)
                         if result_data.get('success'):
-                            def create_read_node():
+                            elapsed = result_data.get('elapsed_time', 0)
+
+                            def cleanup_files():
                                 try:
-                                    read_node = nuke.createNode('Read')
-                                    read_node['file'].setValue(result_data['output_path'])
-                                    read_node.setXpos(result_data['node_x'] + 200)
-                                    read_node.setYpos(result_data['node_y'])
-                                    read_node.setSelected(True)
-                                    elapsed = result_data.get('elapsed_time', 0)
-                                    log_debug(f'Success! Completed in {elapsed:.1f}s. Read node created.')
-                                    try:
+                                    if os.path.exists(result_file):
                                         os.remove(result_file)
-                                        for temp_path in list(rendered_files.values()):
-                                            if os.path.exists(temp_path):
-                                                os.remove(temp_path)
-                                                log_debug(f'Cleaned up temp file: {temp_path}')
-                                    except Exception as cleanup_error:
-                                        log_debug(f'Could not clean up files: {cleanup_error}', 'WARNING')
-                                except Exception as exc:
-                                    log_debug(f'Error creating Read node: {exc}', 'ERROR')
-                            nuke.executeInMainThread(create_read_node)
+                                except Exception as cleanup_error:
+                                    log_debug(f'Could not remove result file: {cleanup_error}', 'WARNING')
+                                try:
+                                    for temp_path in list(rendered_files.values()):
+                                        if os.path.exists(temp_path):
+                                            os.remove(temp_path)
+                                            log_debug(f'Cleaned up temp file: {temp_path}')
+                                except Exception as cleanup_error:
+                                    log_debug(f'Could not clean up files: {cleanup_error}', 'WARNING')
+
+                            if resolve_auto_import():
+                                def create_read_node():
+                                    try:
+                                        read_node = nuke.createNode('Read')
+                                        read_node['file'].setValue(result_data['output_path'])
+                                        read_node.setXpos(result_data['node_x'] + 200)
+                                        read_node.setYpos(result_data['node_y'])
+                                        read_node.setSelected(True)
+                                        log_debug(f'Success! Completed in {elapsed:.1f}s. Read node created.')
+                                        log_debug(f'Output file located at: {result_data["output_path"]}')
+                                    except Exception as exc:
+                                        log_debug(f'Error creating Read node: {exc}', 'ERROR')
+                                    finally:
+                                        cleanup_files()
+                                nuke.executeInMainThread(create_read_node)
+                            else:
+                                log_debug('Auto import disabled; skipping Read node creation.')
+                                log_debug(f'Output file located at: {result_data["output_path"]}')
+                                cleanup_files()
                         else:
                             error_msg = result_data.get('error', 'Unknown error')
                             log_debug(f'Processing failed: {error_msg}', 'ERROR')
@@ -392,5 +654,39 @@ def process_charonop_node():
 
     except Exception as exc:
         log_debug(f'Error: {exc}', 'ERROR')
+        message = f'Error: {exc}'
+        try:
+            node.knob('charon_status').setValue(message)
+            node.knob('charon_progress').setValue(-1.0)
+        except Exception:
+            pass
+        if 'load_status_payload' in locals() and 'save_status_payload' in locals():
+            try:
+                payload = load_status_payload()
+                runs = ensure_history(payload) if 'ensure_history' in locals() else payload.setdefault('runs', [])
+                now = time.time()
+                payload.update({
+                    'status': message,
+                    'state': 'Error',
+                    'message': message,
+                    'progress': -1.0,
+                    'run_id': locals().get('current_run_id'),
+                    'updated_at': now,
+                    'last_error': str(exc),
+                })
+                runs.append({
+                    'id': locals().get('current_run_id'),
+                    'status': 'Error',
+                    'message': message,
+                    'progress': -1.0,
+                    'started_at': locals().get('run_started_at'),
+                    'completed_at': now,
+                    'error': str(exc),
+                })
+                payload['runs'] = runs[-10:] if isinstance(runs, list) else runs
+                payload.pop('current_run', None)
+                save_status_payload(payload)
+            except Exception as payload_error:
+                log_debug(f'Failed to persist error payload: {payload_error}', 'WARNING')
 
 process_charonop_node()'''
