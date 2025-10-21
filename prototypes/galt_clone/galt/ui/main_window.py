@@ -1884,49 +1884,34 @@ class GaltWindow(QtWidgets.QWidget):
         if self.folder_panel.isHidden():
             system_debug("Folder panel is hidden, showing it")
             self._toggle_folders_panel()
-        
-        # Check if this is a bookmarked script
-        from ..settings import user_settings_db
-        bookmarks = user_settings_db.get_bookmarks()
-        is_bookmarked = script_path in bookmarks
-        
-        if is_bookmarked:
-            system_debug("Script is bookmarked, selecting Bookmarks folder")
-            folder_name = "Bookmarks"
-        
-        # Get the folder list and find our target
-        folder_found = False
-        target_row = -1
-        
-        for row in range(self.folder_panel.folder_model.rowCount()):
-            folder = self.folder_panel.folder_model.get_folder_at_row(row)
-            if folder:
-                # Get folder info - handle different types of folder objects
+        def _locate_folder(target_name):
+            """Return (found, row_index) for the requested folder."""
+            for row in range(self.folder_panel.folder_model.rowCount()):
+                folder = self.folder_panel.folder_model.get_folder_at_row(row)
+                if not folder:
+                    continue
+
                 if hasattr(folder, 'name'):
                     folder_display_name = folder.name
                 elif hasattr(folder, 'original_name'):
                     folder_display_name = folder.original_name
                 else:
                     folder_display_name = str(folder)
-                
+
                 folder_full_path = folder.path if hasattr(folder, 'path') else ""
-                
                 system_debug(f"Row {row}: name='{folder_display_name}', path='{folder_full_path}'")
-                
-                # For bookmarks, just match by name
-                if is_bookmarked and folder_display_name == "Bookmarks":
-                    folder_found = True
-                    target_row = row
-                    system_debug(f"Found Bookmarks folder at row {target_row}")
-                    break
-                # For regular folders, match by name or path
-                elif (folder_display_name == folder_name or 
-                      (folder_full_path and os.path.normpath(folder_full_path) == script_path)):
-                    folder_found = True
-                    target_row = row
-                    system_debug(f"Found matching folder at row {target_row}")
-                    break
-        
+
+                if folder_display_name == target_name:
+                    return True, row
+
+                if folder_full_path and os.path.normpath(folder_full_path) == parent_path:
+                    return True, row
+
+            return False, -1
+
+        # Get the folder list and find our target
+        folder_found, target_row = _locate_folder(folder_name)
+
         if not folder_found:
             system_error(f"Could not find folder '{folder_name}' in folder list")
             self._is_navigating = False  # Clear flag on error
@@ -1973,11 +1958,11 @@ class GaltWindow(QtWidgets.QWidget):
         self.folder_panel.on_folder_selected(index)
         
         # Keep a shorter fallback in case the signal doesn't fire
-        QtCore.QTimer.singleShot(200, lambda: self._fallback_navigation(folder_name, script_path, is_bookmarked))
+        QtCore.QTimer.singleShot(200, lambda: self._fallback_navigation(folder_name, script_path))
         
         system_debug(f"=== QUICK SEARCH NAVIGATION END ===")
     
-    def _fallback_navigation(self, folder_name, script_path, is_bookmarked):
+    def _fallback_navigation(self, folder_name, script_path):
         """Fallback navigation if the normal flow didn't work"""
         from ..galt_logger import system_debug
         # Check if we're already in the right folder
