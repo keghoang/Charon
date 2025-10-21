@@ -488,17 +488,23 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.description_edit.setPlainText(self._metadata.get("description", ""))
         layout.addWidget(self.description_edit)
 
-        layout.addWidget(QtWidgets.QLabel("Dependencies (one per row):"))
+        layout.addWidget(QtWidgets.QLabel("Dependencies (Git URLs):"))
         deps_container = QtWidgets.QWidget()
         deps_layout = QtWidgets.QVBoxLayout(deps_container)
         deps_layout.setContentsMargins(0, 0, 0, 0)
         deps_layout.setSpacing(4)
 
-        self.deps_table = QtWidgets.QTableWidget(0, 3)
-        self.deps_table.setHorizontalHeaderLabels(["Name", "Repository", "Ref"])
-        self.deps_table.horizontalHeader().setStretchLastSection(True)
+        self.deps_table = QtWidgets.QTableWidget(0, 1)
+        self.deps_table.setHorizontalHeaderLabels(["Git URL"])
+        header = self.deps_table.horizontalHeader()
+        try:
+            header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        except AttributeError:
+            header.setStretchLastSection(True)
         self.deps_table.verticalHeader().setVisible(False)
         self.deps_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.deps_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.deps_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.AllEditTriggers)
         deps_layout.addWidget(self.deps_table)
 
         deps_buttons = QtWidgets.QHBoxLayout()
@@ -531,14 +537,13 @@ class CharonMetadataDialog(QtWidgets.QDialog):
     def _add_dependency_row(self, dep: Dict[str, Any] = None):
         row = self.deps_table.rowCount()
         self.deps_table.insertRow(row)
-        values = [
-            (dep or {}).get("name", ""),
-            (dep or {}).get("repo", ""),
-            (dep or {}).get("ref", ""),
-        ]
-        for column, value in enumerate(values):
-            item = QtWidgets.QTableWidgetItem(value)
-            self.deps_table.setItem(row, column, item)
+        if isinstance(dep, dict):
+            value = dep.get("repo") or dep.get("url") or ""
+        else:
+            value = dep or ""
+        item = QtWidgets.QTableWidgetItem(value)
+        self.deps_table.setItem(row, 0, item)
+        self.deps_table.editItem(item)
 
     def _remove_selected_dependencies(self):
         rows = sorted({index.row() for index in self.deps_table.selectedIndexes()}, reverse=True)
@@ -546,23 +551,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             self.deps_table.removeRow(row)
 
     def get_metadata(self) -> Dict[str, Any]:
-        dependencies: List[Dict[str, str]] = []
+        dependencies: List[str] = []
         for row in range(self.deps_table.rowCount()):
-            name_item = self.deps_table.item(row, 0)
-            repo_item = self.deps_table.item(row, 1)
-            ref_item = self.deps_table.item(row, 2)
-            name = name_item.text().strip() if name_item else ""
+            repo_item = self.deps_table.item(row, 0)
             repo = repo_item.text().strip() if repo_item else ""
-            ref = ref_item.text().strip() if ref_item else ""
-            if any([name, repo, ref]):
-                entry: Dict[str, str] = {}
-                if name:
-                    entry["name"] = name
-                if repo:
-                    entry["repo"] = repo
-                if ref:
-                    entry["ref"] = ref
-                dependencies.append(entry)
+            if repo:
+                dependencies.append(repo)
 
         tags_raw = self.tags_edit.text()
         tags = [tag.strip() for tag in tags_raw.split(",") if tag.strip()] if tags_raw else []

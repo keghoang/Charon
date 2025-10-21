@@ -1,7 +1,7 @@
-from ..qt_compat import QtWidgets, QtCore, QtGui, exec_dialog
+from ..qt_compat import QtWidgets, QtCore, exec_dialog
 import os
-import json
 from pathlib import Path
+from urllib.parse import urlparse
 from .. import config
 from ..metadata_manager import (
     get_galt_config,
@@ -9,12 +9,76 @@ from ..metadata_manager import (
     update_galt_config,
     get_software_for_host,
     get_metadata_path,
+    invalidate_metadata_path,
 )
 from ..charon_metadata import write_charon_metadata
 from .dialogs import MetadataDialog, CharonMetadataDialog
 from ..settings import user_settings_db
 from .custom_widgets import create_tag_badge
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover - Python < 3.9 fallback
+    ZoneInfo = None
+
+if ZoneInfo:
+    EASTERN_TIMEZONE = ZoneInfo("America/New_York")
+else:  # pragma: no cover - fallback for environments without zoneinfo
+    EASTERN_TIMEZONE = timezone(timedelta(hours=-5))
+
+
+def _extract_repo_name(repo_url: str) -> str:
+    """Return a human-friendly repository name derived from the URL."""
+    if not repo_url:
+        return "Dependency"
+
+    parsed = urlparse(repo_url)
+    path = (parsed.path or "").rstrip("/")
+    if not path:
+        return repo_url
+
+    name = path.split("/")[-1] or repo_url
+    if name.endswith(".git"):
+        name = name[:-4]
+    return name or "Dependency"
+
+
+def _normalize_dependency_for_display(dep) -> tuple[str, str, str]:
+    """Return (name, repo_url, ref) tuple ready for UI consumption."""
+    repo_url = ""
+    name = ""
+    ref = ""
+
+    if isinstance(dep, str):
+        repo_url = dep.strip()
+    elif isinstance(dep, dict):
+        repo_url = (dep.get("repo") or dep.get("url") or "").strip()
+        name = (dep.get("name") or "").strip()
+        ref = (dep.get("ref") or "").strip()
+
+    if not name:
+        name = _extract_repo_name(repo_url)
+    if not repo_url and not name:
+        name = "Dependency"
+    return name, repo_url, ref
+
+
+def _format_last_changed(value: str) -> str:
+    """Format ISO timestamp into EST without displaying the timezone label."""
+    if not value:
+        return "-"
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    localized = parsed.astimezone(EASTERN_TIMEZONE)
+    return localized.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class HorizontalScrollArea(QtWidgets.QScrollArea):
@@ -113,12 +177,9 @@ class MetadataPanel(QtWidgets.QWidget):
         self.charon_workflow_value.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         self.charon_last_changed_value = QtWidgets.QLabel()
         self.charon_last_changed_value.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.charon_node_count_value = QtWidgets.QLabel()
-        self.charon_node_count_value.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
 
         self.charon_info_form.addRow("Workflow JSON:", self.charon_workflow_value)
         self.charon_info_form.addRow("Last Updated:", self.charon_last_changed_value)
-        self.charon_info_form.addRow("Node Count:", self.charon_node_count_value)
 
         self.charon_dependencies_label = QtWidgets.QLabel("Dependencies:")
         self.charon_dependencies_list_container = QtWidgets.QWidget()
@@ -426,50 +487,25 @@ class MetadataPanel(QtWidgets.QWidget):
         self.charon_workflow_value.setText(workflow_text)
         self.charon_workflow_value.setToolTip(workflow_path if workflow_exists else "")
 
-        last_changed = charon.get("last_changed")
-        if last_changed:
-            try:
-                parsed = datetime.fromisoformat(last_changed.replace("Z", "+00:00"))
-                display_last_changed = parsed.strftime("%Y-%m-%d %H:%M:%S %Z").strip()
-                if display_last_changed.endswith("UTC"):
-                    display_last_changed = display_last_changed
-                elif parsed.tzinfo:
-                    display_last_changed = parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
-            except ValueError:
-                display_last_changed = last_changed
-        else:
-            display_last_changed = "-"
+        display_last_changed = _format_last_changed(charon.get("last_changed"))
         self.charon_last_changed_value.setText(display_last_changed)
 
-        node_count = "-"
-        if workflow_exists:
-            try:
-                with open(workflow_path, "r", encoding="utf-8") as wf_handle:
-                    workflow_data = json.load(wf_handle)
-                    nodes = workflow_data.get("nodes")
-                    if isinstance(nodes, dict):
-                        node_count = str(len(nodes))
-            except Exception:
-                node_count = "?"  # Indicate unreadable
-        self.charon_node_count_value.setText(node_count)
-
-        dependencies = charon.get("dependencies") or []
+        dependencies = conf.get("dependencies") or []
         self._clear_layout(self.charon_dependencies_layout)
         if dependencies:
             for dep in dependencies:
-                name = dep.get("name") or dep.get("repo") or "Dependency"
-                repo = dep.get("repo")
-                ref = dep.get("ref")
+                name, repo_url, ref = _normalize_dependency_for_display(dep)
                 label = QtWidgets.QLabel()
                 label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-                if repo:
-                    link = f'<a href="{repo}">{name}</a>'
+                if repo_url:
+                    link = f'<a href="{repo_url}" style="color: white;">{name}</a>'
                 else:
-                    link = name
-                suffix = f" <span style='color:palette(mid);'>({ref})</span>" if ref else ""
+                    link = f"<span style='color: white;'>{name}</span>"
+                suffix = f" <span style='color: palette(mid);'>({ref})</span>" if ref else ""
                 label.setText(f"{link}{suffix}")
                 label.setOpenExternalLinks(True)
                 label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextBrowserInteraction)
+                label.setStyleSheet("color: white;")
                 self.charon_dependencies_layout.addWidget(label)
             self.charon_dependencies_label.setVisible(True)
             self.charon_dependencies_list_container.setVisible(True)
@@ -503,6 +539,7 @@ class MetadataPanel(QtWidgets.QWidget):
         updated_meta.update(updates)
         if not updated_meta.get("workflow_file"):
             updated_meta["workflow_file"] = charon_meta.get("workflow_file") or "workflow.json"
+        updated_meta["last_changed"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
         old_tags = conf.get("tags", [])
         new_tags = updated_meta.get("tags", [])
@@ -510,6 +547,7 @@ class MetadataPanel(QtWidgets.QWidget):
         if write_charon_metadata(self.script_folder, updated_meta) is None:
             QtWidgets.QMessageBox.warning(self, "Update Failed", "Could not write workflow metadata.")
             return
+        invalidate_metadata_path(self.script_folder)
 
         added = [tag for tag in new_tags if tag not in old_tags]
         removed = [tag for tag in old_tags if tag not in new_tags]
