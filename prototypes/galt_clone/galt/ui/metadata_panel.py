@@ -5,15 +5,12 @@ from urllib.parse import urlparse
 from .. import config
 from ..metadata_manager import (
     get_galt_config,
-    create_default_galt_file,
     update_galt_config,
-    get_software_for_host,
     get_metadata_path,
     invalidate_metadata_path,
 )
 from ..charon_metadata import write_charon_metadata
-from .dialogs import MetadataDialog, CharonMetadataDialog
-from ..settings import user_settings_db
+from .dialogs import CharonMetadataDialog
 from .custom_widgets import create_tag_badge
 from datetime import datetime, timezone, timedelta
 
@@ -104,7 +101,6 @@ class MetadataPanel(QtWidgets.QWidget):
     
     # Granular signals for specific changes
     entry_changed = QtCore.Signal(str, str)  # script_path, new_entry
-    software_changed = QtCore.Signal(str, list)  # script_path, new_software_list
     tags_updated = QtCore.Signal(str, list, list)  # script_path, added_tags, removed_tags
 
     def __init__(self, host="None", parent=None):
@@ -313,26 +309,15 @@ class MetadataPanel(QtWidgets.QWidget):
         
         # Get the existing metadata to preserve all software
         existing_conf = get_galt_config(self.script_folder)
-        if existing_conf and existing_conf.get("charon_meta"):
+        if not existing_conf or existing_conf.get("charon_meta"):
             return
-        if existing_conf:
-            # Keep all existing software, but ensure the current host is included
-            all_software = existing_conf.get("software", [self.host])
-            if self.host not in all_software:
-                all_software.append(self.host)
-        else:
-            all_software = [self.host]
-        
-        # Track what changed for granular signals
-        old_entry = existing_conf.get("entry", "") if existing_conf else ""
+
+        old_entry = existing_conf.get("entry", "")
         new_entry = self.entry_dropdown.currentText() if self.entry_dropdown.currentIndex() >= 0 else ""
         entry_changed = old_entry != new_entry
         
-        # Start with existing config to preserve all fields (like tags)
-        new_config = existing_conf.copy() if existing_conf else {}
+        new_config = existing_conf.copy()
         
-        # Update only the fields this method should touch
-        new_config["software"] = all_software
         new_config["entry"] = new_entry
         
         # Update the metadata file
@@ -341,11 +326,11 @@ class MetadataPanel(QtWidgets.QWidget):
             if entry_changed:
                 self.entry_changed.emit(self.script_folder, new_entry)
 
-    def edit_software_selection(self):
-        """Open dialog to edit software selection for existing metadata"""
+    def edit_metadata(self):
+        """Open the metadata editor for the current workflow."""
         if not self.script_folder:
             return
-            
+
         conf = get_galt_config(self.script_folder)
         if not conf:
             return
@@ -353,114 +338,92 @@ class MetadataPanel(QtWidgets.QWidget):
         if conf.get("charon_meta"):
             self._edit_charon_metadata(conf)
             return
-            
-        # Store script path locally since it might change during dialog execution
-        script_folder = self.script_folder
-        
-        # Get current software list and script type
-        old_software_list = conf.get("software", [])
-        current_script_type = conf.get("script_type", "python")
-        
-        # Create dialog with current software and script type pre-selected (only visible software)
-        from ..utilities import get_visible_software_list
-        dialog = MetadataDialog(get_visible_software_list(), config.SCRIPT_TYPES, script_path=script_folder, parent=self)
-        for software in old_software_list:
-            if software in dialog.software_checkboxes:
-                dialog.software_checkboxes[software].setChecked(True)
-        
-        # Set current script type
-        if hasattr(dialog, 'script_type_combo'):
-            script_type_index = dialog.script_type_combo.findText(current_script_type.capitalize())
-            if script_type_index >= 0:
-                dialog.script_type_combo.setCurrentIndex(script_type_index)
-        
-        # Set current run_on_main value
-        current_run_on_main = conf.get("run_on_main", True)
-        dialog.run_on_main_checkbox.setChecked(current_run_on_main)
-        
-        # Set current mirror_prints value (with backward compatibility)
-        current_mirror_prints = conf.get("mirror_prints", conf.get("intercept_prints", config.DEFAULT_METADATA["mirror_prints"]))
-        dialog.mirror_prints_checkbox.setChecked(current_mirror_prints)
-        
-        if exec_dialog(dialog) == QtWidgets.QDialog.Accepted:
-            new_software_list = dialog.selected_software()
-            new_script_type = dialog.selected_script_type()
-            new_run_on_main = dialog.run_on_main_thread()
-            new_mirror_prints = dialog.mirror_prints()
-            
-            # --- Handle Hotkey Deletion ---
-            # Determine which software were removed
-            removed_software = set(old_software_list) - set(new_software_list)
-            if removed_software:
-                from ..settings import user_settings_db
-                for sw in removed_software:
-                    # For each removed software, delete any associated hotkey
-                    user_settings_db.remove_hotkey_for_script_software(script_folder, sw)
 
-            # --- Update Metadata File (clean up to current shape) ---
-            # Re-read the config to get the latest tags (in case they were changed while dialog was open)
-            latest_conf = get_galt_config(script_folder)
-            
-            new_config = {
-                "software": new_software_list,
-                "entry": latest_conf.get("entry", "main.py") if latest_conf else conf.get("entry", "main.py"),
-                "script_type": new_script_type,
-                "run_on_main": new_run_on_main,
-                "mirror_prints": new_mirror_prints
-            }
-            # Remove deprecated fields (display, intercept_prints) by not copying them
-            
-            # Preserve existing tags from the LATEST config
-            new_config["tags"] = latest_conf.get("tags", []) if latest_conf else []
-            
-            # --- Emit Signal for UI Refresh ---
-            # Use the local script_folder variable that was saved before dialog execution
-            if script_folder and update_galt_config(script_folder, new_config):
-                # Emit granular signal for software change
-                if old_software_list != new_software_list:
-                    self.software_changed.emit(script_folder, new_software_list)
+        self._convert_legacy_to_charon(conf)
+    def _convert_legacy_to_charon(self, conf: dict):
+        """Prompt to convert legacy metadata into Charon metadata."""
+        initial_meta = {
+            "workflow_file": self._guess_workflow_file(self.script_folder),
+            "description": conf.get("description", ""),
+            "dependencies": conf.get("dependencies", []) or [],
+            "tags": conf.get("tags", []) or [],
+        }
 
+        dialog = CharonMetadataDialog(initial_meta, parent=self)
+        if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
+            return
+
+        updated = initial_meta.copy()
+        updated.update(dialog.get_metadata() or {})
+        if not updated.get("workflow_file"):
+            updated["workflow_file"] = initial_meta["workflow_file"]
+
+        if write_charon_metadata(self.script_folder, updated) is None:
+            QtWidgets.QMessageBox.warning(self, "Update Failed", "Could not write workflow metadata.")
+            return
+
+        legacy_path = os.path.join(self.script_folder, ".galt.json")
+        try:
+            os.remove(legacy_path)
+        except FileNotFoundError:
+            pass
+
+        invalidate_metadata_path(self.script_folder)
+        self.update_metadata(self.script_folder)
+
+        old_tags = conf.get("tags", []) or []
+        new_tags = updated.get("tags", []) or []
+        added = [tag for tag in new_tags if tag not in old_tags]
+        removed = [tag for tag in old_tags if tag not in new_tags]
+        if added or removed:
+            self.tags_updated.emit(self.script_folder, added, removed)
+        self.metadata_changed.emit()
     def create_metadata(self):
         if not self.script_folder:
             return
-        # Get only visible software for display
-        from ..utilities import get_visible_software_list
-        dialog = MetadataDialog(get_visible_software_list(), config.SCRIPT_TYPES, parent=self)
-        if exec_dialog(dialog) == QtWidgets.QDialog.Accepted:
-            selected_software_list = dialog.selected_software()
-            selected_script_type = dialog.selected_script_type()
-            selected_run_on_main = dialog.run_on_main_thread()
-            selected_mirror_prints = dialog.mirror_prints()
-        else:
-            return
-            
-        # Determine default entry file
-        default_entry = ""
-        
-        # Check for Python files first
-        py_files = [f for f in os.listdir(self.script_folder) if f.endswith(".py")]
-        if py_files and "main.py" in py_files:
-            default_entry = "main.py"
-        elif py_files:
-            default_entry = py_files[0]
-        
-        # If no Python files and any selected software is Maya, check for MEL files
-        elif any(sw.lower() == "maya" for sw in selected_software_list):
-            mel_files = [f for f in os.listdir(self.script_folder) if f.endswith(".mel")]
-            if mel_files:
-                default_entry = mel_files[0]
-        
-        default_config = {
-            "software": selected_software_list,
-            "entry": default_entry,
-            "script_type": selected_script_type,
-            "run_on_main": selected_run_on_main,
-            "mirror_prints": selected_mirror_prints
+
+        initial_meta = {
+            "workflow_file": self._guess_workflow_file(self.script_folder),
+            "description": "",
+            "dependencies": [],
+            "tags": [],
         }
-        
-        if create_default_galt_file(self.script_folder, default_config=default_config):
-            self.update_metadata(self.script_folder)
-            self.metadata_changed.emit()
+        dialog = CharonMetadataDialog(initial_meta, parent=self)
+        if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
+            return
+
+        updates = initial_meta.copy()
+        updates.update(dialog.get_metadata() or {})
+        if not updates.get("workflow_file"):
+            updates["workflow_file"] = initial_meta["workflow_file"]
+
+        if write_charon_metadata(self.script_folder, updates) is None:
+            QtWidgets.QMessageBox.warning(self, "Create Failed", "Could not write workflow metadata.")
+            return
+
+        legacy_path = os.path.join(self.script_folder, ".galt.json")
+        try:
+            os.remove(legacy_path)
+        except FileNotFoundError:
+            pass
+
+        invalidate_metadata_path(self.script_folder)
+        self.update_metadata(self.script_folder)
+        self.metadata_changed.emit()
+
+    def _guess_workflow_file(self, script_folder: str) -> str:
+        """Return a likely workflow JSON filename for a folder."""
+        preferred = ("workflow.json", "workflow.charon.json")
+        for candidate in preferred:
+            if os.path.exists(os.path.join(script_folder, candidate)):
+                return candidate
+
+        for entry in os.listdir(script_folder):
+            if entry.lower().endswith(".json"):
+                return entry
+
+        return "workflow.json"
+
     def _show_charon_metadata(self, conf, script_folder):
         charon = conf.get("charon_meta", {})
         self._update_ui(state="charon_view", script_folder=script_folder, parent_folder=os.path.dirname(script_folder))
@@ -556,3 +519,6 @@ class MetadataPanel(QtWidgets.QWidget):
         if added or removed:
             self.tags_updated.emit(self.script_folder, added, removed)
         self.metadata_changed.emit()
+
+
+

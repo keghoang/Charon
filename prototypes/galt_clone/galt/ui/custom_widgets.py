@@ -117,7 +117,7 @@ class ScriptListView(DeselectionListView):
     bookmarkRequested = QtCore.Signal(str)  # Signal emitted when bookmark is requested
     assignHotkeyRequested = QtCore.Signal(str)
     createMetadataRequested = QtCore.Signal(str)  # Signal for creating metadata
-    editSoftwareRequested = QtCore.Signal(str)  # Signal for editing software
+    editMetadataRequested = QtCore.Signal(str)  # Signal for editing metadata
     openReadmeRequested = QtCore.Signal(str)  # Signal for opening/creating readme
     openFolderRequested = QtCore.Signal(str)  # Signal for opening script's folder
 
@@ -226,7 +226,7 @@ class ScriptListView(DeselectionListView):
         if script.has_metadata():
             # Script has metadata - show edit options
             edit_metadata_action = menu.addAction("Edit Metadata")
-            edit_metadata_action.triggered.connect(lambda: self.editSoftwareRequested.emit(script_path))
+            edit_metadata_action.triggered.connect(lambda: self.editMetadataRequested.emit(script_path))
         else:
             # Script has no metadata - show create option
             create_metadata_action = menu.addAction("Create Metadata")

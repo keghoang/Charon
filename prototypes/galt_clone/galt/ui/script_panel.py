@@ -21,7 +21,7 @@ class ScriptPanel(QtWidgets.QWidget):
     bookmark_requested = QtCore.Signal(str)  # Signal for bookmark requests
     assign_hotkey_requested = QtCore.Signal(str)
     create_metadata_requested = QtCore.Signal(str)  # Signal for creating metadata
-    edit_software_requested = QtCore.Signal(str)  # Signal for editing software
+    edit_metadata_requested = QtCore.Signal(str)  # Signal for editing metadata
     manage_tags_requested = QtCore.Signal(str)  # Signal for managing tags
     open_folders_panel_requested = QtCore.Signal()  # Signal to open folders panel
     open_history_panel_requested = QtCore.Signal()  # Signal to open history panel
@@ -153,7 +153,7 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
-        self.script_view.editSoftwareRequested.connect(self.edit_software_requested)
+        self.script_view.editMetadataRequested.connect(self.edit_metadata_requested)
         self.script_view.manageTagsRequested.connect(self.manage_tags_requested)
         
         # Connect mouse signals for drag tracking
