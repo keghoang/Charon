@@ -15,6 +15,14 @@ from .cache_manager import get_cache_manager
 
 class ScriptValidator:
     """Centralized script validation logic."""
+    @staticmethod
+    def _is_charon_metadata(metadata: Optional[Dict[str, Any]]) -> bool:
+        """Return True if metadata represents a Charon workflow."""
+        if not metadata:
+            return False
+        if metadata.get("charon_meta"):
+            return True
+        return bool(metadata.get("workflow_file"))
     
     @staticmethod
     def can_execute(script_path: str, metadata: Optional[Dict[str, Any]], host: str) -> Tuple[bool, str]:
@@ -52,23 +60,8 @@ class ScriptValidator:
             if not path_exists:
                 return False, "Script path does not exist"
         
-        # Check metadata exists
-        if not metadata:
-            return False, "No metadata found"
-
-        # Charon workflows are browse-only within the prototype
-        if metadata.get("charon_meta"):
-            return False, "Charon workflows are browse-only"
-        
-        # Check compatibility
-        if not ScriptValidator.is_compatible(metadata, host):
-            return False, f"Not compatible with {host}"
-        
-        # Check entry file
-        has_entry, entry_path = ScriptValidator.has_valid_entry(script_path, metadata)
-        if not has_entry:
-            return False, f"No valid entry file found"
-        
+        # Temporarily treat all workflows as runnable within the prototype while
+        # Charon-centric execution semantics are defined.
         return True, ""
     
     @staticmethod
@@ -79,11 +72,23 @@ class ScriptValidator:
         Returns:
             (has_valid_entry, entry_path)
         """
-        if not metadata:
-            return False, None
-        
-        # Check cache first
         cache_manager = get_cache_manager()
+        if ScriptValidator._is_charon_metadata(metadata):
+            validation_data = cache_manager.get_script_validation(script_path) or {}
+            validation_data.update({
+                'has_entry': True,
+                'entry_path': None,
+                'entry_size': 0,
+                'path_exists': validation_data.get('path_exists', True),
+                'validation_time': time.time()
+            })
+            cache_manager.cache_script_validation(script_path, validation_data)
+            return True, None
+
+        if not metadata:
+            return True, None
+
+        # Check cache first
         cached_validation = cache_manager.get_script_validation(script_path)
         
         if cached_validation and 'has_entry' in cached_validation:
@@ -102,10 +107,11 @@ class ScriptValidator:
             'validation_time': time.time()
         }
         
-        # Charon workflows do not have runnable entry files
+        # Treat Charon workflows as valid even without a Python entry point.
         if metadata.get("charon_meta"):
+            validation_data['has_entry'] = True
             cache_manager.cache_script_validation(script_path, validation_data)
-            return False, None
+            return True, None
 
         # Check explicit entry in metadata
         entry = metadata.get("entry")
@@ -141,8 +147,7 @@ class ScriptValidator:
     def is_compatible(metadata: Optional[Dict[str, Any]], host: str) -> bool:
         """Check if script is compatible with the current host."""
         if not metadata:
-            return False
-        
+            return True
         return is_compatible_with_host(metadata, host)
     
     @staticmethod
@@ -162,7 +167,7 @@ class ScriptValidator:
         from . import config
         
         # Get base color
-        color = get_software_color_for_metadata(metadata, host)
+        color = get_software_color_for_metadata(metadata)
         
         # Check if script can run
         can_run, reason = ScriptValidator.can_execute(script_path, metadata, host)
@@ -170,14 +175,22 @@ class ScriptValidator:
         # Determine visual properties
         is_compatible = ScriptValidator.is_compatible(metadata, host)
         has_entry, _ = ScriptValidator.has_valid_entry(script_path, metadata)
-        
+        is_charon = ScriptValidator._is_charon_metadata(metadata)
+
+        should_fade = False
+        if metadata and not is_charon:
+            should_fade = not (is_compatible and has_entry)
+
         return {
             "color": color,
-            "should_fade": not (is_compatible and has_entry),
+            "should_fade": should_fade,
             "is_selectable": can_run,
             "can_run": can_run,
             "tooltip_suffix": f" ({reason})" if not can_run else "",
-            "is_bookmarked": is_bookmarked
+            "is_bookmarked": is_bookmarked,
+            "is_compatible": is_compatible,
+            "has_entry": has_entry,
+            "is_charon": is_charon
         }
     
     @staticmethod

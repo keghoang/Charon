@@ -51,6 +51,11 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         color = QtGui.QColor(props["color"])
         if props["should_fade"]:
             color = apply_incompatible_opacity(color)
+            from .galt_logger import system_debug
+            system_debug(
+                f"ScriptTableModel fading '{script.name}': color={props['color']} "
+                f"is_compatible={props.get('is_compatible')} has_entry={props.get('has_entry')}"
+            )
         
         return QtGui.QBrush(color)
     
@@ -171,10 +176,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if script.has_readme():
                     name_part += " [r]"
                 
-                if not script.has_metadata():
-                    return f"{prefix}{name_part} (No Metadata)"
-                else:
-                    return f"{prefix}{name_part}"
+                return f"{prefix}{name_part}"
                     
             elif col == self.COL_SOFTWARE:
                 # Software column will be handled by delegate

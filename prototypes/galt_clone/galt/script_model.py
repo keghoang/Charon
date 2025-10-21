@@ -61,10 +61,9 @@ class ScriptItem:
             name_part += " [r]"
         
         if not self.has_metadata():
-            return f"{prefix}{name_part} (No Metadata)"
-        else:
-            sw = get_software_for_host(self.metadata, self.host)
-            return f"{prefix}{name_part} ({sw})"
+            return f"{prefix}{name_part}"
+        sw = get_software_for_host(self.metadata, self.host)
+        return f"{prefix}{name_part} ({sw})"
 
 
 class BaseScriptLoader(QtCore.QThread):
@@ -388,7 +387,7 @@ class ScriptListModel(QtCore.QAbstractListModel):
             return item.display_text()
         if role == ForegroundRole:
             # Get the base color using centralized utility
-            base_color = get_software_color_for_metadata(item.metadata, self.host)
+            base_color = get_software_color_for_metadata(item.metadata)
             
             # Check if script is compatible with current host
             is_compatible = is_compatible_with_host(item.metadata, self.host)
