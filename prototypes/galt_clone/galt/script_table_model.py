@@ -9,17 +9,14 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
     
     # Column indices
     COL_NAME = 0
-    COL_SOFTWARE = 1
-    COL_HOTKEY = 2
-    COL_RUN = 3
-    COLUMN_COUNT = 4
+    COL_HOTKEY = 1
+    COL_RUN = 2
+    COLUMN_COUNT = 3
     
     # Custom roles
     ScriptRole = UserRole + 1
     PathRole = UserRole + 2
     MetadataRole = UserRole + 3
-    CompatibleRole = UserRole + 4
-    ValidEntryRole = UserRole + 5
     CanRunRole = UserRole + 6
     TagsRole = UserRole + 100  # Role for tag filtering
     
@@ -51,11 +48,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         color = QtGui.QColor(props["color"])
         if props["should_fade"]:
             color = apply_incompatible_opacity(color)
-            from .galt_logger import system_debug
-            system_debug(
-                f"ScriptTableModel fading '{script.name}': color={props['color']} "
-                f"is_compatible={props.get('is_compatible')} has_entry={props.get('has_entry')}"
-            )
         
         return QtGui.QBrush(color)
     
@@ -178,10 +170,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 
                 return f"{prefix}{name_part}"
                     
-            elif col == self.COL_SOFTWARE:
-                # Software column will be handled by delegate
-                return ""
-                    
             elif col == self.COL_HOTKEY:
                 # Show the specific hotkey if available
                 if hasattr(script, 'hotkey') and script.hotkey:
@@ -208,10 +196,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             return script.path
         elif role == self.MetadataRole:
             return script.metadata
-        elif role == self.CompatibleRole:
-            return ScriptValidator.is_compatible(script.metadata, self.host)
-        elif role == self.ValidEntryRole:
-            return self._has_valid_entry_file(script)
         elif role == self.CanRunRole:
             return self.can_run_script(script)
         elif role == self.TagsRole:
@@ -229,8 +213,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         if orientation == Horizontal and role == DisplayRole:
             if section == self.COL_NAME:
                 return "Workflow"
-            elif section == self.COL_SOFTWARE:
-                return "Apps"
             elif section == self.COL_HOTKEY:
                 return "Hotkey"
             elif section == self.COL_RUN:

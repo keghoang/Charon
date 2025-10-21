@@ -31,7 +31,6 @@ from urllib.parse import urlparse
 CHARON_METADATA_FILENAME = ".charon.json"
 
 LEGACY_DEFAULTS: Dict[str, Any] = {
-    "software": ["nuke"],
     "entry": None,
     "script_type": "python",
     "run_on_main": False,

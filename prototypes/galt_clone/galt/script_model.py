@@ -1,5 +1,5 @@
 from .qt_compat import QtCore, QtGui
-from .metadata_manager import get_galt_config, get_software_for_host
+from .metadata_manager import get_galt_config
 from .utilities import is_compatible_with_host, apply_incompatible_opacity, get_software_color_for_metadata
 from .cache_manager import get_cache_manager
 from .galt_logger import system_debug
@@ -60,10 +60,7 @@ class ScriptItem:
         if self.has_readme():
             name_part += " [r]"
         
-        if not self.has_metadata():
-            return f"{prefix}{name_part}"
-        sw = get_software_for_host(self.metadata, self.host)
-        return f"{prefix}{name_part} ({sw})"
+        return f"{prefix}{name_part}"
 
 
 class BaseScriptLoader(QtCore.QThread):
