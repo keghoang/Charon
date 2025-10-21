@@ -696,7 +696,7 @@ def create_sort_key(item, host, base_path=None):
 
 def load_scripts_for_folder(folder_path, host="None"):
     """Load scripts from a folder and return ScriptItem objects."""
-    from galt.script_model import ScriptItem
+    from galt.workflow_model import ScriptItem
     from galt.metadata_manager import get_galt_config
     
     items = []

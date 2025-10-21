@@ -1,11 +1,12 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, exec_dialog
-from .. import script_model
+from .. import workflow_model
 from ..script_table_model import ScriptTableModel
 from .metadata_panel import MetadataPanel
 from .dialogs import CharonMetadataDialog
 from ..settings import user_settings_db
 from .custom_table_widgets import ScriptTableView
 from ..charon_metadata import write_charon_metadata
+from ..metadata_manager import load_workflow_data
 from .. import config
 import os
 import shutil
@@ -40,6 +41,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self._is_deselecting = False  # Track explicit deselection
         self._active_tags = []  # Track active tag filters
         self._all_scripts = []  # Store all scripts before filtering
+        self._last_workflow_data = None  # Cache last loaded workflow payload
         
         # Setup the UI
         self.layout = QtWidgets.QVBoxLayout(self)
@@ -149,7 +151,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.assignHotkeyRequested.connect(self.assign_hotkey_requested)
         
         # Connect the script_run signal from the table view
-        self.script_view.script_run.connect(self.script_run)
+        self.script_view.script_run.connect(self._handle_script_run_request)
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
@@ -174,7 +176,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.layout.addWidget(self.metadata_panel, 0)  # No stretch for metadata panel
         
         # Create the background loader
-        self.folder_loader = script_model.FolderLoader(self)
+        self.folder_loader = workflow_model.FolderLoader(self)
         self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
     
     def set_host(self, host):
@@ -495,6 +497,25 @@ class ScriptPanel(QtWidgets.QWidget):
             return self.script_model.get_script_at_row(row)
         return None
 
+    def _handle_script_run_request(self, script_path: str):
+        """Load workflow data before emitting the run signal."""
+        if not script_path:
+            return
+
+        try:
+            self._last_workflow_data = load_workflow_data(script_path)
+        except FileNotFoundError as exc:
+            QtWidgets.QMessageBox.critical(self, "Workflow Missing", str(exc))
+            return
+        except ValueError as exc:
+            QtWidgets.QMessageBox.critical(self, "Workflow Invalid", str(exc))
+            return
+        except Exception as exc:  # Catch-all to avoid silent failures
+            QtWidgets.QMessageBox.critical(self, "Workflow Error", str(exc))
+            return
+
+        self.script_run.emit(script_path)
+
     def on_script_run(self, index):
         if not index.isValid():
             return
@@ -507,7 +528,7 @@ class ScriptPanel(QtWidgets.QWidget):
         row = index.row()
         script = self.script_model.get_script_at_row(row)
         if script:
-            self.script_run.emit(script.path)
+            self._handle_script_run_request(script.path)
 
     def focus_first_script(self):
         """Focus the first script in the list. Returns True if successful"""

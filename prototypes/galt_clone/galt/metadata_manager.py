@@ -1,3 +1,4 @@
+import json
 import os
 import functools
 from .utilities import is_compatible_with_host
@@ -189,3 +190,43 @@ def update_galt_config(script_path, new_config):
         invalidate_metadata_path(script_path)
         return True
     return False
+
+
+def load_workflow_data(script_path):
+    """
+    Load metadata and workflow payload for the given workflow directory.
+
+    Returns a dictionary containing:
+      - folder: absolute path to the workflow directory
+      - workflow_file: filename declared in metadata (defaults to workflow.json)
+      - workflow_path: resolved absolute path to the workflow JSON
+      - metadata: metadata dictionary (may be empty)
+      - workflow: parsed JSON workflow payload
+    """
+    metadata = get_galt_config(script_path) or {}
+    charon_meta = metadata.get("charon_meta") if isinstance(metadata, dict) else {}
+    if not isinstance(charon_meta, dict):
+        charon_meta = {}
+
+    workflow_file = (
+        charon_meta.get("workflow_file")
+        or metadata.get("workflow_file")  # legacy field if present
+        or "workflow.json"
+    )
+    workflow_path = os.path.join(script_path, workflow_file)
+
+    try:
+        with open(workflow_path, "r", encoding="utf-8") as handle:
+            workflow_payload = json.load(handle)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Workflow file not found: {workflow_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Workflow JSON is invalid: {workflow_path}") from exc
+
+    return {
+        "folder": script_path,
+        "workflow_file": workflow_file,
+        "workflow_path": workflow_path,
+        "metadata": metadata,
+        "workflow": workflow_payload,
+    }

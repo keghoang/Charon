@@ -1,5 +1,5 @@
 from .qt_compat import QtCore, QtGui, UserRole, DisplayRole, ForegroundRole, TextAlignmentRole, AlignCenter, Horizontal
-from .script_model import ScriptItem, BaseScriptLoader
+from .workflow_model import ScriptItem, BaseScriptLoader
 from .script_validator import ScriptValidator
 from .settings import user_settings_db
 import os
