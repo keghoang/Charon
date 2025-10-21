@@ -339,46 +339,10 @@ class MetadataPanel(QtWidgets.QWidget):
             self._edit_charon_metadata(conf)
             return
 
-        self._convert_legacy_to_charon(conf)
-    def _convert_legacy_to_charon(self, conf: dict):
-        """Prompt to convert legacy metadata into Charon metadata."""
-        initial_meta = {
-            "workflow_file": self._guess_workflow_file(self.script_folder),
-            "description": conf.get("description", ""),
-            "dependencies": conf.get("dependencies", []) or [],
-            "tags": conf.get("tags", []) or [],
-        }
+        # Legacy `.galt.json` metadata is ignored; no editing support.
 
-        dialog = CharonMetadataDialog(initial_meta, parent=self)
-        if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
-            return
-
-        updated = initial_meta.copy()
-        updated.update(dialog.get_metadata() or {})
-        if not updated.get("workflow_file"):
-            updated["workflow_file"] = initial_meta["workflow_file"]
-
-        if write_charon_metadata(self.script_folder, updated) is None:
-            QtWidgets.QMessageBox.warning(self, "Update Failed", "Could not write workflow metadata.")
-            return
-
-        legacy_path = os.path.join(self.script_folder, ".galt.json")
-        try:
-            os.remove(legacy_path)
-        except FileNotFoundError:
-            pass
-
-        invalidate_metadata_path(self.script_folder)
-        self.update_metadata(self.script_folder)
-
-        old_tags = conf.get("tags", []) or []
-        new_tags = updated.get("tags", []) or []
-        added = [tag for tag in new_tags if tag not in old_tags]
-        removed = [tag for tag in old_tags if tag not in new_tags]
-        if added or removed:
-            self.tags_updated.emit(self.script_folder, added, removed)
-        self.metadata_changed.emit()
     def create_metadata(self):
+        """Create Charon metadata for the current workflow."""
         if not self.script_folder:
             return
 
@@ -401,15 +365,10 @@ class MetadataPanel(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Create Failed", "Could not write workflow metadata.")
             return
 
-        legacy_path = os.path.join(self.script_folder, ".galt.json")
-        try:
-            os.remove(legacy_path)
-        except FileNotFoundError:
-            pass
-
         invalidate_metadata_path(self.script_folder)
         self.update_metadata(self.script_folder)
         self.metadata_changed.emit()
+
 
     def _guess_workflow_file(self, script_folder: str) -> str:
         """Return a likely workflow JSON filename for a folder."""

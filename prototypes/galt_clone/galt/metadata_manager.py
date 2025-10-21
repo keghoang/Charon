@@ -1,132 +1,13 @@
-import os, json
-import sys
+import os
 import functools
-from galt import config
 from .utilities import is_compatible_with_host
-from .galt_logger import system_warning, system_error
+from .galt_logger import system_error
 from .charon_metadata import load_charon_metadata, write_charon_metadata, CHARON_METADATA_FILENAME
-
-CHARON_METADATA_FILENAME = ".charon.json"
-GALT_METADATA_FILENAME = ".galt.json"
 
 
 def get_metadata_path(script_path):
-    """
-    Return the metadata path the loader should use. Prefers the new Charon
-    metadata when available, falling back to legacy `.galt.json` files.
-    """
-    charon_path = os.path.join(script_path, CHARON_METADATA_FILENAME)
-    if os.path.exists(charon_path):
-        return charon_path
-    return os.path.join(script_path, GALT_METADATA_FILENAME)
-
-def _write_json_file(file_path, data):
-    """
-    Robust JSON file writer that handles Windows permission issues.
-    
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    # Ensure the directory exists
-    dir_path = os.path.dirname(file_path)
-    if not os.path.exists(dir_path):
-        try:
-            os.makedirs(dir_path)
-        except Exception as e:
-            system_error(f"Failed to create directory {dir_path}: {str(e)}")
-            return False
-    
-    # Method 1: Direct write
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
-        return True
-    except PermissionError as e:
-        # Method 2: Try to remove read-only attribute on Windows
-        if sys.platform == 'win32' and os.path.exists(file_path):
-            try:
-                import stat
-                # Get current file stats
-                current_stat = os.stat(file_path)
-                # Remove read-only flag if set
-                if not (current_stat.st_mode & stat.S_IWRITE):
-                    os.chmod(file_path, current_stat.st_mode | stat.S_IWRITE)
-                
-                # Try writing again
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4)
-                return True
-            except Exception:
-                pass
-        
-        # Method 3: Write to temp file and replace
-        temp_path = file_path + '.tmp'
-        try:
-            # Write to temporary file
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-            
-            # On Windows, we may need to remove the target file first
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except:
-                    # If direct removal fails, try renaming to backup first
-                    backup_path = file_path + '.bak'
-                    if os.path.exists(backup_path):
-                        os.remove(backup_path)
-                    os.rename(file_path, backup_path)
-                    try:
-                        os.remove(backup_path)
-                    except:
-                        pass  # Ignore if we can't remove the backup
-            
-            # Rename temp file to final name
-            os.rename(temp_path, file_path)
-            return True
-        except Exception as e2:
-            # Clean up temp file if it exists
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            system_error(f"All write methods failed for {file_path}: Direct: {e}, Temp file: {e2}")
-            return False
-    except Exception as e:
-        system_error(f"Unexpected error writing {file_path}: {e}")
-        return False
-
-def get_software_for_host(metadata, host="None"):
-    """
-    Get the appropriate software from metadata based on the current host.
-    
-    Args:
-        metadata (dict): The metadata dictionary containing software list
-        host (str): The current host software (e.g., "Maya", "Nuke", "Windows")
-        
-    Returns:
-        str: The software to use. Prioritizes host software if it exists in the list,
-             otherwise returns the first software in the list.
-    """
-    if not metadata or "software" not in metadata:
-        return "None"
-    
-    software_list = metadata.get("software", ["None"])
-    if not software_list:
-        return "None"
-    
-    # If host is "None" or not specified, return the first software
-    if host.lower() == "none":
-        return software_list[0]
-    
-    # Check if the current host software exists in the list
-    for software in software_list:
-        if software.lower() == host.lower():
-            return software
-    
-    # If host software not found, return the first software in the list
-    return software_list[0]
+    """Return the path to the Charon metadata file for a script."""
+    return os.path.join(script_path, CHARON_METADATA_FILENAME)
 
 
 def is_folder_compatible_with_host(folder_path, host="None", use_cache=True):
@@ -187,28 +68,10 @@ def check_folder_compatibility_lazy(folder_path, host="None"):
 @functools.lru_cache(maxsize=10000)
 def get_galt_config(script_path):
     """
-    Load metadata for the given workflow/script directory.
-    Prefers `.charon.json`, but supports `.galt.json` for legacy content.
+    Load Charon metadata for the given workflow directory.
+    Returns None when no `.charon.json` file exists.
     """
-    charon_meta = load_charon_metadata(script_path)
-    if charon_meta is not None:
-        return charon_meta
-
-    meta_path = os.path.join(script_path, GALT_METADATA_FILENAME)
-    if not os.path.exists(meta_path):
-        if os.path.exists(os.path.join(script_path, "main.py")):
-            # Create default metadata file
-            return cleanUpMetadata(script_path)
-        return None
-
-    # File exists, load it without automatic cleanup
-    try:
-        with open(meta_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-        return metadata if isinstance(metadata, dict) else None
-    except (json.JSONDecodeError, IOError):
-        # Only cleanup if file is corrupted
-        return cleanUpMetadata(script_path)
+    return load_charon_metadata(script_path)
 
 def clear_metadata_cache():
     """Clear the entire metadata cache. Use when metadata has changed."""
@@ -264,69 +127,6 @@ def get_folder_tags(folder_path):
     
     return sorted(all_tags)
 
-def cleanUpMetadata(script_path):
-    """
-    Ensure metadata file has all required fields with correct defaults.
-    This function is called whenever Galt touches a .galt.json file.
-    
-    Args:
-        script_path (str): Path to the script folder
-        
-    Returns:
-        dict: The cleaned up metadata
-    """
-    meta_path = get_metadata_path(script_path)
-
-    if meta_path.endswith(CHARON_METADATA_FILENAME):
-        metadata = load_charon_metadata(script_path)
-        if metadata is None:
-            metadata = write_charon_metadata(script_path)
-            if metadata is None:
-                system_warning(f"Could not initialize {meta_path}")
-        if metadata:
-            invalidate_metadata_path(script_path)
-        return metadata
-    
-    # Start with default metadata
-    metadata = config.DEFAULT_METADATA.copy()
-    
-    # If metadata file exists, load and merge it
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                existing_metadata = json.load(f)
-            
-            # Update defaults with existing values
-            if isinstance(existing_metadata, dict):
-                metadata.update(existing_metadata)
-        except (json.JSONDecodeError, IOError):
-            # If there's an error reading, we'll just use defaults
-            pass
-    
-    # Handle backward compatibility: intercept_prints -> mirror_prints
-    if "intercept_prints" in metadata and "mirror_prints" not in metadata:
-        metadata["mirror_prints"] = metadata["intercept_prints"]
-    
-    # Clean up to current shape - only include supported fields
-    cleaned_metadata = {
-        "software": metadata.get("software", config.DEFAULT_METADATA["software"]),
-        "entry": metadata.get("entry", config.DEFAULT_METADATA["entry"]),
-        "script_type": metadata.get("script_type", config.DEFAULT_METADATA["script_type"]),
-        "run_on_main": metadata.get("run_on_main", config.DEFAULT_METADATA["run_on_main"]),
-        "mirror_prints": metadata.get("mirror_prints", config.DEFAULT_METADATA["mirror_prints"]),
-        "tags": metadata.get("tags", config.DEFAULT_METADATA["tags"])
-    }
-    
-    # Write back the cleaned metadata using robust method
-    if not _write_json_file(meta_path, cleaned_metadata):
-        system_warning(f"Could not write cleaned metadata to {meta_path}")
-    
-    # Only invalidate this specific path in the cache
-    # For now this clears the entire cache, but it's called less frequently
-    invalidate_metadata_path(script_path)
-    
-    return cleaned_metadata
-
 def refresh_metadata(target="current", script_path=None, folder_path=None, clear_cache=True):
     """
     Centralized metadata refresh function.
@@ -356,39 +156,36 @@ def refresh_metadata(target="current", script_path=None, folder_path=None, clear
         # For "all", we already cleared the cache above
         pass
 
-def create_default_galt_file(script_path, default_config=None):
-    meta_path = get_metadata_path(script_path)
-    if meta_path.endswith(CHARON_METADATA_FILENAME):
-        metadata = write_charon_metadata(script_path)
-        if metadata:
-            invalidate_metadata_path(script_path)
-            return True
-        return False
-
-    if default_config is None:
-        default_config = config.DEFAULT_METADATA.copy()
-    
-    if _write_json_file(meta_path, default_config):
-        # Only invalidate this specific path
-        invalidate_metadata_path(script_path)
-        return True
-    return False
-
 def update_galt_config(script_path, new_config):
-    meta_path = get_metadata_path(script_path)
-
-    if meta_path.endswith(CHARON_METADATA_FILENAME):
-        data = None
-        if isinstance(new_config, dict) and "workflow_file" in new_config:
-            data = new_config
-        metadata = write_charon_metadata(script_path, data)
-        if metadata:
-            invalidate_metadata_path(script_path)
-            return True
+    """Update Charon metadata on disk."""
+    if not isinstance(new_config, dict):
         return False
-    
-    if _write_json_file(meta_path, new_config):
-        # Only invalidate this specific path
+
+    existing = load_charon_metadata(script_path) or {}
+    payload = existing.get("charon_meta", {}).copy()
+
+    incoming = new_config.get("charon_meta") or {}
+    for key, value in incoming.items():
+        if value is not None:
+            payload[key] = value
+
+    def _apply(key):
+        if key in new_config and new_config[key] is not None:
+            payload[key] = new_config[key]
+
+    for key in ("workflow_file", "description", "entry", "last_changed", "run_on_main", "mirror_prints"):
+        _apply(key)
+
+    if "dependencies" in new_config and new_config["dependencies"] is not None:
+        payload["dependencies"] = new_config["dependencies"]
+    if "tags" in new_config and new_config["tags"] is not None:
+        payload["tags"] = new_config["tags"]
+
+    if not payload.get("workflow_file"):
+        payload["workflow_file"] = "workflow.json"
+
+    metadata = write_charon_metadata(script_path, payload)
+    if metadata:
         invalidate_metadata_path(script_path)
         return True
     return False

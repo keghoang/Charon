@@ -358,23 +358,6 @@ def md_to_html(md_text, base_path=None):
     return style + '\n'.join(html_lines)
 
 
-def get_galt_config(script_path):
-    from galt.metadata_manager import get_galt_config as get_config
-    return get_config(script_path)
-
-def create_default_galt_file(script_path, default_config=None):
-    from galt.metadata_manager import create_default_galt_file as create_file
-    return create_file(script_path, default_config=default_config)
-
-def update_galt_config(script_path, config):
-    from galt.metadata_manager import update_galt_config as update_config
-    return update_config(script_path, config)
-
-def format_script_display_name(script_name, software_list):
-    if not software_list:
-        return script_name
-    return f"{script_name} ({', '.join(software_list)})"
-
 def get_software_color(software):
     """Get color for software, using new unified config."""
     # Handle special cases
