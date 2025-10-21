@@ -67,7 +67,7 @@ class BackgroundExecutor(QtCore.QObject):
         self._output_timer.start(config.EXECUTION_OUTPUT_UPDATE_INTERVAL_MS)
     
     def execute(self, execution_id: str, script_path: str, entry_file: str, 
-                host: str = "windows", mirror_prints: bool = True, 
+                host: str = "nuke", mirror_prints: bool = True, 
                 script_type: str = "python", thread_override_msg: str = "") -> None:
         """
         Execute a script in a background thread.

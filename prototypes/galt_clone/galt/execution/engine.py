@@ -48,7 +48,7 @@ class ScriptExecutionEngine(QtCore.QObject):
     progress_updated = QtCore.Signal(str, str)  # execution_id, progress_message
     output_updated = QtCore.Signal(str, str)  # execution_id, output_chunk
     
-    def __init__(self, host: str = "windows", parent: Optional[QtCore.QObject] = None):
+    def __init__(self, host: str = "nuke", parent: Optional[QtCore.QObject] = None):
         super().__init__(parent)
         self.host = host
         
