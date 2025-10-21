@@ -113,9 +113,12 @@ class MetadataPanel(QtWidgets.QWidget):
         self.charon_workflow_value.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         self.charon_last_changed_value = QtWidgets.QLabel()
         self.charon_last_changed_value.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.charon_node_count_value = QtWidgets.QLabel()
+        self.charon_node_count_value.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
 
         self.charon_info_form.addRow("Workflow JSON:", self.charon_workflow_value)
         self.charon_info_form.addRow("Last Updated:", self.charon_last_changed_value)
+        self.charon_info_form.addRow("Node Count:", self.charon_node_count_value)
 
         self.charon_dependencies_label = QtWidgets.QLabel("Dependencies:")
         self.charon_dependencies_list_container = QtWidgets.QWidget()
@@ -435,10 +438,10 @@ class MetadataPanel(QtWidgets.QWidget):
             except ValueError:
                 display_last_changed = last_changed
         else:
-            display_last_changed = "—"
+            display_last_changed = "-"
         self.charon_last_changed_value.setText(display_last_changed)
 
-        node_count = "—"
+        node_count = "-"
         if workflow_exists:
             try:
                 with open(workflow_path, "r", encoding="utf-8") as wf_handle:

@@ -62,7 +62,12 @@ except ImportError:
     PYSIDE_VERSION = 2
 
 from .comfy_client import ComfyUIClient
-from .paths import get_charon_temp_dir, extend_sys_path_with_comfy, resolve_comfy_environment
+from .paths import (
+    get_charon_temp_dir,
+    extend_sys_path_with_comfy,
+    resolve_comfy_environment,
+    get_default_comfy_launch_path,
+)
 from .processor_script import build_processor_script
 from .workflow_analysis import (
     analyze_workflow_inputs,
@@ -278,7 +283,7 @@ class CharonPanel(QWidget):
         exe_layout.addWidget(QLabel("ComfyUI Path:"))
         self.comfyui_path_edit = QLineEdit()
         self.comfyui_path_edit.setPlaceholderText("Path to run_nvidia_gpu.bat or main.py...")
-        self.comfyui_path_edit.setText(r"D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat")
+        self.comfyui_path_edit.setText(get_default_comfy_launch_path())
         exe_layout.addWidget(self.comfyui_path_edit)
         browse_btn = QPushButton("Browse")
         browse_btn.clicked.connect(self.browse_comfyui_path)

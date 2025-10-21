@@ -10,6 +10,7 @@ from .quick_search import QuickSearchDialog
 from .tag_bar import TagBar
 from .tiny_mode_widget import TinyModeWidget
 from ..folder_loader import FolderListLoader
+from .comfy_connection_widget import ComfyConnectionWidget
 
 import threading
 
@@ -40,6 +41,11 @@ from ..icon_manager import get_icon_manager
 class GaltWindow(QtWidgets.QWidget):
     def __init__(self, global_path=None, local_path=None, host="None", parent=None, startup_mode="normal"):
         super(GaltWindow, self).__init__(parent)
+        self._charon_is_galt_window = True
+        try:
+            self.setObjectName("CharonGaltWindow")
+        except Exception:
+            pass
 
         # Initialize icon manager early (icons are loaded once globally)
         self.icon_manager = get_icon_manager()
@@ -63,6 +69,7 @@ class GaltWindow(QtWidgets.QWidget):
 
         self.host = host
         self.current_base = self.global_path  # Initialize current_base to avoid None errors
+        self.comfy_client = None
 
         # Navigation context flag to prevent deselection during programmatic navigation
         self._is_navigating = False
@@ -326,7 +333,15 @@ class GaltWindow(QtWidgets.QWidget):
         
         # Setup shared components and initialization after UI is created
         self._setup_shared_components()
-    
+
+    def _on_comfy_client_changed(self, client):
+        """Store the active ComfyUI client exposed by the connection widget."""
+        self.comfy_client = client
+        if client:
+            system_debug("ComfyUI client updated for GaltWindow")
+        else:
+            system_debug("ComfyUI client cleared for GaltWindow")
+
     def _setup_normal_ui(self, parent):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
@@ -334,7 +349,7 @@ class GaltWindow(QtWidgets.QWidget):
         main_layout.setContentsMargins(config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS, 
                                       config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS)
         main_layout.setSpacing(config.UI_ELEMENT_SPACING)
-        
+
         # Add user info and buttons to the top row
         refresh_layout = QtWidgets.QHBoxLayout()
         # Add 4px margin to align with the folder panel's content
@@ -534,6 +549,18 @@ class GaltWindow(QtWidgets.QWidget):
 
         # Add content layout to main layout
         main_layout.addLayout(content_layout)
+
+        # Add spacing to separate content from footer controls
+        main_layout.addSpacing(config.UI_ELEMENT_SPACING)
+
+        # Bottom footer with ComfyUI controls aligned to the right
+        footer_layout = QtWidgets.QHBoxLayout()
+        footer_layout.setContentsMargins(4, 0, 4, 4)
+        footer_layout.addStretch()
+        self.comfy_connection_widget = ComfyConnectionWidget(parent)
+        self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
+        footer_layout.addWidget(self.comfy_connection_widget)
+        main_layout.addLayout(footer_layout)
 
         # Initialize and populate folders
         self.current_base = self.global_path

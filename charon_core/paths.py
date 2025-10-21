@@ -7,6 +7,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHARON_DIR = r"D:\Nuke\charon"
+DEFAULT_COMFYUI_LAUNCH_PATH = (
+    r"D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat"
+)
+
+
+def get_default_comfy_launch_path():
+    return DEFAULT_COMFYUI_LAUNCH_PATH
 
 
 def get_charon_temp_dir(base_dir=DEFAULT_CHARON_DIR):
