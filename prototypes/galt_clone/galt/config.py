@@ -183,7 +183,7 @@ pre { margin: 0px 0; }
 
 # Debug mode flag - controls verbose output
 # Debug and Logging Settings
-DEBUG_MODE = False
+DEBUG_MODE = True
 
 # Logging configuration
 # System messages are always shown to terminal
@@ -311,3 +311,4 @@ CACHE_PREFETCH_ALL_FOLDERS = True  # If True, prefetch all folders alphabeticall
 QT_WARNING_MESSAGE_TEMPLATE = """WARNING: {qt_import} detected in script.
 Qt widgets cannot be created in background threads.
 Set 'run_on_main: true' in .galt.json to use Qt widgets."""
+

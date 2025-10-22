@@ -25,6 +25,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+from .galt_logger import system_debug
 
 CHARON_METADATA_FILENAME = ".charon.json"
 
@@ -34,6 +35,7 @@ CHARON_DEFAULTS: Dict[str, Any] = {
     "dependencies": [],
     "last_changed": None,
     "tags": [],
+    "parameters": [],
 }
 
 
@@ -95,18 +97,22 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         with open(charon_path, "r", encoding="utf-8-sig") as handle:
             raw_meta = json.load(handle)
     except Exception:
+        print(f"Failed to read metadata at {charon_path}")
+        system_debug(f"Failed to read metadata at {charon_path}")
         return None
 
     if not isinstance(raw_meta, dict):
         return None
 
     normalized_dependencies = _normalize_dependencies(raw_meta.get("dependencies"))
+    normalized_parameters = _normalize_parameters(raw_meta.get("parameters"))
     stored_meta: Dict[str, Any] = {
         "workflow_file": raw_meta.get("workflow_file") or "workflow.json",
         "description": raw_meta.get("description") or "",
         "dependencies": normalized_dependencies,
         "last_changed": raw_meta.get("last_changed"),
         "tags": list(raw_meta.get("tags") or []),
+        "parameters": normalized_parameters,
     }
 
     metadata: Dict[str, Any] = {
@@ -115,9 +121,12 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         "last_changed": stored_meta["last_changed"],
         "tags": stored_meta["tags"],
         "dependencies": normalized_dependencies,
+        "parameters": normalized_parameters,
         "charon_meta": stored_meta,
         "run_on_main": bool(raw_meta.get("run_on_main", False)),
     }
+    print(f"Loaded metadata parameters: {normalized_parameters}")
+    system_debug(f"Loaded metadata parameters: {normalized_parameters}")
 
     return metadata
 
@@ -136,6 +145,8 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
             filtered["dependencies"] = _normalize_dependencies(filtered["dependencies"])
         if "tags" in filtered:
             filtered["tags"] = list(filtered.get("tags") or [])
+        if "parameters" in filtered:
+            filtered["parameters"] = _normalize_parameters(filtered["parameters"])
         for legacy_key in ("display_name", "entry", "run_on_main", "script_type", "mirror_prints"):
             filtered.pop(legacy_key, None)
         payload.update(filtered)
@@ -144,6 +155,36 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
         with open(charon_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
     except Exception:
+        print(f"Failed to write metadata at {charon_path}")
+        system_debug(f"Failed to write metadata at {charon_path}")
         return None
+    print(f"Wrote metadata parameters: {payload.get('parameters')}")
+    system_debug(f"Wrote metadata parameters: {payload.get('parameters')}")
 
     return load_charon_metadata(script_path)
+
+
+def _normalize_parameters(values) -> List[Dict[str, Any]]:
+    """Return sanitized parameter entries that can be stored on disk."""
+    normalized: List[Dict[str, Any]] = []
+    for entry in values or []:
+        if not isinstance(entry, dict):
+            continue
+        node_id = str(entry.get("node_id") or "").strip()
+        attribute = str(entry.get("attribute") or "").strip()
+        if not node_id or not attribute:
+            continue
+        label = str(entry.get("label") or "").strip() or attribute
+        value_type = str(entry.get("type") or "string").strip().lower() or "string"
+        node_name = str(entry.get("node_name") or "").strip()
+        normalized.append(
+            {
+                "node_id": node_id,
+                "node_name": node_name,
+                "attribute": attribute,
+                "label": label,
+                "type": value_type,
+                "default": entry.get("default"),
+            }
+        )
+    return normalized

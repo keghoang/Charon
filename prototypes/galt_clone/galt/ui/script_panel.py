@@ -767,10 +767,11 @@ class ScriptPanel(QtWidgets.QWidget):
             "description": "",
             "dependencies": [],
             "last_changed": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "tags": []
+            "tags": [],
+            "parameters": [],
         }
 
-        dialog = CharonMetadataDialog(default_meta, parent=self)
+        dialog = CharonMetadataDialog(default_meta, workflow_path=dest_json, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             shutil.rmtree(target_folder, ignore_errors=True)
             return

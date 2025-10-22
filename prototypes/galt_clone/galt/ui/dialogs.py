@@ -7,8 +7,14 @@ from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHi
 from ..qt_compat import exec_dialog
 import os
 from .. import utilities
+from ..input_mapping import (
+    discover_prompt_widget_parameters,
+    load_workflow_document,
+    WorkflowLoadError,
+)
+from ..galt_logger import system_debug
 from .custom_widgets import create_tag_badge
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class BaseMetadataDialog(QtWidgets.QDialog):
     """Base dialog for metadata operations with software selection and validation."""
@@ -465,7 +471,12 @@ class ReadmeDialog(QtWidgets.QDialog):
 class CharonMetadataDialog(QtWidgets.QDialog):
     """Dialog for editing metadata stored in `.charon.json` files."""
 
-    def __init__(self, metadata: Dict[str, Any], parent=None):
+    def __init__(
+        self,
+        metadata: Dict[str, Any],
+        workflow_path: Optional[str] = None,
+        parent=None,
+    ):
         super(CharonMetadataDialog, self).__init__(parent)
         self.setWindowFlag(WindowContextHelpButtonHint, False)
         self.setWindowFlag(WindowCloseButtonHint, True)
@@ -473,6 +484,13 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.setMinimumWidth(420)
 
         self._metadata = dict(metadata or {})
+        raw_parameters = self._metadata.get("parameters") or []
+        if isinstance(raw_parameters, list):
+            parameters = [dict(item) for item in raw_parameters if isinstance(item, dict)]
+        else:
+            parameters = []
+        self._metadata["parameters"] = parameters
+        self._workflow_path = workflow_path
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(8)
@@ -487,6 +505,8 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.description_edit.setPlaceholderText("Describe what this workflow does...")
         self.description_edit.setPlainText(self._metadata.get("description", ""))
         layout.addWidget(self.description_edit)
+
+        self._build_input_mapping_section(layout)
 
         layout.addWidget(QtWidgets.QLabel("Dependencies (Git URLs):"))
         deps_container = QtWidgets.QWidget()
@@ -505,6 +525,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.deps_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.deps_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.deps_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.AllEditTriggers)
+        self.deps_table.setMaximumHeight(140)
         deps_layout.addWidget(self.deps_table)
 
         deps_buttons = QtWidgets.QHBoxLayout()
@@ -534,6 +555,140 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
 
+    def _build_input_mapping_section(self, layout: QtWidgets.QVBoxLayout) -> None:
+        """Create and populate the workflow parameter preview list."""
+        self.input_mapping_group = QtWidgets.QGroupBox("Select Inputs to Expose")
+        self.input_mapping_group.setVisible(False)
+        group_layout = QtWidgets.QVBoxLayout(self.input_mapping_group)
+        group_layout.setContentsMargins(8, 8, 8, 8)
+        group_layout.setSpacing(4)
+
+        self.input_mapping_tree = QtWidgets.QTreeWidget()
+        self.input_mapping_tree.setHeaderHidden(True)
+        self.input_mapping_tree.setRootIsDecorated(True)
+        self.input_mapping_tree.setAlternatingRowColors(True)
+        group_layout.addWidget(self.input_mapping_tree)
+
+        self.input_mapping_message = QtWidgets.QLabel()
+        self.input_mapping_message.setWordWrap(True)
+        group_layout.addWidget(self.input_mapping_message)
+
+        layout.addWidget(self.input_mapping_group)
+        self.input_mapping_tree.itemChanged.connect(self._on_parameter_item_changed)
+        self._populate_input_mapping_preview()
+
+    def _populate_input_mapping_preview(self) -> None:
+        """Populate the preview tree with prompt widget candidates from the workflow."""
+        if not self._workflow_path:
+            self.input_mapping_group.setVisible(False)
+            return
+
+        self.input_mapping_group.setVisible(True)
+        self.input_mapping_tree.clear()
+        self.input_mapping_tree.setVisible(False)
+        self.input_mapping_message.setVisible(True)
+
+        try:
+            workflow_document = load_workflow_document(self._workflow_path)
+        except WorkflowLoadError as exc:
+            self.input_mapping_message.setText(str(exc))
+            print(f"Metadata dialog failed to load workflow: {exc}")
+            return
+
+        candidates = discover_prompt_widget_parameters(workflow_document)
+        if not candidates:
+            self.input_mapping_message.setText(
+                "No prompt widgets were detected in this workflow yet."
+            )
+            print("Metadata dialog discovered 0 prompt candidates.")
+            return
+        print("Metadata dialog discovered prompt nodes: %s" % [(node.node_id, [attr.key for attr in node.attributes]) for node in candidates])
+
+        for node in candidates:
+            node_item = QtWidgets.QTreeWidgetItem(self.input_mapping_tree, [node.name])
+            node_item.setFlags(QtCore.Qt.ItemIsEnabled)
+
+            for attribute in node.attributes:
+                attr_item = QtWidgets.QTreeWidgetItem(node_item, [attribute.label])
+                flags = attr_item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable
+                attr_item.setFlags(flags)
+                if self._is_parameter_selected(node.node_id, attribute.key):
+                    attr_item.setCheckState(0, QtCore.Qt.CheckState.Checked)
+                else:
+                    attr_item.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
+                attr_item.setToolTip(0, attribute.preview or "No default assigned")
+                attr_item.setData(
+                    0,
+                    QtCore.Qt.ItemDataRole.UserRole,
+                    {
+                        "node_id": node.node_id,
+                        "attribute_key": attribute.key,
+                        "node_name": node.name,
+                        "label": attribute.label,
+                        "preview": attribute.preview,
+                        "value": attribute.value,
+                        "value_type": attribute.value_type,
+                    },
+                )
+
+        self.input_mapping_tree.expandAll()
+        self.input_mapping_tree.setVisible(True)
+        self.input_mapping_message.setVisible(False)
+
+    def _is_parameter_selected(self, node_id: str, attribute_key: str) -> bool:
+        for spec in self._metadata.get("parameters") or []:
+            if (
+                str(spec.get("node_id")) == str(node_id)
+                and str(spec.get("attribute")) == str(attribute_key)
+            ):
+                return True
+        return False
+
+
+    def _on_parameter_item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
+        """Emit a console message whenever a user toggles an exposable parameter."""
+        if item is None or item.parent() is None:
+            return
+
+        data = item.data(0, QtCore.Qt.ItemDataRole.UserRole) or {}
+        key = data.get("attribute_key")
+        node_id = data.get("node_id")
+        state = item.checkState(0) == QtCore.Qt.CheckState.Checked
+
+        message = f"[Charon] Parameter toggled: node={node_id} key={key} state={'ON' if state else 'OFF'}"
+        print(message, flush=True)
+        print(message)
+
+    def _collect_selected_parameters(self) -> List[Dict[str, Any]]:
+        """Return parameter specs for all checked entries."""
+        print(f"[Charon] get_metadata group visible BEFORE: {self.input_mapping_group.isVisible()}")
+        if not self.input_mapping_group.isVisible():
+            print("[Charon] group hidden while saving; proceeding anyway")
+
+        root = self.input_mapping_tree.invisibleRootItem()
+        selected: List[Dict[str, Any]] = []
+
+        for node_index in range(root.childCount()):
+            node_item = root.child(node_index)
+            for attr_index in range(node_item.childCount()):
+                attr_item = node_item.child(attr_index)
+                state = attr_item.checkState(0)
+                data = attr_item.data(0, QtCore.Qt.ItemDataRole.UserRole) or {}
+                print(f"[Charon] inspect node={data.get('node_id')} key={data.get('attribute_key')} state={state}")
+                if state != QtCore.Qt.CheckState.Checked:
+                    continue
+                spec = {
+                    "node_id": str(data.get("node_id") or ""),
+                    "node_name": data.get("node_name") or node_item.text(0),
+                    "attribute": str(data.get("attribute_key") or ""),
+                    "label": data.get("label") or attr_item.text(0),
+                    "type": data.get("value_type") or "string",
+                    "default": data.get("value"),
+                }
+                selected.append(spec)
+        print(f"Metadata dialog collected parameters: {selected}")
+        return selected
+
     def _add_dependency_row(self, dep: Dict[str, Any] = None):
         row = self.deps_table.rowCount()
         self.deps_table.insertRow(row)
@@ -560,11 +715,15 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
         tags_raw = self.tags_edit.text()
         tags = [tag.strip() for tag in tags_raw.split(",") if tag.strip()] if tags_raw else []
+        parameters = self._collect_selected_parameters()
+
+        self._metadata["parameters"] = parameters
 
         return {
             "description": self.description_edit.toPlainText().strip(),
             "dependencies": dependencies,
             "tags": tags,
+            "parameters": parameters,
         }
 
 
@@ -629,4 +788,9 @@ class HotkeyDialog(QtWidgets.QDialog):
         if key_str:
             self.hotkey = key_str
             self.accept()
+
+
+
+
+
 
