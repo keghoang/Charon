@@ -15,16 +15,7 @@ from .conversion_cache import (
 )
 from .paths import get_default_comfy_launch_path
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
-
-PREFS_DIR = os.path.join(
-    os.path.expanduser("~"),
-    "AppData",
-    "Local",
-    "Galt",
-    "plugins",
-    "charon",
-)
-PREFS_FILE = os.path.join(PREFS_DIR, "preferences.json")
+from . import preferences
 
 
 def _get_qt_application():
@@ -57,19 +48,17 @@ def _find_charon_window():
 
 
 def _read_comfy_preferences_path() -> Optional[str]:
-    if not os.path.exists(PREFS_FILE):
-        return None
-    try:
-        with open(PREFS_FILE, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict):
-            path = data.get("comfyui_launch_path")
-            if isinstance(path, str):
-                path = path.strip()
-                if path:
-                    return path
-    except Exception:
-        return None
+    prefs = preferences.load_preferences()
+    path = prefs.get("comfyui_launch_path")
+    if isinstance(path, str):
+        path = path.strip()
+        if path:
+            return path
+    elif isinstance(path, (list, tuple)):
+        # Defensive: handle legacy structures accidentally persisted
+        flattened = "".join(str(part) for part in path if part)
+        if flattened:
+            return flattened
     return None
 
 

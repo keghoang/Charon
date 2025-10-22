@@ -9,6 +9,7 @@ from ..qt_compat import QtWidgets, QtCore, Qt, QtGui
 from .. import config
 from ..galt_logger import system_debug, system_warning, system_error
 from .. import scene_nodes_runtime as runtime
+from .. import preferences
 
 
 class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
@@ -74,7 +75,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
         self._last_snapshot: Dict[str, Dict[str, object]] = {}
         self._node_cache: Dict[str, runtime.SceneNodeInfo] = {}
-        self._auto_import_enabled = True
+        self._auto_import_enabled = preferences.get_auto_import_default(parent=self)
         self._footer_text: Optional[str] = None
 
         self._build_ui()
@@ -108,7 +109,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         header_layout.addWidget(self.auto_refresh_button)
 
         self.auto_import_checkbox = QtWidgets.QCheckBox("Auto-import outputs")
-        self.auto_import_checkbox.setChecked(True)
+        self.auto_import_checkbox.setChecked(self._auto_import_enabled)
         self.auto_import_checkbox.toggled.connect(self._apply_auto_import)
         header_layout.addWidget(self.auto_import_checkbox)
 
@@ -301,6 +302,8 @@ class SceneNodesPanel(QtWidgets.QWidget):
     def _apply_auto_import(self, enabled: bool):
         for info in self._node_cache.values():
             runtime.set_auto_import(info.node, enabled, info.payload)
+        if self._auto_import_enabled != enabled:
+            preferences.set_auto_import_default(enabled, parent=self)
         self._auto_import_enabled = enabled
         self.refresh_nodes()
 

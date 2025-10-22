@@ -15,6 +15,7 @@ def create_charon_group_node(
     process_script,
     menu_script=None,
     workflow_path=None,
+    auto_import_default=True,
 ):
     inputs = list(inputs or [])
     node = nuke.createNode("Group", inpanel=False)
@@ -86,9 +87,13 @@ def create_charon_group_node(
         pass
     node.addKnob(progress_knob)
 
-    auto_import_knob = nuke.Boolean_Knob("charon_auto_import", "Auto Import Outputs", True)
+    auto_import_knob = nuke.Boolean_Knob(
+        "charon_auto_import",
+        "Auto Import Outputs",
+        bool(auto_import_default),
+    )
     auto_import_knob.setFlag(nuke.NO_ANIMATION)
-    auto_import_knob.setValue(1)
+    auto_import_knob.setValue(1 if auto_import_default else 0)
     try:
         auto_import_knob.setFlag(nuke.INVISIBLE)
     except Exception:

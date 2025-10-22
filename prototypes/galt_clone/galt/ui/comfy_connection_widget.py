@@ -1,5 +1,3 @@
-import json
-import json
 import os
 import time
 import subprocess
@@ -8,6 +6,7 @@ from typing import Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui
 from ..galt_logger import system_info, system_warning, system_error
+from .. import preferences
 
 try:
     from charon_core.comfy_client import ComfyUIClient  # type: ignore
@@ -19,11 +18,6 @@ try:
 except ImportError:  # pragma: no cover
     def extend_sys_path_with_comfy(_path: str) -> None:
         return
-
-
-PREFS_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Galt", "plugins", "charon")
-PREFS_FILE = os.path.join(PREFS_DIR, "preferences.json")
-
 
 class ComfyConnectionWidget(QtWidgets.QWidget):
     """Compact footer widget that monitors and configures ComfyUI connectivity."""
@@ -101,25 +95,14 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     # ----------------------------------------------------------------- State
     def _load_settings(self) -> dict:
-        if not os.path.exists(PREFS_FILE):
-            return {}
-
-        try:
-            with open(PREFS_FILE, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
-            return data if isinstance(data, dict) else {}
-        except Exception as exc:  # pragma: no cover - defensive path
-            system_warning(f"Could not load ComfyUI preferences: {exc}")
-            return {}
+        return preferences.load_preferences(parent=self)
 
     def _store_setting(self, key: str, value: str) -> None:
         try:
-            updated = dict(self._settings)
-            updated[key] = value or ""
-            os.makedirs(PREFS_DIR, exist_ok=True)
-            with open(PREFS_FILE, "w", encoding="utf-8") as handle:
-                json.dump(updated, handle, indent=2)
-            self._settings = updated
+            current = preferences.load_preferences(parent=self)
+            current[key] = value or ""
+            preferences.save_preferences(current, parent=self)
+            self._settings = current
         except Exception as exc:  # pragma: no cover - defensive path
             system_warning(f"Could not store ComfyUI setting '{key}': {exc}")
 
