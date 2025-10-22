@@ -41,7 +41,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "alice": [
         {
             "slug": "speed_grade",
-            "display_name": "Speed Grade Diffusion",
             "description": "Grades a plate using tone curves and writes a single preview frame.",
             "tags": ["comfy", "grading", "FLUX"],
             "deps": ["charon-core", "comfy-colors"],
@@ -49,7 +48,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "texture_magic",
-            "display_name": "Texture Magic Atlas",
             "description": "Builds a texture UDIM atlas and saves a high-res preview.",
             "tags": ["comfy", "textures", "Nano-Banana"],
             "deps": ["charon-core", "texture-baker"],
@@ -59,7 +57,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "bob": [
         {
             "slug": "deep_composite",
-            "display_name": "Deep Composite Merge",
             "description": "Merges deep EXR layers using front compositing.",
             "tags": ["comfy", "deep", "MergeMaster"],
             "deps": ["charon-core", "deep-toolkit"],
@@ -67,7 +64,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "roto_helper",
-            "display_name": "Roto Mask Helper",
             "description": "Smooths roto mattes and outputs sanitized masks for keyers.",
             "tags": ["comfy", "mask", "Nano-Banana"],
             "deps": ["charon-core"],
@@ -77,7 +73,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "carol": [
         {
             "slug": "lighting_suite",
-            "display_name": "Lighting Suite Batch",
             "description": "Applies a studio lighting preset to a USD layout and renders a preview.",
             "tags": ["comfy", "lighting", "FLUX"],
             "deps": ["charon-core", "usd-preset-pack"],
@@ -85,7 +80,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "fx_batch",
-            "display_name": "FX Batch Runner",
             "description": "Post-processes a VDB cache, renders a few frames, and stores the sequence.",
             "tags": ["comfy", "fx", "InfernoXL"],
             "deps": ["charon-core", "fx-library"],
@@ -95,7 +89,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "david": [
         {
             "slug": "denoise_batch",
-            "display_name": "Denoise Batch Frames",
             "description": "Runs SDXL denoising on an image sequence and saves previews.",
             "tags": ["comfy", "denoise", "SDXL"],
             "deps": ["charon-core", "denoise-suite"],
@@ -103,7 +96,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "depth_matting",
-            "display_name": "Depth Aware Matting",
             "description": "Generates depth-driven mattes for green screen plates.",
             "tags": ["comfy", "depth", "matte"],
             "deps": ["charon-core", "depth-labs"],
@@ -113,7 +105,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "ella": [
         {
             "slug": "style_transfer",
-            "display_name": "Stylized Transfer Pack",
             "description": "Applies curated style prompts to key art assets for look exploration.",
             "tags": ["comfy", "style", "FLUX"],
             "deps": ["stylebank"],
@@ -121,7 +112,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "prompt_variations",
-            "display_name": "Prompt Variation Sweep",
             "description": "Generates a grid of prompt variations for internal reviews.",
             "tags": ["comfy", "prompt", "Nano-Banana"],
             "deps": ["prompt-tools"],
@@ -131,7 +121,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "frank": [
         {
             "slug": "cleanup_suite",
-            "display_name": "Cleanup Suite",
             "description": "Performs plate cleanup with inpainting and grain restore.",
             "tags": ["comfy", "cleanup", "InfernoXL"],
             "deps": ["cleanup-tools"],
@@ -139,7 +128,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "stereo_align",
-            "display_name": "Stereo Alignment Helper",
             "description": "Aligns stereo pairs using disparity estimation.",
             "tags": ["comfy", "stereo", "depth"],
             "deps": ["stereo-kit"],
@@ -149,7 +137,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "gina": [
         {
             "slug": "hdr_merger",
-            "display_name": "HDR Merge Toolkit",
             "description": "Combines exposure brackets into a single HDR preview.",
             "tags": ["comfy", "hdr", "MergeMaster"],
             "deps": ["hdr-kit"],
@@ -157,7 +144,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "ai_keying",
-            "display_name": "AI Keying Batch",
             "description": "Runs AI keyer presets across multiple plates for QC.",
             "tags": ["comfy", "keying", "Nano-Banana"],
             "deps": ["ai-keyer"],
@@ -167,7 +153,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "harper": [
         {
             "slug": "lookdev_compare",
-            "display_name": "Lookdev Compare Board",
             "description": "Generates a contact sheet comparing multiple look presets.",
             "tags": ["comfy", "lookdev", "FLUX"],
             "deps": ["look-pack"],
@@ -175,7 +160,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "model_benchmarks",
-            "display_name": "Model Benchmark Runner",
             "description": "Benchmarks favorite diffusion models on a standard prompt list.",
             "tags": ["comfy", "benchmark", "InfernoXL"],
             "deps": ["benchmark-suite"],
@@ -185,7 +169,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "ivan": [
         {
             "slug": "animation_keyframes",
-            "display_name": "Animation Keyframe Expander",
             "description": "Interpolates keyframes into in-between frames using AI tweening.",
             "tags": ["comfy", "animation", "Nano-Banana"],
             "deps": ["tween-lab"],
@@ -193,7 +176,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "camera_match",
-            "display_name": "Camera Match Visualizer",
             "description": "Shows lineup of CG renders with the live-action plate for quick QC.",
             "tags": ["comfy", "camera", "FX"],
             "deps": ["camera-tools"],
@@ -203,7 +185,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
     "jamal": [
         {
             "slug": "weather_adjust",
-            "display_name": "Weather Adjustment Toolkit",
             "description": "Adds rain and fog overlays to plates for concept previews.",
             "tags": ["comfy", "fx", "FLUX"],
             "deps": ["weather-pack"],
@@ -211,7 +192,6 @@ USERS: Dict[str, List[Dict[str, str]]] = {
         },
         {
             "slug": "grain_profiles",
-            "display_name": "Film Grain Profiles",
             "description": "Applies film grain presets and exports side-by-side comparisons.",
             "tags": ["comfy", "grain", "InfernoXL"],
             "deps": ["grain-library"],
@@ -268,8 +248,9 @@ def write_workflow(user: str, entry: Dict[str, str]) -> None:
     workflow_payload = build_graph(entry["slug"], entry["tags"])
     (workflow_dir / "workflow.json").write_text(json.dumps(workflow_payload, indent=2), encoding="utf-8")
 
+    title = entry["slug"].replace("_", " ").title()
     readme = (
-        f"# {entry['display_name']}\n\n"
+        f"# {title}\n\n"
         f"{entry['description']}\n\n"
         f"**Tags:** {', '.join(entry['tags'])}\n"
         f"**Last Changed:** {entry['last_changed']}\n"

@@ -1,4 +1,4 @@
-# Prompt Variation Sweep
+# Prompt Variations
 
 Generates a grid of prompt variations for internal reviews.
 

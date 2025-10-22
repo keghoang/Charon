@@ -1,4 +1,4 @@
-import re, html, os
+import re, html, os, getpass
 try:
     from galt import config
 except ImportError:
@@ -696,8 +696,8 @@ def create_sort_key(item, host, base_path=None):
 
 def load_scripts_for_folder(folder_path, host="None"):
     """Load scripts from a folder and return ScriptItem objects."""
-    from galt.workflow_model import ScriptItem
-    from galt.metadata_manager import get_galt_config
+    from .workflow_model import ScriptItem
+    from .metadata_manager import get_galt_config
     
     items = []
     if os.path.exists(folder_path):
@@ -775,3 +775,14 @@ def get_metadata_with_fallbacks(script_path: str, current_host: str) -> dict:
     metadata.pop("intercept_prints", None)
     
     return metadata
+def get_current_user_slug() -> str:
+    """Return normalized username used for per-user workflow folders."""
+    raw = (
+        os.getenv("CHARON_USER")
+        or os.getenv("USERNAME")
+        or os.getenv("USER")
+        or getpass.getuser()
+        or "user"
+    )
+    slug = re.sub(r"[^\w.-]", "_", str(raw)).strip("_")
+    return slug.lower() or "user"

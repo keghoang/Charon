@@ -6,7 +6,8 @@ from .dialogs import CharonMetadataDialog
 from ..settings import user_settings_db
 from .custom_table_widgets import ScriptTableView
 from ..charon_metadata import write_charon_metadata
-from ..metadata_manager import load_workflow_data
+from ..workflow_runtime import load_workflow_bundle, spawn_charon_node
+from ..utilities import get_current_user_slug
 from .. import config
 import os
 import shutil
@@ -41,6 +42,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self._is_deselecting = False  # Track explicit deselection
         self._active_tags = []  # Track active tag filters
         self._all_scripts = []  # Store all scripts before filtering
+        self._user_slug = get_current_user_slug()
         self._last_workflow_data = None  # Cache last loaded workflow payload
         
         # Setup the UI
@@ -99,7 +101,7 @@ class ScriptPanel(QtWidgets.QWidget):
             }}
         """)
         self.new_script_button.clicked.connect(self._on_create_script_clicked)
-        self.new_script_button.setVisible(False)  # Hidden by default, show only for real folders
+        self.new_script_button.setVisible(True)
         title_layout.addWidget(self.new_script_button)
         
         title_layout.addStretch()  # Push indicator to the right
@@ -222,17 +224,25 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Store the parent folder for create script functionality
         self.parent_folder = folder_path
+
+        # Guard against browsing outside the Charon workflow repository
+        if folder_path:
+            try:
+                root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
+                target = os.path.abspath(folder_path)
+                if not target.lower().startswith(root.lower()):
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Unsupported Location",
+                        "Only folders inside the Charon workflow repository can be browsed."
+                    )
+                    self.parent_folder = root
+                    folder_path = root
+            except Exception:
+                pass
         
-        # Show/hide New Script button based on folder type
-        # Hide for special folders like Bookmarks or non-existent paths
-        # Check for both "Bookmarks" and "_bookmarks" to catch the special folder
-        if (folder_path and 
-            os.path.exists(folder_path) and 
-            "Bookmarks" not in folder_path and 
-            "_bookmarks" not in folder_path):
-            self.new_script_button.setVisible(True)
-        else:
-            self.new_script_button.setVisible(False)
+        # Always allow creating workflows; they are saved into the user's folder.
+        self.new_script_button.setVisible(True)
         
         # Clear delegate caches when loading new folder (to pick up icon/readme changes)
         self.script_view.clear_delegate_caches()
@@ -498,23 +508,44 @@ class ScriptPanel(QtWidgets.QWidget):
         return None
 
     def _handle_script_run_request(self, script_path: str):
-        """Load workflow data before emitting the run signal."""
+        """Load workflow data and spawn a CharonOp node in Nuke."""
         if not script_path:
             return
 
         try:
-            self._last_workflow_data = load_workflow_data(script_path)
+            self._last_workflow_data = load_workflow_bundle(script_path)
         except FileNotFoundError as exc:
             QtWidgets.QMessageBox.critical(self, "Workflow Missing", str(exc))
             return
         except ValueError as exc:
             QtWidgets.QMessageBox.critical(self, "Workflow Invalid", str(exc))
             return
-        except Exception as exc:  # Catch-all to avoid silent failures
+        except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Workflow Error", str(exc))
             return
 
-        self.script_run.emit(script_path)
+        try:
+            import nuke  # type: ignore
+        except ImportError:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Nuke Required",
+                "Spawning a CharonOp requires Nuke to be running."
+            )
+            return
+
+        try:
+            spawn_charon_node(self._last_workflow_data, nuke_module=nuke)
+        except RuntimeError as exc:
+            QtWidgets.QMessageBox.warning(self, "Spawn Failed", str(exc))
+            return
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "CharonOp Error", str(exc))
+            return
+
+        if hasattr(self, 'flash_script_execution'):
+            self.flash_script_execution(script_path)
+
 
     def on_script_run(self, index):
         if not index.isValid():
@@ -644,25 +675,32 @@ class ScriptPanel(QtWidgets.QWidget):
         """Handle create new workflow button click."""
         from pathlib import Path
 
-        if not self.parent_folder:
-            QtWidgets.QMessageBox.warning(
+        main_window = self.window() if hasattr(self, "window") else None
+        base_path = getattr(main_window, "current_base", None) if main_window else None
+        if not base_path:
+            base_path = config.WORKFLOW_REPOSITORY_ROOT
+
+        if not base_path or not os.path.isdir(base_path):
+            QtWidgets.QMessageBox.critical(
                 self,
-                "No Folder Selected",
-                "Please select a folder first to create a new workflow."
+                "Workflow Repository Unavailable",
+                f"The workflow repository is not accessible:\n{base_path}"
             )
             return
 
-        if ("Bookmarks" in self.parent_folder or
-            "_bookmarks" in self.parent_folder or
-            not os.path.exists(self.parent_folder)):
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Cannot Create Workflow",
-                "Cannot create new workflows in this location. Please select a regular folder."
-            )
-            return
+        user_folder = os.path.join(base_path, self._user_slug)
+        if not os.path.isdir(user_folder):
+            try:
+                os.makedirs(user_folder, exist_ok=True)
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Create Failed",
+                    f"Could not prepare your workflow folder:\n{exc}"
+                )
+                return
 
-        start_dir = self.parent_folder if os.path.exists(self.parent_folder) else os.getcwd()
+        start_dir = user_folder
         workflow_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Select Workflow JSON",
@@ -691,7 +729,7 @@ class ScriptPanel(QtWidgets.QWidget):
         safe_name = re.sub(r'[\\\\/:*?"<>|]', "_", workflow_name)
         if not safe_name:
             safe_name = "workflow"
-        target_folder = os.path.join(self.parent_folder, safe_name)
+        target_folder = os.path.join(user_folder, safe_name)
         if os.path.exists(target_folder):
             QtWidgets.QMessageBox.warning(
                 self,
@@ -757,14 +795,22 @@ class ScriptPanel(QtWidgets.QWidget):
         if description and not os.path.exists(readme_path):
             try:
                 with open(readme_path, "w", encoding="utf-8") as handle:
-                    handle.write(f"# {updated_meta.get('display_name', workflow_name)}\n\n{description}\n")
+                    handle.write(f"# {workflow_name}\n\n{description}\n")
             except Exception:
                 pass  # Non-fatal
 
         if hasattr(self.metadata_panel, 'script_created'):
             self.metadata_panel.script_created.emit(target_folder)
 
-        self.load_scripts_for_folder(self.parent_folder)
+        if main_window and hasattr(main_window, "refresh_folder_panel"):
+            main_window.refresh_folder_panel()
+            QtCore.QTimer.singleShot(
+                0, lambda: main_window.folder_panel.select_folder(self._user_slug)
+            )
+        elif main_window and hasattr(main_window, "folder_panel"):
+            main_window.folder_panel.select_folder(self._user_slug)
+
+        self.load_scripts_for_folder(user_folder)
     
     def _on_open_current_folder(self):
         """Handle open folder request from context menu."""

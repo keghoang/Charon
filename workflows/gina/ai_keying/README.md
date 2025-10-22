@@ -1,4 +1,4 @@
-# AI Keying Batch
+# Ai Keying
 
 Runs AI keyer presets across multiple plates for QC.
 

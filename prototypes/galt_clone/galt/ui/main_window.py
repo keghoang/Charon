@@ -33,7 +33,8 @@ except ImportError:
 from ..metadata_manager import clear_metadata_cache, get_galt_config, get_folder_tags
 from ..workflow_model import GlobalIndexLoader
 from ..settings import user_settings_db
-from ..utilities import is_compatible_with_host
+from ..utilities import is_compatible_with_host, get_current_user_slug
+from ..cache_manager import get_cache_manager
 from ..execution.result import ExecutionStatus
 from ..galt_logger import system_info, system_debug, system_warning, system_error
 from ..icon_manager import get_icon_manager
@@ -56,8 +57,10 @@ class GaltWindow(QtWidgets.QWidget):
 
         self._startup_mode_pending = (startup_mode or "normal").lower()
 
-        # Use global_path directly, do not fallback to config.GLOBAL_REPO_PATH
-        self.global_path = global_path
+        resolved_global_path = global_path or config.WORKFLOW_REPOSITORY_ROOT
+        self.global_path = resolved_global_path
+        if not os.path.isdir(self.global_path):
+            system_warning(f"Workflow repository is not accessible: {self.global_path}")
         # We don't use local_path at all anymore, but keep parameter for backwards compatibility
         self.local_path = None
 
@@ -864,7 +867,11 @@ class GaltWindow(QtWidgets.QWidget):
         
         # Clear script panel
         self.script_panel.clear_scripts()
-        
+
+        # Invalidate cached folder listing so new directories appear immediately
+        cache_manager = get_cache_manager()
+        cache_manager.invalidate_cached_data(f"folders:{self.current_base}")
+
         # Start async folder loading
         self.folder_list_loader.load_folders(
             self.current_base,
@@ -874,9 +881,20 @@ class GaltWindow(QtWidgets.QWidget):
     
     def _on_folders_loaded(self, folders):
         """Handle loaded folders from async loader."""
-        # Add bookmarks folder if user has bookmarks
+        user_slug = get_current_user_slug()
+
+        # Ensure the user's folder exists if the repository is reachable
+        if user_slug and self.current_base and os.path.isdir(self.current_base):
+            user_dir = os.path.join(self.current_base, user_slug)
+            if not os.path.isdir(user_dir):
+                try:
+                    os.makedirs(user_dir, exist_ok=True)
+                    system_info(f"Created workflow folder for user: {user_dir}")
+                except Exception as exc:
+                    system_error(f"Could not create user workflow folder {user_dir}: {exc}")
+
         display_folders = []
-        
+
         try:
             from ..settings import user_settings_db
             bookmarks = user_settings_db.get_bookmarks()
@@ -884,20 +902,31 @@ class GaltWindow(QtWidgets.QWidget):
                 display_folders.append("Bookmarks")
         except Exception as e:
             system_error(f"Error checking bookmarks: {str(e)}")
-            
-        # Add loaded folders
-        display_folders.extend(folders)
-        
+
+        normal_folders = {
+            name for name in folders if name and (not user_slug or name.lower() != user_slug)
+        }
+        if user_slug:
+            normal_folders.add(user_slug)
+
+        display_folders.extend(sorted(normal_folders, key=str.lower))
+
         # Update folder panel
         self.folder_panel.update_folders(display_folders)
-        
+
+        # Prefer selecting the user's folder if nothing is selected yet
+        if not self.folder_panel.get_selected_folder() and user_slug:
+            if any(name.lower() == user_slug for name in display_folders):
+                self.folder_panel.select_folder(user_slug)
+                return
+
         # Check if we need to auto-select bookmarks on startup
         if hasattr(self, '_auto_select_bookmarks_pending') and self._auto_select_bookmarks_pending:
             self._auto_select_bookmarks_pending = False  # Clear the flag
             if not self.folder_panel.get_selected_folder():  # Only if nothing is selected yet
                 # Now that folders are loaded, we can safely select Bookmarks
                 self.folder_panel.select_folder("Bookmarks")
-    
+
     def _on_compatibility_loaded(self, compatibility_map):
         """Handle compatibility data loaded in background."""
         # This arrives after folders are displayed, update visual state
@@ -983,34 +1012,21 @@ class GaltWindow(QtWidgets.QWidget):
             self.execute_script(selected_script.path)
 
     def execute_script(self, script_path):
-        """Single entry point for all script execution."""
+        """Spawn or focus a CharonOp node for the given workflow."""
         if not script_path:
             return
-        
-        # Flash the appropriate panel based on current mode
-        if self.keybind_manager.tiny_mode_active:
-            # In tiny mode, flash bookmarks panel if the script is there
-            if hasattr(self, 'tiny_mode_widget') and self.tiny_mode_widget.bookmarks_panel:
-                self.tiny_mode_widget.bookmarks_panel.flash_bookmark_execution(script_path)
+
+        if hasattr(self.script_panel, 'flash_script_execution'):
+            self.script_panel.flash_script_execution(script_path)
+
+        if hasattr(self, 'script_panel') and self.script_panel:
+            self.script_panel._handle_script_run_request(script_path)
         else:
-            # In normal mode, flash the script panel
-            if hasattr(self.script_panel, 'flash_script_execution'):
-                self.script_panel.flash_script_execution(script_path)
-        
-        # Use centralized validation
-        from ..metadata_manager import get_galt_config
-        from ..script_validator import ScriptValidator
-        
-        metadata = get_galt_config(script_path)
-        can_run, reason = ScriptValidator.can_execute(script_path, metadata, self.host)
-        
-        if not can_run:
-            from ..galt_logger import system_debug
-            system_debug(f"Script cannot run: {reason}")
-            return
-        
-        # Use the script engine to execute the script (async)
-        self.script_engine.execute_script(script_path)
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Unavailable",
+                "Script panel is not ready; cannot spawn a CharonOp node."
+            )
 
     def on_metadata_changed(self):
         """
@@ -1713,7 +1729,7 @@ class GaltWindow(QtWidgets.QWidget):
         """Load bookmarked scripts using the BookmarkLoader"""
         # Create bookmark loader if it doesn't exist
         if not hasattr(self, 'bookmark_loader'):
-            from galt.workflow_model import BookmarkLoader
+            from ..workflow_model import BookmarkLoader
             self.bookmark_loader = BookmarkLoader(self)
             self.bookmark_loader.scripts_loaded.connect(
                 self.on_bookmarked_scripts_loaded,
@@ -1724,7 +1740,8 @@ class GaltWindow(QtWidgets.QWidget):
         # The bookmark loader will get fresh metadata as needed
         
         # Load bookmarked scripts, filtered by current base path
-        self.bookmark_loader.load_bookmarks(self.host, base_path=self.current_base)
+        base_path = self.current_base or config.WORKFLOW_REPOSITORY_ROOT
+        self.bookmark_loader.load_bookmarks(self.host, base_path=base_path)
     
     def on_bookmarked_scripts_loaded(self, scripts):
         """Handle when bookmarked scripts are loaded"""
@@ -2431,4 +2448,3 @@ Cache Stats:
         """Run a script by its full path without UI interaction."""
         # Delegate to the main execute_script method which handles validation and flash
         self.execute_script(script_path)
-

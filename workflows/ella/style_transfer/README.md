@@ -1,4 +1,4 @@
-# Stylized Transfer Pack
+# Style Transfer
 
 Applies curated style prompts to key art assets for look exploration.
 

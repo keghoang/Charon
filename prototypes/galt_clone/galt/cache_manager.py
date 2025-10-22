@@ -410,6 +410,12 @@ class PersistentCacheManager:
             self.general_cache[key] = CacheEntry(data)
             # Rough memory estimate
             self.estimated_memory_usage += len(str(data))
+
+    def invalidate_cached_data(self, key: str):
+        """Remove a general cache entry if present."""
+        with self.cache_lock:
+            if key in self.general_cache:
+                del self.general_cache[key]
             
     def get_cached_data(self, key: str, max_age_seconds: int = None) -> Optional[Any]:
         """

@@ -1,4 +1,4 @@
-# Depth Aware Matting
+# Depth Matting
 
 Generates depth-driven mattes for green screen plates.
 

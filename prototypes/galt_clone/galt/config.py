@@ -49,18 +49,14 @@ else:  # Linux
 # Repository search paths - used when no repository is specified at runtime
 # First existing path will be used
 # Priority order: Runtime argument → GALT_REPO env var → These paths
+WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows"
 REPOSITORY_SEARCH_PATHS = [
-    r"\\buck\globalprefs\SHARED\CODE\galt_repo",  # Buck environment repository
-    os.path.expanduser("~/Desktop/local_pipeline/galt_repo"),  # Local development repository
+    WORKFLOW_REPOSITORY_ROOT,
 ]
 
 # Legacy fallback - kept for backward compatibility
 # Deprecated: Use REPOSITORY_SEARCH_PATHS instead
-GLOBAL_REPO_PATH = os.path.join(
-    os.path.normpath(os.getenv("BUCK_SHARED_ROOT") or os.path.expanduser("~")),
-    "CODE",
-    "galt_repo"
-)
+GLOBAL_REPO_PATH = WORKFLOW_REPOSITORY_ROOT
 
 
 # =============================================================================

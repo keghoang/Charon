@@ -174,7 +174,7 @@ def update_galt_config(script_path, new_config):
         if key in new_config and new_config[key] is not None:
             payload[key] = new_config[key]
 
-    for key in ("workflow_file", "description", "entry", "last_changed", "run_on_main", "mirror_prints"):
+    for key in ("workflow_file", "description", "last_changed"):
         _apply(key)
 
     if "dependencies" in new_config and new_config["dependencies"] is not None:

@@ -1,4 +1,4 @@
-# Denoise Batch Frames
+# Denoise Batch
 
 Runs SDXL denoising on an image sequence and saves previews.
 

@@ -1,4 +1,4 @@
-# Deep Composite Merge
+# Deep Composite
 
 Merges deep EXR layers using front compositing.
 

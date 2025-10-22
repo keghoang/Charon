@@ -75,37 +75,55 @@ Prototype-specific architecture notes:
 - The workflow list only supports Nuke/PySide6. Host-awareness logic in `qt_compat.py` still exists but the prototype assumes Nuke. We now treat every workflow as compatible, so software-specific filtering and iconography have been removed.
 - Tag editing runs through the Charon metadata path; the tag manager ensures a `.charon.json` file exists before it attempts to mutate tags.
 
-## Charon/Prototype Integration Plan
-We are beginning to merge the Galt prototype into the main Charon experience, starting with “Create CharonOp from selected workflow.” Because this touches both UI and conversion logic, the work is staged carefully:
+## Charon/Prototype Integration Plan (2025-10-21)
+We are folding the prototype into the production Charon flow in measured stages. The checklist below is ordered, annotated with current status, and scoped so any engineer can pick up the next item without extra context. All workflows now live in \buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows; never create or mutate folders above that root.
 
-1. **Confirm Metadata Parity**  
-   - Audit the `.charon.json` schema produced by the prototype and ensure it satisfies `charon_core`’s loader requirements (`workflow_file`, dependencies, tags, etc.).  
-   - Document any missing fields (or defaults) so we know what the integration layer must fill.
+1. **Metadata Alignment — ✅ Complete**  
+   - `.charon.json` schema is authoritative: `workflow_file`, `description`, `dependencies` (list of `{name, repo, ref}`), `last_changed`, `tags`.  
+   - Prototype writers were trimmed to that schema (`charon_metadata.py`, dialogs, seeding script) and sample workflows were regenerated.  
+   - `run_on_main` is exposed to the UI only; legacy `display_name`/`entry` flags were removed.
 
-2. **Define the UI Trigger**  
-   - Decide where the user initiates the action (context menu, toolbar button, or dedicated panel control).  
-   - Mock the interaction by emitting a signal that contains the workflow path and current metadata; do not call into the backend yet.
+2. **Repository Hardening — ✅ Complete**  
+   - Prototype derives its base path from `config.WORKFLOW_REPOSITORY_ROOT` (shared UNC).  
+   - Folder loader invalidates caches before rescan, injects the current user’s slugged folder, and refuses to browse outside the Charon tree.  
+   - Workflow creation always writes into `\...\<user>` and forces a folder refresh so the new directory appears immediately.
 
-3. **Introduce an Integration Bridge**  
-   - Add a new helper module (e.g., `prototypes/galt_clone/galt/charon_bridge.py`) that prepares workflow metadata and delegates to the existing conversion pipeline.  
-   - Keep this module headless—no UI logic—so it can be unit-tested or reused by other entry points.
+3. **Runtime Helper Module — ✅ Complete**  
+   - Add `prototypes/galt_clone/galt/workflow_runtime.py` with:
+     - `discover_workflows(base_path)` → summaries for the list view.  
+     - `load_workflow(folder_path)` → metadata dict + parsed `workflow.json`.  
+     - `convert_workflow(payload, comfy_path)` → thin wrapper around the external conversion logic.  
+   - Reuse `metadata_manager.load_workflow_data` and `workflow_pipeline.convert_workflow`.  
+   - Log via `galt_logger`; raise structured errors for missing repo/metadata/comfy path.
 
-4. **Reuse Existing Conversion Pipeline**  
-   - Inside the bridge, call `charon_core.workflow_loader.load_workflow()` and `charon_core.workflow_pipeline.convert_workflow()`.  
-   - Validate the call stack with a known workflow before wiring it to the UI. Log the conversion path, Comfy entry point, and resulting output.
+4. **UI Wiring to Runtime Helpers — ✅ Complete**  
+   - Replace `_last_workflow_data` in `script_panel.py` with `workflow_runtime.load_workflow`.  
+   - Ensure Grab/double-click stores the raw payload + metadata bundle without converting.  
+   - Centralize Comfy path/config and pass it into the runtime helper.
 
-5. **UI ↔ Bridge Wiring**  
-   - Once the bridge is reliable, connect the UI signal to a slot that invokes the bridge and handles progress, success, and error states.  
-   - Use non-blocking calls (QFuture or a background thread) so the prototype remains responsive while conversion runs.  
-   - Surface the generated CharonOp location, and optionally open it in Nuke if `main.py` can ingest it immediately.
+5. **CharonOp Node Creation — ✅ Complete**  
+   - Port the relevant logic from `charon_core/node_factory.py` into a helper (e.g., `workflow_runtime.spawn_charon_node`).  
+   - Populate all expected knobs (`workflow_data`, `workflow_path`, `charon_status`, etc.) and serialize the raw JSON to the node.  
+   - When Nuke is available, spawn the node immediately; otherwise emit a payload for manual import.
 
-6. **Output Management**  
-   - Ensure the generated `.nk` (or node graph) lands in the same directories the production panel expects (`paths.py`).  
-   - Consider adding a dedicated “exports” subfolder for prototype-driven conversions to keep work-in-progress separate from production submissions.
+6. **Processor Flow Port — ⏳ Not Started**  
+   - Copy the minimal path from `charon_core/processor_script.py` to the prototype.  
+   - On “Process,” convert only if the stored workflow is not already API format (using `workflow_runtime.convert_workflow`).  
+   - Integrate status updates, asset uploads, and skip reconversion when the cached prompt is valid.
 
-7. **Instrumentation & Testing**  
-   - Add log statements around metadata preparation, conversion start/finish, and file writes.  
-   - Manually test at least one workflow end-to-end: select in prototype, run conversion, open resulting CharonOp, and confirm `charon_status` transitions correctly once the production pipeline sees the op.  
-   - Capture failure cases (missing workflow file, conversion errors, file write issues) and surface them via the UI.
+7. **Shared Output Management — ⏳ Not Started**  
+   - Decide on output directory conventions (reuse `charon_core.paths` helpers) and expose utilities to write `.nk` files / prompt dumps.  
+   - Log the destination path for each generated artifact.
 
-This staged plan lets us merge functionality incrementally: metadata parity first, then a dedicated bridge, and finally UI wiring. During each stage we can ship smaller commits without destabilizing the current panel. Document progress and any new commands here as integration expands.
+8. **Instrumentation & Manual QA — ⏳ Not Started**  
+   - Add log statements (`metadata_read`, `conversion_start`, `conversion_success`, `output_written`).  
+   - Run an end-to-end test before enabling the UI action: select workflow → Grab → Process → verify node execution and status transitions.  
+   - Capture failure scenarios (missing repo, invalid JSON, conversion errors) and surface clear error dialogs.
+
+**Guardrails & Notes**  
+- Never touch directories above \buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows.  
+- New modules under `prototypes/galt_clone/galt/` must use relative imports (`from ..foo import bar`).  
+- When introducing configuration, prefer `config.py`; avoid scattering constants.  
+- Record manual verification steps (launcher run, empty-repo test, Grab/Process) in commit messages.
+
+Update this section as milestones land: mark steps complete, note key files, and list the manual test performed.

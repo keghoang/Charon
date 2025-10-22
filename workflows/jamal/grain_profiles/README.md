@@ -1,4 +1,4 @@
-# Film Grain Profiles
+# Grain Profiles
 
 Applies film grain presets and exports side-by-side comparisons.
 
