@@ -57,7 +57,6 @@ class GaltWindow(QtWidgets.QWidget):
         self.icon_manager = get_icon_manager()
 
         self._startup_mode_pending = (startup_mode or "normal").lower()
-        self._folder_panel_width: Optional[int] = None
         self._banner_base_pixmap: Optional[QtGui.QPixmap] = None
         self._banner_target_height: int = 0
 
@@ -486,26 +485,10 @@ class GaltWindow(QtWidgets.QWidget):
         # Main horizontal splitter: folder panel, center panel, and history panel
         self.main_splitter = QtWidgets.QSplitter(Qt.Horizontal)
         self.main_splitter.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.main_splitter.setHandleWidth(8)  # Default is usually 3-4px
-
-        # Folder panel (left)
-        self.folder_panel = FolderPanel()
-        self.folder_panel.set_host(self.host)
-        self.folder_panel.set_base_path(self.global_path)
-        self.folder_panel.folder_selected.connect(self.on_folder_selected)
-        self.folder_panel.folder_deselected.connect(self.on_folder_deselected)
-        self.folder_panel.open_folder_requested.connect(self.open_folder_from_context)
-        self.folder_panel.create_script_requested.connect(self.on_create_script_in_folder)
-        self.folder_panel.collapse_requested.connect(self._collapse_folders_panel)
-        if hasattr(self.folder_panel, 'navigate_right'):
-            self.folder_panel.navigate_right.connect(self._focus_first_script_via_keyboard)
-        self.folder_panel.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
-        self.folder_panel.setMinimumWidth(0)
-        self.main_splitter.addWidget(self.folder_panel)
-
-        # Center panel with tab widget
+        
+        # Center panel - horizontal layout for tag bar and script panel
         center_widget = QtWidgets.QWidget()
-        center_widget.setMinimumWidth(0)
+        center_widget.setMinimumWidth(0)  # Remove any minimum width
         center_layout = QtWidgets.QVBoxLayout(center_widget)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(2)
@@ -517,72 +500,102 @@ class GaltWindow(QtWidgets.QWidget):
         workflows_container = QtWidgets.QWidget()
         workflows_layout = QtWidgets.QHBoxLayout(workflows_container)
         workflows_layout.setContentsMargins(0, 0, 0, 0)
-        workflows_layout.setSpacing(2)
+        workflows_layout.setSpacing(0)
 
+        self.workflows_splitter = QtWidgets.QSplitter(Qt.Horizontal, workflows_container)
+        self.workflows_splitter.setChildrenCollapsible(False)
+        self.workflows_splitter.setHandleWidth(6)
+        workflows_layout.addWidget(self.workflows_splitter)
+
+        # Folder panel
+        self.folder_panel = FolderPanel()
+        self.folder_panel.set_host(self.host)
+        self.folder_panel.set_base_path(self.global_path)
+        self.folder_panel.folder_selected.connect(self.on_folder_selected)
+        self.folder_panel.folder_deselected.connect(self.on_folder_deselected)
+        self.folder_panel.open_folder_requested.connect(self.open_folder_from_context)
+        self.folder_panel.create_script_requested.connect(self.on_create_script_in_folder)
+        self.folder_panel.collapse_requested.connect(self._collapse_folders_panel)
+        if hasattr(self.folder_panel, 'navigate_right'):
+            self.folder_panel.navigate_right.connect(self._focus_first_script_via_keyboard)
+        self.folder_panel.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        self.workflows_splitter.addWidget(self.folder_panel)
+
+        workflow_area = QtWidgets.QWidget()
+        workflow_area_layout = QtWidgets.QHBoxLayout(workflow_area)
+        workflow_area_layout.setContentsMargins(0, 0, 0, 0)
+        workflow_area_layout.setSpacing(2)
+        self.workflows_splitter.addWidget(workflow_area)
+
+        # Create tag bar
         self.tag_bar = TagBar()
         self.tag_bar.tags_changed.connect(self.on_tags_changed)
-        workflows_layout.addWidget(self.tag_bar)
+        workflow_area_layout.addWidget(self.tag_bar)
 
+        # Script panel
         self.script_panel = ScriptPanel()
         self.script_panel.set_host(self.host)
         self.script_panel.script_selected.connect(self.on_script_selected)
         self.script_panel.script_deselected.connect(self.on_script_deselected)
         self.script_panel.bookmark_requested.connect(self.on_bookmark_requested)
         self.script_panel.assign_hotkey_requested.connect(self.on_assign_hotkey_requested)
-
+        
         # Get reference to the metadata panel now that it's inside script panel
         self.metadata_panel = self.script_panel.metadata_panel
-
+        
         # Connect granular signals for efficient updates
         self.metadata_panel.entry_changed.connect(self._on_entry_changed)
         self.metadata_panel.tags_updated.connect(self._on_tags_updated)
-
+        
         # Keep general signal for backward compatibility and complex changes
         self.metadata_panel.metadata_changed.connect(self.on_metadata_changed)
+        # Note: We don't connect to refresh_current_folder because on_metadata_changed
+        # already calls _perform_soft_refresh which properly preserves selection
         self.metadata_panel.script_created.connect(self._navigate_to_script)
         self.script_panel.create_metadata_requested.connect(self.on_create_metadata_requested)
         self.script_panel.edit_metadata_requested.connect(self.on_edit_metadata_requested)
         self.script_panel.manage_tags_requested.connect(self.on_manage_tags_requested)
         self.script_panel.script_view.openReadmeRequested.connect(self.on_open_readme_requested)
         self.script_panel.script_view.openFolderRequested.connect(self.open_folder)
-        self.script_panel.script_run.connect(self.execute_script)
-
+        self.script_panel.script_run.connect(self.execute_script) # Connect the run signal
+        
         # Connect panel open requests
         self.script_panel.open_folders_panel_requested.connect(self._open_folders_panel)
         self.script_panel.open_history_panel_requested.connect(self._open_history_panel)
-
+        
+        # IMPORTANT: Connect to folder loader to update tags when scripts are loaded
+        # This connection must be made AFTER script_panel is fully initialized
+        # and must use Qt.UniqueConnection to avoid duplicate connections
         self.script_panel.folder_loader.scripts_loaded.connect(
             self._on_folder_scripts_loaded,
-            UniqueConnection,
+            UniqueConnection
         )
+        # Keyboard navigation from script list back to folder list
         if hasattr(self.script_panel, 'navigate_left'):
             self.script_panel.navigate_left.connect(self._focus_folder_via_keyboard)
+        # Set script panel to expand
         self.script_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        workflows_layout.addWidget(self.script_panel, 1)
+        workflow_area_layout.addWidget(self.script_panel, 1)  # Add stretch factor
 
         self.center_tab_widget.addTab(workflows_container, "Workflows")
+
         self.charon_board_panel = CharonBoardPanel()
         self.center_tab_widget.addTab(self.charon_board_panel, "CharonBoard")
-        self.center_tab_widget.currentChanged.connect(self._on_center_tab_changed)
 
+        # Set center widget to expand vertically
         center_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.main_splitter.addWidget(center_widget)
-
+        
         # Execution history panel (right)
         self.execution_history_panel = ExecutionHistoryPanel()
+        # Set history panel to expand vertically
         self.execution_history_panel.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
         self.execution_history_panel.collapse_requested.connect(self._collapse_history_panel)
-        self.execution_history_panel.setMinimumWidth(0)
         self.main_splitter.addWidget(self.execution_history_panel)
 
         # Enable horizontal collapsible panels
-        self.main_splitter.setCollapsible(0, True)   # Folder panel
-        self.main_splitter.setCollapsible(1, False)  # Center panel
-        self.main_splitter.setCollapsible(2, True)   # History panel
-
-        self.main_splitter.setStretchFactor(0, 0)
-        self.main_splitter.setStretchFactor(1, 1)
-        self.main_splitter.setStretchFactor(2, 0)
+        self.main_splitter.setCollapsible(0, False)  # Center panel - always visible
+        self.main_splitter.setCollapsible(1, True)   # History panel (right) - collapsible
         
         # Remove minimum sizes to allow full flexibility
         self.folder_panel.setMinimumWidth(0)
@@ -607,19 +620,25 @@ class GaltWindow(QtWidgets.QWidget):
             }}
         """)
         
-        # Set initial splitter sizes (history collapsed by default)
+        # Set the width ratio for center/history (history collapsed by default)
         total_width = config.WINDOW_WIDTH - 50  # Subtract some padding
-        folder_width = int(total_width * config.UI_FOLDER_PANEL_RATIO)
-        center_width = max(total_width - folder_width, 400)
-        history_width = 0
-        self._folder_panel_width = folder_width
-        self.main_splitter.setSizes([folder_width, center_width, history_width])
+        center_width = int(total_width * (config.UI_FOLDER_PANEL_RATIO + config.UI_CENTER_PANEL_RATIO))
+        history_width = 0  # Start with history panel collapsed
+        self.main_splitter.setSizes([center_width, history_width])
 
+        # Configure splitter inside Workflows tab (folders + workflows)
+        workflow_total = max(center_width, 600)
+        folder_width = int(workflow_total * config.UI_FOLDER_PANEL_RATIO)
+        workflow_content_width = max(workflow_total - folder_width, 400)
+        self.workflows_splitter.setSizes([folder_width, workflow_content_width])
+        
         # Connect to splitter movement to detect when panels are collapsed
         self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
+        self.workflows_splitter.splitterMoved.connect(self._on_workflows_splitter_moved)
         
         # Check initial state
         QtCore.QTimer.singleShot(0, lambda: self._on_main_splitter_moved(0, 0))
+        QtCore.QTimer.singleShot(0, lambda: self._on_workflows_splitter_moved(0, 0))
 
         # Add the splitter to fill most of the space
         content_layout.addWidget(self.main_splitter, 1)  # Add with stretch factor = 1
@@ -2271,110 +2290,56 @@ Cache Stats:
         QtCore.QTimer.singleShot(100, self._show_error_dialog)
     
     def _on_main_splitter_moved(self, pos, index):
-        """Handle splitter movement to detect when panels are collapsed."""
+        """Handle splitter movement for main splitter (center/history)."""
         sizes = self.main_splitter.sizes()
-        folder_collapsed = len(sizes) >= 1 and sizes[0] == 0
-        history_panel_collapsed = len(sizes) >= 3 and sizes[2] == 0
-        if len(sizes) >= 1 and sizes[0] > 0:
-            self._folder_panel_width = sizes[0]
-        self.script_panel.set_folders_collapsed_indicator(folder_collapsed)
+        history_panel_collapsed = len(sizes) > 1 and sizes[1] == 0
         self.script_panel.set_history_collapsed_indicator(history_panel_collapsed)
+
+    def _on_workflows_splitter_moved(self, pos, index):
+        """Handle splitter movement for folders/workflows splitter."""
+        sizes = self.workflows_splitter.sizes()
+        folders_panel_collapsed = bool(sizes) and sizes[0] == 0
+        self.script_panel.set_folders_collapsed_indicator(folders_panel_collapsed)
 
     def _open_folders_panel(self):
         """Open the folders panel if it's collapsed."""
-        sizes = self.main_splitter.sizes()
-        if len(sizes) < 3 or sizes[0] > 0:
-            return
-
-        total_width = sum(sizes) if sum(sizes) > 0 else self.main_splitter.width()
-        if total_width <= 0:
-            total_width = config.WINDOW_WIDTH
-        history_width = sizes[2]
-        folder_width = self._folder_panel_width or int(total_width * config.UI_FOLDER_PANEL_RATIO)
-        folder_width = max(folder_width, 160)
-        center_width = max(total_width - history_width - folder_width, 200)
-
-        self.main_splitter.blockSignals(True)
-        self.main_splitter.setSizes([folder_width, center_width, history_width])
-        self.main_splitter.blockSignals(False)
-        self._on_main_splitter_moved(0, 0)
+        sizes = self.workflows_splitter.sizes()
+        if sizes and sizes[0] == 0:  # Folders panel is collapsed
+            total_width = sum(sizes) if sum(sizes) > 0 else self.workflows_splitter.width()
+            if total_width <= 0:
+                total_width = 600
+            folder_width = int(total_width * config.UI_FOLDER_PANEL_RATIO)
+            workflow_width = max(total_width - folder_width, 200)
+            self.workflows_splitter.setSizes([folder_width, workflow_width])
+            self._on_workflows_splitter_moved(0, 0)
             
     def _collapse_folders_panel(self):
         """Collapse the folders panel."""
-        sizes = self.main_splitter.sizes()
-        if len(sizes) < 3 or sizes[0] == 0:
-            return
-
-        self._folder_panel_width = sizes[0]
-        history_width = sizes[2]
-        center_width = sizes[0] + sizes[1]
-
-        self.main_splitter.blockSignals(True)
-        self.main_splitter.setSizes([0, center_width, history_width])
-        self.main_splitter.blockSignals(False)
-        self._on_main_splitter_moved(0, 0)
+        sizes = self.workflows_splitter.sizes()
+        if sizes and sizes[0] > 0:  # Folders panel is open
+            workflow_width = sum(sizes) - sizes[0]
+            self.workflows_splitter.setSizes([0, max(workflow_width, 200)])
+            self._on_workflows_splitter_moved(0, 0)
     
     def _open_history_panel(self):
         """Open the history panel if it's collapsed."""
         sizes = self.main_splitter.sizes()
-        if len(sizes) < 3 or sizes[2] > 0:
-            return
-
-        total_width = sum(sizes) if sum(sizes) > 0 else self.main_splitter.width()
-        if total_width <= 0:
-            total_width = config.WINDOW_WIDTH
-        folder_width = sizes[0]
-        history_width = max(int(total_width * config.UI_HISTORY_PANEL_RATIO), 200)
-        center_width = max(total_width - folder_width - history_width, 400)
-
-        self.main_splitter.blockSignals(True)
-        self.main_splitter.setSizes([folder_width, center_width, history_width])
-        self.main_splitter.blockSignals(False)
-        self._on_main_splitter_moved(0, 0)
+        if len(sizes) < 2 or sizes[1] == 0:  # History panel is collapsed
+            total_width = sum(sizes) if sum(sizes) > 0 else self.main_splitter.width()
+            if total_width <= 0:
+                total_width = 800
+            history_width = int(total_width * config.UI_HISTORY_PANEL_RATIO)
+            center_width = max(total_width - history_width, 400)
+            self.main_splitter.setSizes([center_width, history_width])
+            self._on_main_splitter_moved(0, 0)
             
     def _collapse_history_panel(self):
         """Collapse the history panel."""
         sizes = self.main_splitter.sizes()
-        if len(sizes) < 3 or sizes[2] == 0:
-            return
-
-        folder_width = sizes[0]
-        center_width = sizes[1] + sizes[2]
-
-        self.main_splitter.blockSignals(True)
-        self.main_splitter.setSizes([folder_width, center_width, 0])
-        self.main_splitter.blockSignals(False)
-        self._on_main_splitter_moved(0, 0)
-    
-    def _on_center_tab_changed(self, index: int):
-        """Adjust splitter layout when switching between Workflows and CharonBoard."""
-        sizes = self.main_splitter.sizes()
-        if len(sizes) < 3:
-            return
-
-        folder_width, center_width, history_width = sizes
-        total_width = sum(sizes) if sum(sizes) > 0 else self.main_splitter.width()
-        if total_width <= 0:
-            total_width = config.WINDOW_WIDTH
-
-        if index == 0:  # Workflows tab
-            desired_folder = self._folder_panel_width or int(total_width * config.UI_FOLDER_PANEL_RATIO)
-            desired_folder = max(desired_folder, 160)
-            if desired_folder >= total_width - history_width:
-                desired_folder = max(int(total_width * config.UI_FOLDER_PANEL_RATIO), 160)
-            restored_center = max(total_width - history_width - desired_folder, 200)
-            self.main_splitter.blockSignals(True)
-            self.main_splitter.setSizes([desired_folder, restored_center, history_width])
-            self.main_splitter.blockSignals(False)
-        else:  # CharonBoard
-            if folder_width > 0:
-                self._folder_panel_width = folder_width
-            collapsed_center = max(total_width - history_width, 200)
-            self.main_splitter.blockSignals(True)
-            self.main_splitter.setSizes([0, collapsed_center, history_width])
-            self.main_splitter.blockSignals(False)
-
-        self._on_main_splitter_moved(0, 0)
+        if len(sizes) > 1 and sizes[1] > 0:  # History panel is open
+            center_width = sizes[0] + sizes[1]
+            self.main_splitter.setSizes([center_width, 0])
+            self._on_main_splitter_moved(0, 0)
     
     def _show_error_dialog(self):
         """Show the error dialog after execution history has been updated"""
