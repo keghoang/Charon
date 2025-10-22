@@ -186,13 +186,15 @@ def _default_inputs() -> List[Dict[str, Any]]:
 
 
 def _build_processor_script() -> str:
-    try:
-        from charon_core.processor_script import build_processor_script
-
-        return build_processor_script()
-    except Exception as exc:
-        system_warning(f"Processor script unavailable: {exc}")
-        return "nuke.message('Charon processor script is not available in this environment.')"
+    return (
+        "try:\n"
+        "    from prototypes.galt_clone.galt.processor import process_charonop_node\n"
+        "except Exception as exc:\n"
+        "    import nuke\n"
+        "    nuke.message(f'Charon processor unavailable: {exc}')\n"
+        "else:\n"
+        "    process_charonop_node()\n"
+    )
 
 
 def _build_menu_script(temp_root: str) -> str:
