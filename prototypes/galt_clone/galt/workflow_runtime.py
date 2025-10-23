@@ -401,10 +401,14 @@ def import_output():
                     parent_group.end()
                 except Exception:
                     pass
+            target_read_name = f"CharonRead_{parent_id}" if parent_id else "CharonRead"
             try:
-                read_node.setName(f"{node.name()}_Import")
+                read_node.setName(target_read_name)
             except Exception:
-                pass
+                try:
+                    read_node.setName("CharonRead")
+                except Exception:
+                    pass
         except Exception as exc:
             nuke.message(f'Failed to create Read node: {exc}')
             return
@@ -447,6 +451,36 @@ def import_output():
 
     _ensure_info_tab(read_node, parent_id, read_id)
     _assign_read_label(read_node, parent_id, read_id)
+
+    try:
+        anchor_knob = node.knob('charon_link_anchor')
+        anchor_value = anchor_knob.value() if anchor_knob else 0.0
+    except Exception:
+        anchor_value = 0.0
+    try:
+        read_anchor = read_node.knob('charon_link_anchor')
+    except Exception:
+        read_anchor = None
+    if read_anchor is None:
+        try:
+            read_anchor = nuke.Double_Knob('charon_link_anchor', 'Charon Link Anchor')
+            read_anchor.setFlag(nuke.NO_ANIMATION)
+            read_anchor.setFlag(nuke.INVISIBLE)
+            read_node.addKnob(read_anchor)
+        except Exception:
+            read_anchor = None
+    if read_anchor is not None:
+        try:
+            read_anchor.setExpression(f"{node.fullName()}.charon_link_anchor")
+        except Exception:
+            try:
+                read_anchor.clearAnimated()
+            except Exception:
+                pass
+            try:
+                read_anchor.setValue(anchor_value)
+            except Exception:
+                pass
 
     try:
         store_knob = node.knob('charon_read_node')
