@@ -86,3 +86,8 @@ D:\Nuke\charon\              # runtime temp/output/debug directory
 - Optional: capture raw UI JSON + cached prompt on the CharonOp node so third parties can relaunch conversion without reopening the panel.
 - Optional: introduce conversion job queue / progress UI if future workflows become heavier.
 - Optional: provide a CLI utility for testing conversions outside Nuke using the same `charon_core.workflow_pipeline`.
+### Prototype Prompt Caching (2025-10-22)
+- The prototype processor now saves the converted API prompt in each workflow’s `_API_conversion/` folder and stores the source workflow hash plus prompt path on the CharonOp node.
+- When `Process with ComfyUI` runs again, it reuses that cached prompt if the stored hash still matches the UI workflow, avoiding another external conversion run.
+- Editing metadata through the prototype triggers `update_galt_config`, which now clears `_API_conversion/` so the next processing run reconverts and rebuilds parameter bindings.
+- Manual test: grab a workflow, process it twice to confirm the second run logs “Using cached prompt,” then edit metadata and process again to verify a fresh conversion occurs before caching the new prompt.

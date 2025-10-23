@@ -592,7 +592,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             workflow_document = load_workflow_document(self._workflow_path)
         except WorkflowLoadError as exc:
             self.input_mapping_message.setText(str(exc))
-            print(f"Metadata dialog failed to load workflow: {exc}")
+            system_debug(f"Metadata dialog failed to load workflow: {exc}")
             return
 
         candidates = discover_prompt_widget_parameters(workflow_document)
@@ -600,9 +600,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             self.input_mapping_message.setText(
                 "No prompt widgets were detected in this workflow yet."
             )
-            print("Metadata dialog discovered 0 prompt candidates.")
+            system_debug("Metadata dialog discovered 0 prompt candidates.")
             return
-        print("Metadata dialog discovered prompt nodes: %s" % [(node.node_id, [attr.key for attr in node.attributes]) for node in candidates])
+        system_debug(
+            "Metadata dialog discovered prompt nodes: %s"
+            % [(node.node_id, [attr.key for attr in node.attributes]) for node in candidates]
+        )
 
         for node in candidates:
             node_item = QtWidgets.QTreeWidgetItem(self.input_mapping_tree, [node.name])
@@ -655,15 +658,17 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         node_id = data.get("node_id")
         state = item.checkState(0) == QtCore.Qt.CheckState.Checked
 
-        message = f"[Charon] Parameter toggled: node={node_id} key={key} state={'ON' if state else 'OFF'}"
-        print(message, flush=True)
-        print(message)
+        system_debug(
+            f"[Charon] Parameter toggled: node={node_id} key={key} state={'ON' if state else 'OFF'}"
+        )
 
     def _collect_selected_parameters(self) -> List[Dict[str, Any]]:
         """Return parameter specs for all checked entries."""
-        print(f"[Charon] get_metadata group visible BEFORE: {self.input_mapping_group.isVisible()}")
+        system_debug(
+            f"[Charon] get_metadata group visible BEFORE: {self.input_mapping_group.isVisible()}"
+        )
         if not self.input_mapping_group.isVisible():
-            print("[Charon] group hidden while saving; proceeding anyway")
+            system_debug("[Charon] group hidden while saving; proceeding anyway")
 
         root = self.input_mapping_tree.invisibleRootItem()
         selected: List[Dict[str, Any]] = []
@@ -674,7 +679,10 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 attr_item = node_item.child(attr_index)
                 state = attr_item.checkState(0)
                 data = attr_item.data(0, QtCore.Qt.ItemDataRole.UserRole) or {}
-                print(f"[Charon] inspect node={data.get('node_id')} key={data.get('attribute_key')} state={state}")
+                system_debug(
+                    f"[Charon] inspect node={data.get('node_id')} "
+                    f"key={data.get('attribute_key')} state={state}"
+                )
                 if state != QtCore.Qt.CheckState.Checked:
                     continue
                 spec = {
@@ -686,7 +694,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                     "default": data.get("value"),
                 }
                 selected.append(spec)
-        print(f"Metadata dialog collected parameters: {selected}")
+        system_debug(f"Metadata dialog collected parameters: {selected}")
         return selected
 
     def _add_dependency_row(self, dep: Dict[str, Any] = None):

@@ -10,6 +10,7 @@ DEFAULT_CHARON_DIR = r"D:\Nuke\charon"
 DEFAULT_COMFYUI_LAUNCH_PATH = (
     r"D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat"
 )
+RESOURCE_DIR = os.path.join(os.path.dirname(__file__), "resources")
 
 
 def get_default_comfy_launch_path():
@@ -107,3 +108,10 @@ def resolve_comfy_environment(comfy_path):
         "python_exe": python_exe,
         "embedded_root": embedded_root,
     }
+
+
+def get_placeholder_image_path():
+    candidate = os.path.join(RESOURCE_DIR, "charon_placeholder.png")
+    if os.path.exists(candidate):
+        return candidate
+    return ""

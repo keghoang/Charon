@@ -4,6 +4,7 @@ import functools
 from .utilities import is_compatible_with_host
 from .galt_logger import system_error
 from .charon_metadata import load_charon_metadata, write_charon_metadata, CHARON_METADATA_FILENAME
+from .conversion_cache import clear_conversion_cache
 
 
 def get_metadata_path(script_path):
@@ -192,6 +193,11 @@ def update_galt_config(script_path, new_config):
     if metadata:
         print(f"[Charon] update_galt_config wrote metadata with parameters: {metadata.get('parameters')}")
         invalidate_metadata_path(script_path)
+        try:
+            clear_conversion_cache(script_path)
+            print(f"[Charon] Cleared conversion cache for {script_path}")
+        except Exception as cache_error:
+            system_error(f"Failed to clear conversion cache for {script_path}: {cache_error}")
         return True
     print(f"[Charon] update_galt_config failed for {script_path}")
     return False
