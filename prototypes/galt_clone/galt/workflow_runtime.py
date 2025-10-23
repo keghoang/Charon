@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -221,10 +222,149 @@ def _build_processor_script() -> str:
 def _build_import_output_script() -> str:
     return """# CharonOp Import Output
 import os
+import uuid
 import nuke
+
+def _normalize_id(value):
+    try:
+        text = str(value).strip().lower()
+    except Exception:
+        return ''
+    if not text:
+        return ''
+    return text[:12]
+
+def _safe_knob_value(owner, name):
+    try:
+        knob = owner.knob(name)
+    except Exception:
+        return ''
+    if knob is None:
+        return ''
+    try:
+        return knob.value()
+    except Exception:
+        return ''
+
+def _read_node_parent_id(read_node):
+    try:
+        meta_val = read_node.metadata('charon/parent_id')
+    except Exception:
+        meta_val = None
+    parent = _normalize_id(meta_val)
+    if not parent:
+        parent = _normalize_id(_safe_knob_value(read_node, 'charon_parent_id'))
+    return parent
+
+def _read_node_unique_id(read_node):
+    try:
+        meta_val = read_node.metadata('charon/read_id')
+    except Exception:
+        meta_val = None
+    read_id = _normalize_id(meta_val)
+    if not read_id:
+        read_id = _normalize_id(_safe_knob_value(read_node, 'charon_read_id'))
+    return read_id
+
+def _ensure_hidden_string(read_node, name, label):
+    try:
+        knob = read_node.knob(name)
+    except Exception:
+        knob = None
+    if knob is None:
+        try:
+            knob = nuke.String_Knob(name, label, '')
+            knob.setFlag(nuke.NO_ANIMATION)
+            knob.setFlag(nuke.INVISIBLE)
+            read_node.addKnob(knob)
+        except Exception:
+            knob = None
+    return knob
+
+def _ensure_info_tab(read_node, parent_id, read_id):
+    try:
+        info_tab = read_node.knob('charon_info_tab')
+    except Exception:
+        info_tab = None
+    if info_tab is None:
+        try:
+            info_tab = nuke.Tab_Knob('charon_info_tab', 'Charon Info')
+            read_node.addKnob(info_tab)
+        except Exception:
+            info_tab = None
+    try:
+        info_text = read_node.knob('charon_info_text')
+    except Exception:
+        info_text = None
+    if info_text is None and info_tab is not None:
+        try:
+            info_text = nuke.Text_Knob('charon_info_text', 'Metadata', '')
+            read_node.addKnob(info_text)
+        except Exception:
+            info_text = None
+    summary = [
+        f"Parent ID: {parent_id or 'N/A'}",
+        f"Read Node ID: {read_id or 'N/A'}",
+    ]
+    if info_text is not None:
+        try:
+            info_text.setValue("\\n".join(summary))
+        except Exception:
+            pass
+
+def _assign_read_label(read_node, parent_id, read_id):
+    try:
+        label_knob = read_node['label']
+    except Exception:
+        label_knob = None
+    if label_knob is not None:
+        label = f"Charon Parent: {parent_id or 'N/A'}\\nRead ID: {read_id or 'N/A'}"
+        try:
+            label_knob.setValue(label)
+        except Exception:
+            pass
+
+def _find_read_node_by_id(read_id):
+    if not read_id:
+        return None
+    try:
+        candidates = nuke.allNodes('Read')
+    except Exception:
+        return None
+    for candidate in candidates:
+        if _read_node_unique_id(candidate) == read_id:
+            return candidate
+    return None
+
+def _find_read_node_by_parent(parent_id):
+    if not parent_id:
+        return None
+    try:
+        candidates = nuke.allNodes('Read')
+    except Exception:
+        return None
+    for candidate in candidates:
+        if _read_node_parent_id(candidate) == parent_id:
+            return candidate
+    return None
 
 def import_output():
     node = nuke.thisNode()
+
+    parent_id = _normalize_id(_safe_knob_value(node, 'charon_node_id'))
+    if not parent_id:
+        try:
+            parent_id = _normalize_id(node.metadata('charon/node_id'))
+        except Exception:
+            parent_id = ''
+
+    stored_read_id = _normalize_id(_safe_knob_value(node, 'charon_read_node_id'))
+    if not stored_read_id:
+        try:
+            stored_read_id = _normalize_id(node.metadata('charon/read_node_id'))
+        except Exception:
+            stored_read_id = ''
+
     knob = node.knob('charon_last_output')
     output_path = knob.value().strip() if knob else ''
     if not output_path:
@@ -236,22 +376,22 @@ def import_output():
         nuke.message(f'Output file not found: {normalized}')
         return
 
-    read_node = None
-    existing_name = ''
-    try:
-        read_knob = node.knob('charon_read_node')
-        if read_knob is not None:
-            existing_name = read_knob.value().strip()
-    except Exception:
-        existing_name = ''
+    read_node = _find_read_node_by_id(stored_read_id)
+    if read_node is None:
+        read_node = _find_read_node_by_parent(parent_id)
 
-    if existing_name:
-        candidate = nuke.toNode(existing_name)
-        if candidate is not None and getattr(candidate, 'Class', lambda: '')() == 'Read':
-            read_node = candidate
+    if read_node is None:
+        existing_name = _safe_knob_value(node, 'charon_read_node').strip()
+        if existing_name:
+            try:
+                candidate = nuke.toNode(existing_name)
+            except Exception:
+                candidate = None
+            if candidate is not None and getattr(candidate, 'Class', lambda: '')() == 'Read':
+                read_node = candidate
 
-    try:
-        if read_node is None:
+    if read_node is None:
+        try:
             parent_group = node.parent() or nuke.root()
             try:
                 parent_group.begin()
@@ -262,12 +402,12 @@ def import_output():
                 except Exception:
                     pass
             try:
-                read_node.setName(f\"{node.name()}_Import\")
+                read_node.setName(f"{node.name()}_Import")
             except Exception:
                 pass
-    except Exception as exc:
-        nuke.message(f'Failed to create Read node: {exc}')
-        return
+        except Exception as exc:
+            nuke.message(f'Failed to create Read node: {exc}')
+            return
 
     try:
         read_node['file'].setValue(normalized)
@@ -279,6 +419,35 @@ def import_output():
     read_node.setYpos(node.ypos() + 60)
     read_node.setSelected(True)
 
+    read_id = _read_node_unique_id(read_node)
+    if not read_id:
+        read_id = uuid.uuid4().hex[:12].lower()
+
+    try:
+        read_node.setMetaData('charon/read_id', read_id)
+    except Exception:
+        pass
+    try:
+        read_node.setMetaData('charon/parent_id', parent_id)
+    except Exception:
+        pass
+
+    parent_knob = _ensure_hidden_string(read_node, 'charon_parent_id', 'Charon Parent ID')
+    if parent_knob is not None:
+        try:
+            parent_knob.setValue(parent_id)
+        except Exception:
+            pass
+    read_id_knob = _ensure_hidden_string(read_node, 'charon_read_id', 'Charon Read ID')
+    if read_id_knob is not None:
+        try:
+            read_id_knob.setValue(read_id)
+        except Exception:
+            pass
+
+    _ensure_info_tab(read_node, parent_id, read_id)
+    _assign_read_label(read_node, parent_id, read_id)
+
     try:
         store_knob = node.knob('charon_read_node')
         if store_knob is not None:
@@ -286,7 +455,21 @@ def import_output():
     except Exception:
         pass
     try:
+        read_id_store = node.knob('charon_read_node_id')
+        if read_id_store is not None:
+            read_id_store.setValue(read_id)
+    except Exception:
+        pass
+    try:
+        info_knob = node.knob('charon_read_id_info')
+        if info_knob is not None:
+            info_knob.setValue(read_id)
+    except Exception:
+        pass
+
+    try:
         node.setMetaData('charon/read_node', read_node.name())
+        node.setMetaData('charon/read_node_id', read_id)
     except Exception:
         pass
 
