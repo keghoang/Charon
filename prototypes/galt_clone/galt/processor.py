@@ -16,6 +16,7 @@ from .conversion_cache import (
 from .paths import get_default_comfy_launch_path, get_placeholder_image_path
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from . import preferences
+from .utilities import status_to_tile_color
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
 _WORKFLOW_CONVERTER_AVAILABLE: Optional[bool] = None
@@ -713,6 +714,7 @@ def process_charonop_node():
             return anchor_value or 0.0
 
         link_anchor_value = ensure_link_anchor_value()
+        current_node_state = 'Ready'
 
         def iter_candidate_read_nodes():
             try:
@@ -795,6 +797,41 @@ def process_charonop_node():
                 return candidate
             return find_read_node_for_parent()
 
+        def apply_status_color(state: str, read_node_override=None):
+            tile_color = status_to_tile_color(state)
+            try:
+                node["tile_color"].setValue(tile_color)
+            except Exception:
+                pass
+
+            targets = []
+            if read_node_override is not None:
+                targets.append(read_node_override)
+            else:
+                candidate = find_linked_read_node()
+                if candidate is not None:
+                    targets.append(candidate)
+
+            for target in targets:
+                try:
+                    target["tile_color"].setValue(tile_color)
+                except Exception:
+                    pass
+                try:
+                    target["gl_color"].setValue(tile_color)
+                except Exception:
+                    pass
+
+        try:
+            initial_payload = load_status_payload()
+        except Exception:
+            initial_payload = None
+        if isinstance(initial_payload, dict):
+            initial_state = initial_payload.get('state') or initial_payload.get('status')
+            if initial_state:
+                current_node_state = initial_state
+        apply_status_color(current_node_state)
+
         def assign_read_label(read_node, label_text=None):
             if read_node is None:
                 return
@@ -847,6 +884,7 @@ def process_charonop_node():
                     pass
 
         def mark_read_node(read_node):
+            nonlocal current_node_state
             if read_node is None:
                 return
             read_id = read_node_unique_id(read_node)
@@ -897,6 +935,7 @@ def process_charonop_node():
                     pass
             ensure_read_node_info(read_node, read_id)
             assign_read_label(read_node)
+            apply_status_color(current_node_state, read_node)
 
             try:
                 read_anchor_knob = read_node.knob('charon_link_anchor')
@@ -955,6 +994,7 @@ def process_charonop_node():
                         pass
 
         def unlink_read_node(read_node):
+            nonlocal current_node_state
             if read_node is None:
                 return
             try:
@@ -1005,6 +1045,7 @@ def process_charonop_node():
             except Exception:
                 pass
             write_metadata('charon/read_node', "")
+            apply_status_color(current_node_state)
             try:
                 anchor_knob = read_node.knob('charon_link_anchor')
             except Exception:
