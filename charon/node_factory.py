@@ -1,6 +1,7 @@
-import json
+﻿import json
 import time
 import uuid
+from typing import Any, Dict, List
 
 from .utilities import status_to_gl_color, status_to_tile_color
 
@@ -281,64 +282,103 @@ def _prepare_parameter_controls(nuke_module, parameters):
     normalized = []
     used_names = set()
 
-    for index, raw_spec in enumerate(parameters):
+    groups: List[Dict[str, Any]] = []
+    group_map: Dict[str, Dict[str, Any]] = {}
+    for raw_spec in parameters or []:
         if not isinstance(raw_spec, dict):
             continue
 
-        node_id = str(raw_spec.get("node_id") or "").strip()
+        node_id = str(raw_spec.get('node_id') or '').strip()
         attribute = str(
-            raw_spec.get("attribute")
-            or raw_spec.get("attribute_key")
-            or ""
+            raw_spec.get('attribute')
+            or raw_spec.get('attribute_key')
+            or ''
         ).strip()
         if not node_id or not attribute:
             continue
 
-        label = str(raw_spec.get("label") or "").strip() or attribute
-        value_type = str(raw_spec.get("type") or "string").lower()
-        default = raw_spec.get("default")
-        node_name = str(raw_spec.get("node_name") or "").strip()
+        node_name = str(raw_spec.get('node_name') or '').strip()
+        key = f"{node_id}:{node_name}"
+        group = group_map.get(key)
+        if group is None:
+            group = {
+                'node_id': node_id,
+                'node_name': node_name,
+                'attributes': [],
+            }
+            group_map[key] = group
+            groups.append(group)
+        group['attributes'].append(raw_spec)
 
-        base_name = sanitize_name(f"charon_param_{index + 1}_{label}") or f"charon_param_{index + 1}"
-        knob_name = base_name.lower()
-        while knob_name in used_names:
-            knob_name = f"{knob_name}_"
-        used_names.add(knob_name)
-
-        knob = _create_parameter_knob(
-            nuke_module,
-            knob_name,
-            label,
-            value_type,
-            default,
-        )
-        if knob is None:
+    attribute_index = 0
+    for group_index, group in enumerate(groups):
+        if not group['attributes']:
             continue
 
-        tooltip_parts = []
-        if node_name:
-            tooltip_parts.append(node_name)
-        tooltip_parts.append(attribute)
+        group_label = group['node_name'] or f"Node {group['node_id']}"
+        header_name = sanitize_name(f"charon_param_group_{group_index + 1}_{group_label}") or f"charon_param_group_{group_index + 1}"
+        header_knob = nuke_module.Text_Knob(header_name, group_label, "")
         try:
-            knob.setTooltip(" • ".join(tooltip_parts))
+            header_knob.setFlag(nuke_module.NO_ANIMATION)
         except Exception:
             pass
+        knobs.append(header_knob)
 
-        knobs.append(knob)
-        normalized.append(
-            {
-                "node_id": node_id,
-                "node_name": node_name,
-                "attribute": attribute,
-                "label": label,
-                "type": value_type,
-                "default": default,
-                "knob": knob_name,
-            }
-        )
+        for raw_spec in group['attributes']:
+            attribute_index += 1
+
+            attribute = str(
+                raw_spec.get('attribute')
+                or raw_spec.get('attribute_key')
+                or ''
+            ).strip()
+            label = str(raw_spec.get('label') or '').strip() or attribute
+            value_type = str(raw_spec.get('type') or 'string').lower()
+            default = raw_spec.get('default')
+
+            base_name = sanitize_name(f"charon_param_{attribute_index}_{label}") or f"charon_param_{attribute_index}"
+            knob_name = base_name.lower()
+            while knob_name in used_names:
+                knob_name = f"{knob_name}_"
+            used_names.add(knob_name)
+
+            knob = _create_parameter_knob(
+                nuke_module,
+                knob_name,
+                label,
+                value_type,
+                default,
+            )
+            if knob is None:
+                continue
+
+            tooltip_parts = []
+            if group['node_name']:
+                tooltip_parts.append(group['node_name'])
+            if attribute:
+                tooltip_parts.append(attribute)
+            try:
+                knob.setTooltip(' - '.join(tooltip_parts))
+            except Exception:
+                pass
+
+            knobs.append(knob)
+            normalized.append(
+                {
+                    'node_id': group['node_id'],
+                    'node_name': group['node_name'],
+                    'attribute': attribute,
+                    'label': label,
+                    'type': value_type,
+                    'default': default,
+                    'value': raw_spec.get('value'),
+                    'aliases': list(raw_spec.get('aliases') or []),
+                    'group': group_label,
+                    'knob': knob_name,
+                }
+            )
 
     return knobs, normalized
-
 
 def _create_parameter_knob(nuke_module, name, label, value_type, default):
     try:
@@ -347,13 +387,38 @@ def _create_parameter_knob(nuke_module, name, label, value_type, default):
             knob.setValue(1 if _coerce_bool(default) else 0)
         elif value_type == "integer":
             knob = nuke_module.Int_Knob(name, label)
-            knob.setValue(_coerce_int(default))
+            coerced = _coerce_int(default)
+            knob.setValue(coerced)
+            try:
+                span = max(abs(coerced), 10)
+                min_val = coerced - span
+                max_val = coerced + span
+                if min_val == max_val:
+                    max_val += 1
+                knob.setSliderFlag(True)
+                knob.setRange(min_val, max_val)
+            except Exception:
+                pass
         elif value_type == "float":
             knob = nuke_module.Double_Knob(name, label)
-            knob.setValue(_coerce_float(default))
+            coerced = _coerce_float(default)
+            knob.setValue(coerced)
+            try:
+                span = max(abs(coerced), 1.0)
+                min_val = coerced - span
+                max_val = coerced + span
+                if min_val == max_val:
+                    max_val += 1.0
+                knob.setRange(min_val, max_val)
+            except Exception:
+                pass
         else:
             knob = nuke_module.Multiline_Eval_String_Knob(name, label)
             knob.setValue(_coerce_string(default))
+            try:
+                knob.setHeight(3)
+            except Exception:
+                pass
         knob.setFlag(nuke_module.NO_ANIMATION)
         return knob
     except Exception:
@@ -403,3 +468,6 @@ def _coerce_string(value):
     if value is None:
         return ""
     return str(value)
+
+
+

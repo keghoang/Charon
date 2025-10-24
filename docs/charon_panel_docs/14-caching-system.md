@@ -51,7 +51,15 @@ class PersistentCacheManager:
    - Includes entry file validation, icon presence checks
    - Reduces repeated filesystem checks for script validity
 
-5. **Hot Folders**
+5. **Workflow Input Cache**
+   - Stores per-workflow parameter discovery results
+   - Saved as `.charon_cache/input_mapping_cache.json` inside each workflow folder
+   - Cache entries include the workflow file hash to guarantee freshness
+   - Conversion prompts generated during API export also live in `.charon_cache`
+   - Keeps metadata dialogs snappy on subsequent opens without re-running the scan
+   - Local to each workflow folder so artists can diff/inspect if needed
+
+6. **Hot Folders**
    - Tracks recently accessed folders using OrderedDict (LRU)
    - Maximum 20 hot folders maintained
    - Hot folders are protected from eviction

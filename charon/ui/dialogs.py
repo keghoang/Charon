@@ -11,10 +11,210 @@ from ..input_mapping import (
     discover_prompt_widget_parameters,
     load_workflow_document,
     WorkflowLoadError,
+    ExposableNode,
+    ExposableAttribute,
 )
 from ..charon_logger import system_debug
 from .custom_widgets import create_tag_badge
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
+import hashlib
+import json
+
+_CACHE_SCHEMA_VERSION = 1
+_CACHE_FILENAME = "input_mapping_cache.json"
+_MEMORY_CACHE: Dict[str, Tuple[str, Tuple[ExposableNode, ...]]] = {}
+
+
+def _cache_key(path: str) -> str:
+    return os.path.abspath(path)
+
+
+def _cache_directory(path: str) -> str:
+    base_dir = os.path.dirname(os.path.abspath(path))
+    return os.path.join(base_dir, ".charon_cache")
+
+
+def _cache_file_path(path: str) -> str:
+    return os.path.join(_cache_directory(path), _CACHE_FILENAME)
+
+
+def _compute_workflow_hash(path: str) -> Optional[str]:
+    try:
+        hasher = hashlib.sha1()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except OSError:
+        return None
+
+
+def _serialize_candidates(candidates: Tuple[ExposableNode, ...]) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    for node in candidates or ():
+        serialized.append(
+            {
+                "node_id": node.node_id,
+                "name": node.name,
+                "attributes": [
+                    {
+                        "key": attr.key,
+                        "label": attr.label,
+                        "value": attr.value,
+                        "value_type": attr.value_type,
+                        "preview": attr.preview,
+                        "aliases": list(attr.aliases or []),
+                        "node_default": attr.node_default,
+                    }
+                    for attr in node.attributes or ()
+                ],
+            }
+        )
+    return serialized
+
+
+def _deserialize_candidates(serialized: List[Dict[str, Any]]) -> Tuple[ExposableNode, ...]:
+    nodes: List[ExposableNode] = []
+    for node_entry in serialized or []:
+        attributes: List[ExposableAttribute] = []
+        for attr_entry in node_entry.get("attributes") or []:
+            attributes.append(
+                ExposableAttribute(
+                    key=str(attr_entry.get("key") or ""),
+                    label=str(attr_entry.get("label") or ""),
+                    value=attr_entry.get("value"),
+                    value_type=str(attr_entry.get("value_type") or "string"),
+                    preview=str(attr_entry.get("preview") or ""),
+                    aliases=tuple(attr_entry.get("aliases") or []),
+                    node_default=attr_entry.get("node_default"),
+                )
+            )
+        nodes.append(
+            ExposableNode(
+                node_id=str(node_entry.get("node_id") or ""),
+                name=str(node_entry.get("name") or ""),
+                attributes=tuple(attributes),
+            )
+        )
+    return tuple(nodes)
+
+
+def _get_cached_parameters(path: Optional[str]) -> Optional[Tuple[ExposableNode, ...]]:
+    if not path:
+        return None
+    abs_path = _cache_key(path)
+    workflow_hash = _compute_workflow_hash(abs_path)
+    if workflow_hash is None:
+        return None
+
+    memory_entry = _MEMORY_CACHE.get(abs_path)
+    if memory_entry and memory_entry[0] == workflow_hash:
+        return memory_entry[1]
+
+    cache_file = _cache_file_path(abs_path)
+    if not os.path.exists(cache_file):
+        return None
+
+    try:
+        with open(cache_file, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+
+    if payload.get("schema") != _CACHE_SCHEMA_VERSION:
+        return None
+    if payload.get("workflow_hash") != workflow_hash:
+        return None
+
+    try:
+        candidates = _deserialize_candidates(payload.get("nodes") or [])
+    except Exception:
+        return None
+
+    _MEMORY_CACHE[abs_path] = (workflow_hash, candidates)
+    return candidates
+
+
+def _store_cached_parameters(path: Optional[str], data) -> None:
+    if not path:
+        return
+    abs_path = _cache_key(path)
+    workflow_hash = _compute_workflow_hash(abs_path)
+    if workflow_hash is None:
+        return
+
+    candidates = tuple(data or ())
+    payload = {
+        "schema": _CACHE_SCHEMA_VERSION,
+        "workflow_hash": workflow_hash,
+        "nodes": _serialize_candidates(candidates),
+    }
+
+    cache_dir = _cache_directory(abs_path)
+    cache_file = _cache_file_path(abs_path)
+
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except Exception as exc:
+        system_debug(f"Failed to write parameter cache: {exc}")
+    else:
+        _MEMORY_CACHE[abs_path] = (workflow_hash, candidates)
+
+
+def _resolve_parameter_default(value: Any, value_type: str, node_default: Any) -> Any:
+    if value is None:
+        return node_default
+
+    kind = (value_type or "").lower()
+    if kind == "integer":
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return node_default
+    if kind == "float":
+        if isinstance(value, bool):
+            return 1.0 if value else 0.0
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return node_default
+    return value if value is not None else node_default
+
+
+class _ParameterDiscoveryWorker(QtCore.QObject):
+    finished = QtCore.Signal(object, object)
+
+    def __init__(self, workflow_path: Optional[str]) -> None:
+        super().__init__()
+        self._workflow_path = workflow_path
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        if not self._workflow_path:
+            self.finished.emit(tuple(), None)
+            return
+
+        try:
+            workflow_document = load_workflow_document(self._workflow_path)
+        except Exception as exc:
+            self.finished.emit(tuple(), str(exc))
+            return
+
+        try:
+            candidates = discover_prompt_widget_parameters(workflow_document)
+        except Exception as exc:
+            self.finished.emit(tuple(), str(exc))
+            return
+
+        self.finished.emit(candidates, None)
 
 class BaseMetadataDialog(QtWidgets.QDialog):
     """Base dialog for metadata operations with software selection and validation."""
@@ -491,6 +691,11 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             parameters = []
         self._metadata["parameters"] = parameters
         self._workflow_path = workflow_path
+        self._discovery_thread: Optional[QtCore.QThread] = None
+        self._discovery_worker: Optional[_ParameterDiscoveryWorker] = None
+        self._scan_animation_timer: Optional[QtCore.QTimer] = None
+        self._scan_animation_phase: int = 0
+        self._scan_base_text: str = "Scanning workflow inputs"
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(8)
@@ -588,35 +793,125 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setVisible(False)
         self.input_mapping_message.setVisible(True)
 
-        try:
-            workflow_document = load_workflow_document(self._workflow_path)
-        except WorkflowLoadError as exc:
-            self.input_mapping_message.setText(str(exc))
-            system_debug(f"Metadata dialog failed to load workflow: {exc}")
+        base_title = "Select Inputs to Expose"
+        self.input_mapping_group.setTitle(base_title)
+
+        cached = _get_cached_parameters(self._workflow_path)
+        if cached is not None:
+            self._stop_scan_animation()
+            system_debug("Metadata dialog loaded parameters from cache.")
+            self._render_parameter_candidates(cached)
             return
 
-        candidates = discover_prompt_widget_parameters(workflow_document)
+        self._cancel_parameter_discovery()
+
+        self.input_mapping_message.setText(self._scan_base_text)
+        self._start_scan_animation()
+
+        thread = QtCore.QThread(self)
+        worker = _ParameterDiscoveryWorker(self._workflow_path)
+        worker.moveToThread(thread)
+
+        worker.finished.connect(self._on_parameter_discovery_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._clear_discovery_handles())
+
+        thread.started.connect(worker.run)
+        self._discovery_thread = thread
+        self._discovery_worker = worker
+        thread.start()
+
+    def _cancel_parameter_discovery(self) -> None:
+        if self._discovery_thread:
+            try:
+                self._discovery_thread.requestInterruption()
+            except Exception:
+                pass
+            self._discovery_thread.quit()
+            self._discovery_thread.wait(100)
+        self._clear_discovery_handles()
+        self._stop_scan_animation()
+
+    def _clear_discovery_handles(self) -> None:
+        self._discovery_thread = None
+        self._discovery_worker = None
+
+    def _start_scan_animation(self) -> None:
+        if self._scan_animation_timer:
+            return
+        self._scan_animation_phase = 0
+        timer = QtCore.QTimer(self)
+        timer.setInterval(300)
+        timer.timeout.connect(self._advance_scan_animation)
+        timer.start()
+        self._scan_animation_timer = timer
+
+    def _advance_scan_animation(self) -> None:
+        if not self._scan_animation_timer:
+            return
+        self._scan_animation_phase = (self._scan_animation_phase + 1) % 4
+        dots = "." * self._scan_animation_phase
+        self.input_mapping_message.setText(f"{self._scan_base_text}{dots}")
+
+    def _stop_scan_animation(self) -> None:
+        if self._scan_animation_timer:
+            self._scan_animation_timer.stop()
+            self._scan_animation_timer.deleteLater()
+            self._scan_animation_timer = None
+        self._scan_animation_phase = 0
+
+    def _on_parameter_discovery_finished(self, candidates, error) -> None:
+        self._stop_scan_animation()
+        if error:
+            self.input_mapping_message.setText(str(error))
+            system_debug(f"Metadata dialog parameter discovery error: {error}")
+            return
+
+        try:
+            candidates = tuple(candidates or ())
+        except TypeError:
+            candidates = tuple()
+
         if not candidates:
             self.input_mapping_message.setText(
                 "No prompt widgets were detected in this workflow yet."
             )
             system_debug("Metadata dialog discovered 0 prompt candidates.")
             return
+
         system_debug(
             "Metadata dialog discovered prompt nodes: %s"
             % [(node.node_id, [attr.key for attr in node.attributes]) for node in candidates]
         )
+        _store_cached_parameters(self._workflow_path, candidates)
+        self._render_parameter_candidates(candidates)
+
+    def _render_parameter_candidates(self, candidates) -> None:
+        self._stop_scan_animation()
+        base_title = "Select Inputs to Expose"
+
+        total_attributes = sum(len(node.attributes) for node in candidates)
+        if total_attributes:
+            self.input_mapping_group.setTitle(f"{base_title} ({total_attributes})")
+        else:
+            self.input_mapping_group.setTitle(base_title)
+
+        nodes_to_expand: List[QtWidgets.QTreeWidgetItem] = []
 
         for node in candidates:
             node_item = QtWidgets.QTreeWidgetItem(self.input_mapping_tree, [node.name])
             node_item.setFlags(QtCore.Qt.ItemIsEnabled)
+            node_should_expand = False
 
             for attribute in node.attributes:
                 attr_item = QtWidgets.QTreeWidgetItem(node_item, [attribute.label])
                 flags = attr_item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable
                 attr_item.setFlags(flags)
-                if self._is_parameter_selected(node.node_id, attribute.key):
+                if self._is_parameter_selected(node.node_id, attribute.key, attribute.aliases):
                     attr_item.setCheckState(0, QtCore.Qt.CheckState.Checked)
+                    node_should_expand = True
                 else:
                     attr_item.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
                 attr_item.setToolTip(0, attribute.preview or "No default assigned")
@@ -627,22 +922,38 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                         "node_id": node.node_id,
                         "attribute_key": attribute.key,
                         "node_name": node.name,
+                        "group": node.name,
                         "label": attribute.label,
                         "preview": attribute.preview,
                         "value": attribute.value,
                         "value_type": attribute.value_type,
+                        "aliases": attribute.aliases,
+                        "node_default": attribute.node_default,
                     },
                 )
 
-        self.input_mapping_tree.expandAll()
+            if node_should_expand:
+                nodes_to_expand.append(node_item)
+
+        self.input_mapping_tree.collapseAll()
+        for item in nodes_to_expand:
+            item.setExpanded(True)
         self.input_mapping_tree.setVisible(True)
         self.input_mapping_message.setVisible(False)
 
-    def _is_parameter_selected(self, node_id: str, attribute_key: str) -> bool:
+    def _is_parameter_selected(
+        self,
+        node_id: str,
+        attribute_key: str,
+        aliases: Tuple[str, ...] = tuple(),
+    ) -> bool:
         for spec in self._metadata.get("parameters") or []:
             if (
                 str(spec.get("node_id")) == str(node_id)
-                and str(spec.get("attribute")) == str(attribute_key)
+                and str(spec.get("attribute")) in {
+                    str(attribute_key),
+                    *[str(alias) for alias in aliases or ()],
+                }
             ):
                 return True
         return False
@@ -685,17 +996,28 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 )
                 if state != QtCore.Qt.CheckState.Checked:
                     continue
+                resolved_default = _resolve_parameter_default(
+                    data.get("value"),
+                    data.get("value_type") or "",
+                    data.get("node_default"),
+                )
                 spec = {
                     "node_id": str(data.get("node_id") or ""),
                     "node_name": data.get("node_name") or node_item.text(0),
                     "attribute": str(data.get("attribute_key") or ""),
                     "label": data.get("label") or attr_item.text(0),
                     "type": data.get("value_type") or "string",
-                    "default": data.get("value"),
+                    "default": resolved_default,
+                    "value": data.get("value"),
+                    "group": data.get("group") or node_item.text(0),
                 }
                 selected.append(spec)
         system_debug(f"Metadata dialog collected parameters: {selected}")
         return selected
+
+    def closeEvent(self, event):
+        self._cancel_parameter_discovery()
+        super(CharonMetadataDialog, self).closeEvent(event)
 
     def _add_dependency_row(self, dep: Dict[str, Any] = None):
         row = self.deps_table.rowCount()
