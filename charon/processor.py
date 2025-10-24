@@ -792,6 +792,20 @@ def process_charonop_node():
             except Exception:
                 pass
             write_metadata('charon/last_output', path_value or "")
+            try:
+                recreate_knob = node.knob('charon_recreate_read')
+            except Exception:
+                recreate_knob = None
+            if recreate_knob is not None:
+                try:
+                    linked = find_linked_read_node()
+                except Exception:
+                    linked = None
+                has_output = bool(path_value)
+                try:
+                    recreate_knob.setEnabled(has_output and linked is None)
+                except Exception:
+                    pass
 
         def _normalize_node_id(value: Optional[str]) -> str:
             if not value:
@@ -1063,6 +1077,25 @@ def process_charonop_node():
                 if candidate is not None:
                     targets.append(candidate)
 
+            try:
+                recreate_knob = node.knob('charon_recreate_read')
+            except Exception:
+                recreate_knob = None
+            if recreate_knob is not None:
+                linked_node = targets[0] if targets else find_linked_read_node()
+                has_read = linked_node is not None
+                last_output_value = _safe_knob_value(node, 'charon_last_output')
+                if not last_output_value:
+                    try:
+                        last_output_value = node.metadata('charon/last_output')
+                    except Exception:
+                        last_output_value = ""
+                has_output = bool(str(last_output_value or "").strip())
+                try:
+                    recreate_knob.setEnabled(has_output and not has_read)
+                except Exception:
+                    pass
+
             for target in targets:
                 def _apply_target():
                     _apply_to_target(target)
@@ -1295,6 +1328,12 @@ def process_charonop_node():
             except Exception:
                 pass
             try:
+                recreate_knob = node.knob('charon_recreate_read')
+                if recreate_knob is not None:
+                    recreate_knob.setEnabled(False)
+            except Exception:
+                pass
+            try:
                 payload = load_status_payload()
             except Exception:
                 payload = None
@@ -1385,6 +1424,18 @@ def process_charonop_node():
             except Exception:
                 pass
             write_metadata('charon/read_node', "")
+            has_output_value = _safe_knob_value(node, 'charon_last_output')
+            if not has_output_value:
+                try:
+                    has_output_value = node.metadata('charon/last_output')
+                except Exception:
+                    has_output_value = ""
+            try:
+                recreate_knob = node.knob('charon_recreate_read')
+                if recreate_knob is not None:
+                    recreate_knob.setEnabled(bool(str(has_output_value or "").strip()))
+            except Exception:
+                pass
             apply_status_color(current_node_state)
             try:
                 anchor_knob = read_node.knob('charon_link_anchor')
@@ -2409,3 +2460,293 @@ def process_charonop_node():
                 save_status_payload(payload)
             except Exception as payload_error:
                 log_debug(f'Failed to persist error payload: {payload_error}', 'WARNING')
+
+
+def recreate_missing_read_node():
+    """Recreate the linked Read node when it has been deleted."""
+    try:
+        import nuke  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError('Nuke is required to recreate Charon Read nodes.') from exc
+
+    try:
+        node = nuke.thisNode()
+    except Exception:
+        node = None
+    if node is None:
+        return
+
+    def _normalize(value) -> str:
+        if not value:
+            return ""
+        text = str(value).strip().lower()
+        if not text:
+            return ""
+        return text[:12]
+
+    def _safe_knob_value(owner, name: str) -> str:
+        try:
+            knob = owner.knob(name)
+        except Exception:
+            return ""
+        if knob is None:
+            return ""
+        try:
+            return str(knob.value() or "")
+        except Exception:
+            return ""
+
+    def _node_metadata(name: str) -> str:
+        try:
+            return str(node.metadata(name) or "")
+        except Exception:
+            return ""
+
+    def _find_read_by_id(read_id: str):
+        normalized = _normalize(read_id)
+        if not normalized:
+            return None
+        try:
+            candidates = nuke.allNodes("Read")
+        except Exception:
+            candidates = []
+        for candidate in candidates:
+            try:
+                candidate_id = candidate.metadata('charon/read_id')
+            except Exception:
+                candidate_id = ""
+            if _normalize(candidate_id) == normalized:
+                return candidate
+            try:
+                knob = candidate.knob('charon_read_id')
+                if knob and _normalize(knob.value()) == normalized:
+                    return candidate
+            except Exception:
+                pass
+        return None
+
+    def _find_read_by_parent(parent_id: str):
+        normalized = _normalize(parent_id)
+        if not normalized:
+            return None
+        try:
+            candidates = nuke.allNodes("Read")
+        except Exception:
+            candidates = []
+        for candidate in candidates:
+            try:
+                parent_val = candidate.metadata('charon/parent_id')
+            except Exception:
+                parent_val = ""
+            if _normalize(parent_val) == normalized:
+                return candidate
+            try:
+                knob = candidate.knob('charon_parent_id')
+                if knob and _normalize(knob.value()) == normalized:
+                    return candidate
+            except Exception:
+                pass
+        return None
+
+    def _ensure_hidden_string(target, name: str, label: str, value: str):
+        try:
+            knob = target.knob(name)
+        except Exception:
+            knob = None
+        if knob is None:
+            try:
+                knob = nuke.String_Knob(name, label, '')
+                knob.setFlag(nuke.NO_ANIMATION)
+                knob.setFlag(nuke.INVISIBLE)
+                target.addKnob(knob)
+            except Exception:
+                knob = None
+        if knob is not None:
+            try:
+                knob.setValue(value or "")
+            except Exception:
+                pass
+
+    def _assign_read_label(read_node, parent_id: str, read_id: str):
+        if read_node is None:
+            return
+        summary = f"Charon Parent: {parent_id or 'N/A'}\\nRead ID: {read_id or 'N/A'}"
+        try:
+            label_knob = read_node['label']
+        except Exception:
+            label_knob = None
+        if label_knob is not None:
+            try:
+                label_knob.setValue(summary)
+            except Exception:
+                pass
+
+    read_id = _normalize(_safe_knob_value(node, 'charon_read_node_id'))
+    if not read_id:
+        read_id = _normalize(_node_metadata('charon/read_node_id'))
+    parent_id = _normalize(_safe_knob_value(node, 'charon_node_id'))
+    if not parent_id:
+        parent_id = _normalize(_node_metadata('charon/node_id'))
+    last_output = _safe_knob_value(node, 'charon_last_output').strip()
+    if not last_output:
+        last_output = _node_metadata('charon/last_output').strip()
+    read_hint = _safe_knob_value(node, 'charon_read_node')
+
+    existing = _find_read_by_id(read_id)
+    if existing is None and read_hint:
+        try:
+            candidate = nuke.toNode(read_hint)
+        except Exception:
+            candidate = None
+        if candidate is not None and getattr(candidate, "Class", lambda: "")() == "Read":
+            existing = candidate
+    if existing is None and parent_id:
+        existing = _find_read_by_parent(parent_id)
+
+    try:
+        recreate_knob = node.knob('charon_recreate_read')
+    except Exception:
+        recreate_knob = None
+
+    if existing is not None:
+        if recreate_knob is not None:
+            try:
+                recreate_knob.setEnabled(False)
+            except Exception:
+                pass
+        nuke.message('Linked Read node already exists.')
+        return
+
+    if not last_output:
+        nuke.message('No output path recorded yet.')
+        if recreate_knob is not None:
+            try:
+                recreate_knob.setEnabled(False)
+            except Exception:
+                pass
+        return
+
+    normalized_output = os.path.normpath(last_output)
+    if not os.path.exists(normalized_output):
+        nuke.message('Output file not found:\\n{0}'.format(normalized_output))
+        if recreate_knob is not None:
+            try:
+                recreate_knob.setEnabled(True)
+            except Exception:
+                pass
+        return
+
+    if not read_id:
+        read_id = uuid.uuid4().hex[:12].lower()
+
+    try:
+        creator_group = node.parent()
+    except Exception:
+        creator_group = None
+    if creator_group is None:
+        try:
+            creator_group = nuke.root()
+        except Exception:
+            creator_group = None
+    began_group = False
+    if creator_group is not None:
+        try:
+            creator_group.begin()
+            began_group = True
+        except Exception:
+            began_group = False
+    try:
+        read_node = nuke.createNode('Read', inpanel=False)
+    except Exception as creation_error:
+        if began_group and creator_group is not None:
+            try:
+                creator_group.end()
+            except Exception:
+                pass
+        nuke.message('Failed to create Read node: {0}'.format(creation_error))
+        return
+    finally:
+        if began_group and creator_group is not None:
+            try:
+                creator_group.end()
+            except Exception:
+                pass
+
+    try:
+        read_node['file'].setValue(normalized_output.replace('\\', '/'))
+    except Exception:
+        pass
+    try:
+        read_node.setSelected(True)
+    except Exception:
+        pass
+    try:
+        read_node.setXY(int(node.xpos()) + 200, int(node.ypos()))
+    except Exception:
+        try:
+            read_node.setXpos(node.xpos() + 200)
+            read_node.setYpos(node.ypos())
+        except Exception:
+            pass
+
+    try:
+        read_node.setMetaData('charon/read_id', read_id)
+    except Exception:
+        pass
+    if parent_id:
+        try:
+            read_node.setMetaData('charon/parent_id', parent_id)
+        except Exception:
+            pass
+
+    _ensure_hidden_string(read_node, 'charon_read_id', 'Charon Read ID', read_id)
+    if parent_id:
+        _ensure_hidden_string(read_node, 'charon_parent_id', 'Charon Parent ID', parent_id)
+
+    _assign_read_label(read_node, parent_id, read_id)
+
+    status_value = _safe_knob_value(node, 'charon_status')
+    tile_color = status_to_tile_color(status_value or 'Ready')
+    gl_color = status_to_gl_color(status_value or 'Ready')
+    try:
+        read_node['tile_color'].setValue(tile_color)
+    except Exception:
+        pass
+    if gl_color is not None:
+        try:
+            read_node['gl_color'].setValue(gl_color)
+        except Exception:
+            try:
+                read_node['gl_color'].setValue(list(gl_color))
+            except Exception:
+                pass
+
+    try:
+        node.knob('charon_read_node').setValue(read_node.name())
+    except Exception:
+        pass
+    try:
+        node.knob('charon_read_node_id').setValue(read_id)
+    except Exception:
+        pass
+    try:
+        info_knob = node.knob('charon_read_id_info')
+        if info_knob is not None:
+            info_knob.setValue(read_id or "Not linked")
+    except Exception:
+        pass
+
+    try:
+        node.setMetaData('charon/read_node', read_node.name())
+    except Exception:
+        pass
+    try:
+        node.setMetaData('charon/read_node_id', read_id)
+    except Exception:
+        pass
+
+    if recreate_knob is not None:
+        try:
+            recreate_knob.setEnabled(False)
+        except Exception:
+            pass

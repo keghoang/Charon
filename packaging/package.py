@@ -6,7 +6,7 @@ version = '1.3.0'
 
 description = 'Script Launcher for Nuke and Maya'
 
-authors = ['Alex Dingfelder']
+authors = ['Kien']
 
 tools = []
 

@@ -30,8 +30,8 @@ Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay unde
    - Analyses inputs via `workflow_analysis.analyze_ui_workflow_inputs` to build knob descriptors.
 4. **Create CharonOp** - Pressing **Grab Workflow**:
    - Invokes `workflow_runtime.spawn_charon_node()`.
-   - `node_factory.create_charon_group_node()` builds a Group node, adds input knobs, stores the raw UI workflow, injects process/import scripts, and aligns the node in the graph.
-5. **Process with ComfyUI** - The embedded button executes `charon.processor.process_charonop_node()`:
+   - `node_factory.create_charon_group_node()` builds a Group node, adds input knobs, stores the raw UI workflow, injects process/recreate scripts, and aligns the node in the graph.
+5. **Execute** - The embedded button executes `charon.processor.process_charonop_node()`:
    - Loads the bundle from the node's knobs.
    - Converts to API format when needed via `workflow_runtime.convert_workflow()`.
    - Uploads inputs through `ComfyUIClient`, submits the prompt, polls `/history`, and downloads outputs.
@@ -52,7 +52,7 @@ Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay unde
 - Manual QA checklist:
   1. Launch panel from Nuke.
   2. Grab a workflow and spawn a CharonOp.
-  3. Press **Process with ComfyUI**; verify status transitions, prompt dump, and Read node creation.
+  3. Press **Execute**; verify status transitions, prompt dump, and Read node creation.
   4. Inspect `D:\Nuke\charon\results` for outputs.
 
 ## 5. Packaging Notes

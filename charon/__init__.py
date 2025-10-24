@@ -10,7 +10,7 @@ Pipeline usage:
 """
 
 __version__ = "1.0.0"
-__author__ = "Alex Dingfelder"
+__author__ = "Kien"
 
 
 def Go(*args, **kwargs):
