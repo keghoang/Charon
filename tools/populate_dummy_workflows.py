@@ -1,5 +1,5 @@
 """
-Populate the `workflows/` directory with richer dummy data for the Galt clone.
+Populate the `workflows/` directory with richer dummy data for the Charon panel.
 
 Each workflow folder receives:
   - `.charon.json` metadata describing the preset
@@ -19,7 +19,7 @@ BASE_PATH = Path(r"C:\Users\kien\git\Charon\workflows")
 
 # Minimal dependency shortcuts so the metadata feels real without being verbose.
 DEPENDENCIES: Dict[str, Dict[str, str]] = {
-    "charon-core": {"name": "charon-core", "repo": "https://github.com/example/charon-core", "ref": "main"},
+    "charon-panel": {"name": "charon-panel", "repo": "https://github.com/example/charon-panel", "ref": "main"},
     "denoise-suite": {"name": "denoise-suite", "repo": "https://github.com/example/denoise-suite", "ref": "v0.9.2"},
     "depth-labs": {"name": "depth-labs", "repo": "https://github.com/example/depth-labs", "ref": "release/2.0"},
     "stylebank": {"name": "stylebank", "repo": "https://github.com/example/stylebank", "ref": "v1.4.1"},
@@ -43,14 +43,14 @@ USERS: Dict[str, List[Dict[str, str]]] = {
             "slug": "speed_grade",
             "description": "Grades a plate using tone curves and writes a single preview frame.",
             "tags": ["comfy", "grading", "FLUX"],
-            "deps": ["charon-core", "comfy-colors"],
+            "deps": ["charon-panel", "comfy-colors"],
             "last_changed": "2025-10-18T16:32:00Z",
         },
         {
             "slug": "texture_magic",
             "description": "Builds a texture UDIM atlas and saves a high-res preview.",
             "tags": ["comfy", "textures", "Nano-Banana"],
-            "deps": ["charon-core", "texture-baker"],
+            "deps": ["charon-panel", "texture-baker"],
             "last_changed": "2025-10-12T09:05:30Z",
         },
     ],
@@ -59,14 +59,14 @@ USERS: Dict[str, List[Dict[str, str]]] = {
             "slug": "deep_composite",
             "description": "Merges deep EXR layers using front compositing.",
             "tags": ["comfy", "deep", "MergeMaster"],
-            "deps": ["charon-core", "deep-toolkit"],
+            "deps": ["charon-panel", "deep-toolkit"],
             "last_changed": "2025-09-28T21:11:45Z",
         },
         {
             "slug": "roto_helper",
             "description": "Smooths roto mattes and outputs sanitized masks for keyers.",
             "tags": ["comfy", "mask", "Nano-Banana"],
-            "deps": ["charon-core"],
+            "deps": ["charon-panel"],
             "last_changed": "2025-10-01T11:24:00Z",
         },
     ],
@@ -75,14 +75,14 @@ USERS: Dict[str, List[Dict[str, str]]] = {
             "slug": "lighting_suite",
             "description": "Applies a studio lighting preset to a USD layout and renders a preview.",
             "tags": ["comfy", "lighting", "FLUX"],
-            "deps": ["charon-core", "usd-preset-pack"],
+            "deps": ["charon-panel", "usd-preset-pack"],
             "last_changed": "2025-10-15T05:56:10Z",
         },
         {
             "slug": "fx_batch",
             "description": "Post-processes a VDB cache, renders a few frames, and stores the sequence.",
             "tags": ["comfy", "fx", "InfernoXL"],
-            "deps": ["charon-core", "fx-library"],
+            "deps": ["charon-panel", "fx-library"],
             "last_changed": "2025-10-19T14:45:00Z",
         },
     ],
@@ -91,14 +91,14 @@ USERS: Dict[str, List[Dict[str, str]]] = {
             "slug": "denoise_batch",
             "description": "Runs SDXL denoising on an image sequence and saves previews.",
             "tags": ["comfy", "denoise", "SDXL"],
-            "deps": ["charon-core", "denoise-suite"],
+            "deps": ["charon-panel", "denoise-suite"],
             "last_changed": "2025-10-10T08:15:00Z",
         },
         {
             "slug": "depth_matting",
             "description": "Generates depth-driven mattes for green screen plates.",
             "tags": ["comfy", "depth", "matte"],
-            "deps": ["charon-core", "depth-labs"],
+            "deps": ["charon-panel", "depth-labs"],
             "last_changed": "2025-10-11T12:05:30Z",
         },
     ],

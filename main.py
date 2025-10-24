@@ -1,7 +1,7 @@
 """
-Main entry point for CharonBoard.
+Main entry point for the Charon panel.
 
-Intended to be executed directly from Nuke's Script Editor via:
+Run from Nuke's Script Editor:
     import runpy
     runpy.run_path(r"...\\Charon\\main.py", run_name="__main__")
 """
@@ -18,14 +18,14 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
 
-    from prototypes.galt_clone.galt import main as galt_main
+    from charon import main as charon_main
 
-    window = galt_main.launch()
+    window = charon_main.launch()
     if window:
-        print("CharonBoard ready.")
+        print("Charon panel ready.")
         print("=" * 60)
         print("Workflows tab: manage repository folders and spawn CharonOps.")
-        print("CharonBoard tab: monitor spawned nodes, trigger runs, and import outputs.")
+        print("Charon tab: monitor spawned nodes, trigger runs, and import outputs.")
         print("=" * 60)
     return window
 
@@ -34,5 +34,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(f"Error launching CharonBoard: {exc}")
+        print(f"Error launching Charon panel: {exc}")
         raise
