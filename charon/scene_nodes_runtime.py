@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
 from .charon_logger import system_debug, system_warning
+from .node_factory import reset_charon_node_state
 
 STATUS_PAYLOAD_META = "charon/status_payload"
 AUTO_IMPORT_META = "charon/auto_import"
@@ -47,8 +48,36 @@ def list_scene_nodes(nuke_module=None) -> List[SceneNodeInfo]:
     if nuke is None:
         return []
 
+    candidates = list(_iter_charon_nodes(nuke))
+    duplicates: Dict[str, List[Any]] = {}
+    for node in candidates:
+        node_identifier = _resolve_node_identifier(node)
+        if not node_identifier:
+            continue
+        duplicates.setdefault(node_identifier, []).append(node)
+
+    for node_id, group in duplicates.items():
+        if len(group) <= 1:
+            continue
+        sorted_group = sorted(group, key=_node_sort_key)
+        keeper = sorted_group[0]
+        for duplicate in sorted_group[1:]:
+            try:
+                new_identifier = reset_charon_node_state(duplicate) or ""
+                normalized = new_identifier.strip().lower()
+                if normalized:
+                    system_debug(
+                        f"Reset duplicated CharonOp node {duplicate.name()} with new id {normalized} (kept {keeper.name()} for {node_id})."
+                    )
+                else:
+                    system_warning(
+                        f"Detected duplicate CharonOp node {duplicate.name()} but could not assign a new id."
+                    )
+            except Exception as exc:
+                system_warning(f"Failed to reset duplicated CharonOp node {duplicate.name()}: {exc}")
+
     nodes: List[SceneNodeInfo] = []
-    for node in _iter_charon_nodes(nuke):
+    for node in candidates:
         info = _build_scene_node_info(node)
         if info:
             nodes.append(info)
@@ -172,12 +201,14 @@ def _require_nuke(nuke_module=None):
 
 
 def _iter_charon_nodes(nuke_module) -> Iterable[Any]:
+    candidates: List[Any] = []
     for node in nuke_module.allNodes():
         try:
             if node.Class() == NODE_CLASS and node.name().startswith(NODE_PREFIX):
-                yield node
+                candidates.append(node)
         except Exception:
             continue
+    return sorted(candidates, key=_node_sort_key)
 
 
 def _build_scene_node_info(node) -> Optional[SceneNodeInfo]:
@@ -217,6 +248,24 @@ def _build_scene_node_info(node) -> Optional[SceneNodeInfo]:
         f"state={info.state} progress={info.progress:.02f}"
     )
     return info
+
+
+def _resolve_node_identifier(node) -> str:
+    knob_value = _coerce_str(_read_knob_value(node, "charon_node_id"), "")
+    if knob_value:
+        return knob_value.strip().lower()[:12]
+    try:
+        meta_value = node.metadata("charon/node_id")
+    except Exception:
+        meta_value = ""
+    return _coerce_str(meta_value, "").strip().lower()[:12]
+
+
+def _node_sort_key(node: Any) -> str:
+    try:
+        return str(node.name() or "").lower()
+    except Exception:
+        return ""
 
 
 def _read_knob_value(node, name: str):

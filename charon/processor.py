@@ -21,6 +21,7 @@ from .paths import (
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from . import preferences
+from .node_factory import reset_charon_node_state
 from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile_color
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
@@ -827,6 +828,60 @@ def process_charonop_node():
             except Exception:
                 return None
 
+        def _deduplicate_node_id(candidate: str) -> str:
+            normalized = _normalize_node_id(candidate)
+            if not normalized:
+                return ""
+            try:
+                nodes_with_id: List[Any] = []
+                for other in nuke.allNodes("Group"):
+                    other_id = _normalize_node_id(_safe_knob_value(other, "charon_node_id"))
+                    if not other_id:
+                        try:
+                            meta_val = other.metadata("charon/node_id")
+                        except Exception:
+                            meta_val = ""
+                        other_id = _normalize_node_id(meta_val)
+                    if other_id == normalized:
+                        nodes_with_id.append(other)
+            except Exception:
+                return normalized
+
+            if len(nodes_with_id) <= 1:
+                return normalized
+
+            def _node_sort_key(target) -> str:
+                try:
+                    return str(target.name() or "").lower()
+                except Exception:
+                    return ""
+
+            nodes_with_id.sort(key=_node_sort_key)
+            keeper = nodes_with_id[0]
+            for duplicate in nodes_with_id[1:]:
+                try:
+                    new_identifier = reset_charon_node_state(duplicate) or ""
+                except Exception:
+                    new_identifier = ""
+                if duplicate is node:
+                    normalized = _normalize_node_id(new_identifier)
+
+            if keeper is node:
+                refreshed = _normalize_node_id(_safe_knob_value(node, "charon_node_id"))
+                return refreshed or normalized
+
+            if node in nodes_with_id[1:]:
+                refreshed = _normalize_node_id(_safe_knob_value(node, "charon_node_id"))
+                if refreshed:
+                    return refreshed
+                try:
+                    regenerated = reset_charon_node_state(node) or ""
+                except Exception:
+                    regenerated = ""
+                return _normalize_node_id(regenerated)
+
+            return normalized
+
         def ensure_charon_node_id():
             node_id = _normalize_node_id(_safe_knob_value(node, 'charon_node_id'))
             if not node_id:
@@ -842,6 +897,7 @@ def process_charonop_node():
                             knob.setValue(node_id)
                     except Exception:
                         pass
+            node_id = _deduplicate_node_id(node_id)
             if not node_id:
                 node_id = uuid.uuid4().hex[:12].lower()
                 try:
