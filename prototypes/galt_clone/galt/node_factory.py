@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 
-from .utilities import status_to_tile_color
+from .utilities import status_to_gl_color, status_to_tile_color
 
 
 def sanitize_name(name):
@@ -203,6 +203,22 @@ def create_charon_group_node(
         pass
     node.addKnob(reuse_knob)
 
+    batch_knob = nuke.Int_Knob("charon_batch_count", "Batch Count", 1)
+    batch_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        batch_knob.setRange(1, 64)
+    except Exception:
+        pass
+    try:
+        batch_knob.setValue(1)
+    except Exception:
+        pass
+    try:
+        batch_knob.setTooltip("Number of times to submit the workflow (unique seed per batch).")
+    except Exception:
+        pass
+    node.addKnob(batch_knob)
+
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)
 
@@ -217,6 +233,12 @@ def create_charon_group_node(
 
     read_id_info_knob = nuke.Text_Knob("charon_read_id_info", "Linked Read Node ID", "Not linked")
     node.addKnob(read_id_info_knob)
+
+    ready_tile = status_to_tile_color("Ready")
+    ready_gl = status_to_gl_color("Ready") or (0.0, 0.0, 0.0)
+    debug_text = f"Status=Ready | tile=0x{ready_tile:08X} | gl=" + ",".join(f"{channel:.3f}" for channel in ready_gl)
+    color_debug_knob = nuke.Text_Knob("charon_color_debug", "Color Debug", debug_text)
+    node.addKnob(color_debug_knob)
 
     status_payload = {
         "status": "Ready",
@@ -247,7 +269,7 @@ def create_charon_group_node(
         pass
 
     try:
-        node["tile_color"].setValue(status_to_tile_color("Ready"))
+        node["tile_color"].setValue(ready_tile)
     except Exception:
         pass
 

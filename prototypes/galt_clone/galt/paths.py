@@ -1,7 +1,11 @@
+import logging
 import os
+import re
 import sys
 import uuid
-import logging
+from typing import Optional, Tuple
+
+from .utilities import get_current_user_slug
 
 
 logger = logging.getLogger(__name__)
@@ -11,6 +15,13 @@ DEFAULT_COMFYUI_LAUNCH_PATH = (
     r"D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat"
 )
 RESOURCE_DIR = os.path.join(os.path.dirname(__file__), "resources")
+
+WORK_FOLDER_TEMPLATE = "{user}"
+CHARON_FOLDER_NAME = "_CHARON"
+NUKE_FALLBACK_NAME = "untitled"
+NODE_FALLBACK_ID = "unknown"
+OUTPUT_PREFIX = "CharonOutput_v"
+OUTPUT_DIRECTORY_TEMPLATE = os.path.join("CharonOp_{node_id}", "2D")
 
 
 def get_default_comfy_launch_path():
@@ -115,3 +126,114 @@ def get_placeholder_image_path():
     if os.path.exists(candidate):
         return candidate
     return ""
+
+
+def _read_env_path(name: str) -> str:
+    value = os.getenv(name) or ""
+    value = value.strip()
+    if not value:
+        return ""
+    normalized = os.path.normpath(value)
+    if os.path.exists(normalized):
+        return normalized
+    return ""
+
+
+def _sanitize_component(value: Optional[str], default: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        text = default
+    sanitized = "".join(
+        char if char.isalnum() or char in {"_", "-", ".", " "} else "_"
+        for char in text
+    )
+    sanitized = sanitized.strip("_ ").replace(" ", "_")
+    return sanitized or default
+
+
+def _determine_script_folder(script_name: Optional[str]) -> str:
+    base = os.path.splitext(script_name or "")[0]
+    return _sanitize_component(base, NUKE_FALLBACK_NAME)
+
+
+def _determine_node_segment(node_id: Optional[str]) -> Tuple[str, str]:
+    normalized = _sanitize_component(node_id, NODE_FALLBACK_ID).lower()
+    return f"CharonOp_{normalized}", normalized
+
+
+def _resolve_output_root() -> Tuple[str, bool]:
+    project_path = _read_env_path("BUCK_PROJECT_PATH")
+    if project_path:
+        return os.path.join(project_path, "Production", "Work"), True
+    work_root = _read_env_path("BUCK_WORK_ROOT")
+    if work_root:
+        return os.path.join(work_root, "Work"), False
+    fallback = os.path.join(get_charon_temp_dir(), "results")
+    return fallback, False
+
+
+def _ensure_directory(path: str) -> None:
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception as exc:
+        logger.warning("Could not create directory %s: %s", path, exc)
+
+
+def allocate_charon_output_path(
+    node_id: Optional[str],
+    script_name: Optional[str],
+    extension: Optional[str] = None,
+    user_slug: Optional[str] = None,
+) -> str:
+    """
+    Determine the versioned output path for a CharonOp run.
+
+    The directory structure follows the BUCK project conventions. When
+    BUCK_PROJECT_PATH is available the file is stored under:
+        <project>/Production/Work/<user>/_CHARON/CharonOp_<id>/2D/
+
+    If BUCK_PROJECT_PATH is missing, BUCK_WORK_ROOT is used instead:
+        <work_root>/Work/<user>/_CHARON/CharonOp_<id>/2D/
+
+    When neither environment variable is present, the path falls back to the
+    default Charon results directory.
+    """
+    extension = (extension or "").strip() or ".png"
+    if not extension.startswith("."):
+        extension = f".{extension}"
+
+    user = _sanitize_component(user_slug or get_current_user_slug(), "user")
+    _ = script_name  # script name no longer influences output directory
+    _, normalized_node_id = _determine_node_segment(node_id)
+
+    root, uses_project = _resolve_output_root()
+    if uses_project:
+        work_root = os.path.join(root, WORK_FOLDER_TEMPLATE.format(user=user))
+    else:
+        if root.endswith("results"):
+            work_root = root
+        else:
+            work_root = os.path.join(root, WORK_FOLDER_TEMPLATE.format(user=user))
+
+    directory_suffix = OUTPUT_DIRECTORY_TEMPLATE.format(node_id=normalized_node_id)
+    base_output_dir = os.path.join(work_root, CHARON_FOLDER_NAME, directory_suffix)
+
+    _ensure_directory(base_output_dir)
+
+    prefix = OUTPUT_PREFIX
+    version_pattern = re.compile(rf"{re.escape(prefix)}(\d{{4}})", re.IGNORECASE)
+    highest_version = 0
+    try:
+        for entry in os.listdir(base_output_dir):
+            match = version_pattern.match(entry)
+            if match:
+                try:
+                    highest_version = max(highest_version, int(match.group(1)))
+                except ValueError:
+                    continue
+    except FileNotFoundError:
+        pass
+
+    next_version = highest_version + 1
+    filename = f"{prefix}{next_version:04d}{extension.lower()}"
+    return os.path.join(base_output_dir, filename)
