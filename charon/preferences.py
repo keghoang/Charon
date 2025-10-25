@@ -45,17 +45,6 @@ def _notify_missing(parent: Optional[object]) -> None:
     )
     system_warning(message)
 
-    if parent is None or QtWidgets is None:
-        return
-
-    def _show_message() -> None:
-        QtWidgets.QMessageBox.information(parent, "Charon Preferences", message)  # type: ignore
-
-    if QtCore is not None:
-        QtCore.QTimer.singleShot(0, _show_message)  # type: ignore
-    else:
-        _show_message()
-
 
 def preferences_path(
     filename: str = _DEFAULT_FILENAME,
