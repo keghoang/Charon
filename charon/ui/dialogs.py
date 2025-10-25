@@ -762,7 +762,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _build_input_mapping_section(self, layout: QtWidgets.QVBoxLayout) -> None:
         """Create and populate the workflow parameter preview list."""
-        self.input_mapping_group = QtWidgets.QGroupBox("Select Inputs to Expose")
+        self.input_mapping_group = QtWidgets.QGroupBox("Select Parameters to Expose")
         self.input_mapping_group.setVisible(False)
         group_layout = QtWidgets.QVBoxLayout(self.input_mapping_group)
         group_layout.setContentsMargins(8, 8, 8, 8)
@@ -793,7 +793,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setVisible(False)
         self.input_mapping_message.setVisible(True)
 
-        base_title = "Select Inputs to Expose"
+        base_title = "Select Parameters to Expose"
         self.input_mapping_group.setTitle(base_title)
 
         cached = _get_cached_parameters(self._workflow_path)
@@ -890,7 +890,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _render_parameter_candidates(self, candidates) -> None:
         self._stop_scan_animation()
-        base_title = "Select Inputs to Expose"
+        base_title = "Select Parameters to Expose"
 
         total_attributes = sum(len(node.attributes) for node in candidates)
         if total_attributes:

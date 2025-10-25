@@ -186,7 +186,7 @@ def _discover_with_external_process(
     if not python_exe or not comfy_dir or not os.path.exists(python_exe):
         return tuple()
 
-    script_path = Path(__file__).resolve().parents[1] / "inspect_workflow_widgets.py"
+    script_path = Path(__file__).resolve().with_name("inspect_workflow_widgets.py")
     if not script_path.exists():
         return tuple()
 
