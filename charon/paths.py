@@ -235,5 +235,5 @@ def allocate_charon_output_path(
         pass
 
     next_version = highest_version + 1
-    filename = f"{prefix}{next_version:04d}{extension.lower()}"
+    filename = f"{prefix}{next_version:03d}{extension.lower()}"
     return os.path.join(base_output_dir, filename)
