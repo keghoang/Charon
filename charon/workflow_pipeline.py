@@ -106,6 +106,14 @@ comfy_dir = sys.argv[4]
 
 sys.path.insert(0, comfy_dir)
 
+# Ensure UTF-8 console so custom nodes printing emojis don't explode on Windows
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 # Ensure Comfy's utils package is used
 if "utils" in sys.modules:
     del sys.modules["utils"]
@@ -128,6 +136,48 @@ comfy.options.enable_args_parsing(False)
 from comfy.cli_args import args  # noqa: F401
 import folder_paths  # noqa: F401
 import nodes
+import server
+
+
+class _CharonRouteStub:
+    def __getattr__(self, name):
+        def decorator(*args, **kwargs):
+            def passthrough(func):
+                return func
+            return passthrough
+        return decorator
+
+
+class _CharonRouterStub:
+    def add_static(self, *args, **kwargs):
+        return None
+
+
+class _CharonAppStub:
+    def __init__(self):
+        self.router = _CharonRouterStub()
+
+    def add_routes(self, *args, **kwargs):
+        return None
+
+
+class _CharonPromptServerStub:
+    def __init__(self):
+        self.routes = _CharonRouteStub()
+        self.app = _CharonAppStub()
+        self.supports = []
+
+    def send_sync(self, *args, **kwargs):
+        return None
+
+    def __getattr__(self, _name):
+        def _noop(*args, **kwargs):
+            return None
+        return _noop
+
+
+if not hasattr(getattr(server, "PromptServer", object), "instance"):
+    server.PromptServer.instance = _CharonPromptServerStub()
 
 nodes.init_extra_nodes(init_custom_nodes=True, init_api_nodes=False)
 
