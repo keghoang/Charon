@@ -51,7 +51,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.setContentsMargins(4, 4, 4, 4)
         
-        # Create title layout with Workflows label, New button, and collapse indicators
+        # Create title layout with New Workflow button and collapse indicators
         title_container = QtWidgets.QWidget()
         title_container.setFixedHeight(config.UI_PANEL_HEADER_HEIGHT)
         title_layout = QtWidgets.QHBoxLayout(title_container)
@@ -76,9 +76,6 @@ class ScriptPanel(QtWidgets.QWidget):
         self.folders_indicator.setVisible(False)  # Hidden by default
         self.folders_indicator.clicked.connect(self._on_folders_indicator_clicked)
         title_layout.addWidget(self.folders_indicator)
-        
-        title_label = QtWidgets.QLabel("Workflows")
-        title_layout.addWidget(title_label)
         
         # Add New Workflow button - size it to fit within header
         self.new_script_button = QtWidgets.QPushButton("Add Workflow")
