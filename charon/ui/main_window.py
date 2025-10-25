@@ -1092,8 +1092,6 @@ class CharonWindow(QtWidgets.QWidget):
         readme_path = os.path.join(script_path, "readme.md")
         if os.path.exists(readme_path):
             # Reset to normal button style if it was previously a "Create" button
-            self.script_panel.script_view.openReadmeRequested.disconnect()
-            self.script_panel.script_view.openReadmeRequested.connect(self.on_open_readme_requested)
         else:
             # Make the Create button darker
             self.script_panel.script_view.openReadmeRequested.disconnect()

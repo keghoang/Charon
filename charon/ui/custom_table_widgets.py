@@ -242,9 +242,9 @@ class ScriptTableView(QtWidgets.QTableView):
         import os
         readme_path = os.path.join(script_path, "readme.md")
         if os.path.exists(readme_path):
-            readme_action = menu.addAction("Open Readme")
+            
         else:
-            readme_action = menu.addAction("Create Readme")
+
         readme_action.triggered.connect(lambda: self.openReadmeRequested.emit(script_path))
         
         menu.addSeparator()
