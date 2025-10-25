@@ -1,7 +1,7 @@
 import json
 
 
-CR_PREFIX = "cr_input"
+CHARON_INPUT_PREFIX = "charoninput"
 
 TYPE_LOOKUP = {
     "image": "image",
@@ -41,8 +41,8 @@ def analyze_workflow_inputs(workflow_data):
 
         if isinstance(class_type, str) and class_type.lower().endswith("setnode"):
             identifier = _extract_identifier(node_data)
-            if identifier and identifier.lower().startswith(CR_PREFIX):
-                remainder = identifier[len(CR_PREFIX):]
+            if identifier and identifier.lower().startswith(CHARON_INPUT_PREFIX):
+                remainder = identifier[len(CHARON_INPUT_PREFIX):]
                 if remainder.startswith("_"):
                     remainder = remainder[1:]
                 if not remainder:
@@ -139,8 +139,8 @@ def analyze_ui_workflow_inputs(ui_workflow):
         identifier = _extract_ui_identifier(node)
 
         if node_type == "SetNode":
-            if identifier and identifier.lower().startswith(CR_PREFIX):
-                remainder = identifier[len(CR_PREFIX):]
+            if identifier and identifier.lower().startswith(CHARON_INPUT_PREFIX):
+                remainder = identifier[len(CHARON_INPUT_PREFIX):]
                 if remainder.startswith("_"):
                     remainder = remainder[1:]
                 if not remainder:
