@@ -68,7 +68,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
         self.status_caption = QtWidgets.QLabel("ComfyUI Status:")
         self.status_caption.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
-        self.status_caption.setStyleSheet("color: #ffffff; font-weight: bold;")
+        self.status_caption.setStyleSheet("color: #ffffff;")
         layout.addWidget(self.status_caption)
 
         self.launch_button = QtWidgets.QPushButton("Launch")
