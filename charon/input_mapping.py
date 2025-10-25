@@ -38,6 +38,18 @@ class ExposableNode:
     attributes: Tuple[ExposableAttribute, ...]
 
 
+def _filter_prompt_nodes(nodes: Iterable[ExposableNode]) -> Tuple[ExposableNode, ...]:
+    """Filter out nodes that should not be exposed to the user."""
+    filtered: List[ExposableNode] = []
+    for node in nodes or ():
+        name = (node.name or "").strip().lower()
+        normalized = name.replace(" ", "")
+        if normalized in {"loadimage", "saveimage"} or name.startswith("load image") or name.startswith("save image"):
+            continue
+        filtered.append(node)
+    return tuple(filtered)
+
+
 class WorkflowLoadError(Exception):
     """Raised when a workflow JSON document cannot be loaded."""
 
@@ -91,7 +103,7 @@ def discover_prompt_widget_parameters(
     if resolved:
         return resolved
 
-    return _discover_with_widget_heuristic(workflow_document)
+    return _filter_prompt_nodes(_discover_with_widget_heuristic(workflow_document))
 
 
 def _discover_with_node_library(
@@ -150,14 +162,15 @@ def _discover_with_node_library(
             continue
         node_data = node_lookup.get(node_id) or {}
         node_name = _resolve_node_name(node_id, node_data, entry.get("node_type"))
-        nodes.append(
-            ExposableNode(
-                node_id=node_id,
-                name=node_name,
-                attributes=tuple(attr_map.values()),
-            )
+    nodes.append(
+        ExposableNode(
+            node_id=node_id,
+            name=node_name,
+            attributes=tuple(attr_map.values()),
         )
+    )
 
+    nodes = list(_filter_prompt_nodes(nodes))
     nodes.sort(key=lambda item: item.name.lower())
     return tuple(nodes)
 

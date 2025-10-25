@@ -163,12 +163,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if getattr(script, 'has_hotkey', False) and not hasattr(script, 'hotkey'):
                     prefix += "▶ "
                 
-                # Build the name with readme indicator
-                name_part = script.name
-                if script.has_readme():
-                    name_part += " [r]"
-                
-                return f"{prefix}{name_part}"
+                return f"{prefix}{script.name}"
                     
             elif col == self.COL_HOTKEY:
                 # Show the specific hotkey if available
