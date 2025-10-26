@@ -5,8 +5,8 @@ import os
 # =============================================================================
 
 # Window dimensions
-WINDOW_WIDTH = 650
-WINDOW_HEIGHT = 600
+WINDOW_WIDTH = 690
+WINDOW_HEIGHT = 450
 
 # Tiny Mode dimensions
 TINY_MODE_WIDTH = 200       # Default width for tiny mode (pixels)

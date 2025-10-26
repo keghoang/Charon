@@ -357,36 +357,27 @@ class CharonWindow(QtWidgets.QWidget):
         if not self.banner_label or self._banner_base_pixmap is None:
             return
         margin = getattr(config, "UI_WINDOW_MARGINS", 0)
-        available_width = max(
-            self.normal_widget.width() - (margin * 2),
-            self.banner_label.width(),
-            self._banner_base_pixmap.width(),
-        )
+        available_width = max(1, self.normal_widget.width() - (margin * 2))
         if available_width <= 0:
             return
 
         base = self._banner_base_pixmap
         target_height = self._banner_target_height or base.height()
 
-        if available_width <= base.width():
+        if available_width < base.width():
             pixmap = base.scaled(
                 available_width,
                 target_height,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
+            self.banner_label.setPixmap(pixmap)
+            banner_height = pixmap.height()
         else:
-            pixmap = QtGui.QPixmap(available_width, target_height)
-            pixmap.fill(QtGui.QColor(0, 0, 0))
-            painter = QtGui.QPainter(pixmap)
-            try:
-                x = (available_width - base.width()) // 2
-                painter.drawPixmap(x, 0, base)
-            finally:
-                painter.end()
-
-        self.banner_label.setPixmap(pixmap)
-        self.banner_label.setFixedHeight(pixmap.height())
+            # Avoid expanding the pixmap beyond its native width so layouts can still shrink later
+            self.banner_label.setPixmap(base)
+            banner_height = base.height()
+        self.banner_label.setFixedHeight(banner_height)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -414,7 +405,8 @@ class CharonWindow(QtWidgets.QWidget):
                 self.banner_label.setAlignment(Qt.AlignCenter)
                 self.banner_label.setContentsMargins(0, 0, 0, 0)
                 self.banner_label.setStyleSheet("background-color: #000;")
-                self.banner_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+                self.banner_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
+                self.banner_label.setMinimumSize(0, 0)
                 self._banner_base_pixmap = banner_pixmap
                 self._banner_target_height = banner_pixmap.height()
                 self.banner_label.setFixedHeight(self._banner_target_height)

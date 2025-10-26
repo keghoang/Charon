@@ -80,6 +80,10 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self.refresh_nodes()
         self._timer.start()
 
+        # Allow host window to shrink without the scene nodes tab enforcing a wide minimum width
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
     # ------------------------------------------------------------------ UI setup
 
     def _build_ui(self):
@@ -154,6 +158,18 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self.info_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.info_label.setFixedHeight(18)
         layout.addWidget(self.info_label)
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        """Return a relaxed minimum size so the main window can shrink freely."""
+        return QtCore.QSize(360, 260)
+
+    def sizeHint(self) -> QtCore.QSize:
+        """Keep a comfortable default size while permitting smaller layouts."""
+        hint = super().sizeHint()
+        return QtCore.QSize(
+            max(self.minimumSizeHint().width(), min(560, hint.width())),
+            max(self.minimumSizeHint().height(), min(420, hint.height())),
+        )
 
     # ------------------------------------------------------------------ Refresh logic
 
