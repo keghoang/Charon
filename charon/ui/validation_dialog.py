@@ -160,9 +160,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._issues_layout.addStretch(1)
 
         button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close, parent=self)
-        self._revalidate_button = button_box.addButton("Revalidate", QtWidgets.QDialogButtonBox.ActionRole)
         button_box.rejected.connect(self.reject)
-        self._revalidate_button.clicked.connect(self._handle_revalidate_clicked)
         layout.addWidget(button_box)
 
         self.resize(720, 540)
@@ -968,9 +966,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._append_issue_note("models", message)
 
     # ---------------------------------------------------------------- Actions
-    def _handle_revalidate_clicked(self) -> None:
-        self.done(1)
-
     def _handle_auto_resolve(self, issue_key: str) -> None:
         issue = self._issue_lookup.get(issue_key) or {}
         data = issue.get("data") or {}

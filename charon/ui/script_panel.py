@@ -14,12 +14,16 @@ from .. import config, preferences
 from ..comfy_validation import validate_comfy_environment
 from ..paths import get_default_comfy_launch_path
 from .validation_dialog import ValidationResolveDialog
-from ..workflow_local_store import write_validation_raw
+from ..workflow_local_store import (
+    clear_ui_validation_status,
+    load_ui_validation_status,
+    save_ui_validation_status,
+    write_validation_raw,
+)
 import os
 import shutil
 import re
 import json
-import hashlib
 from datetime import datetime
 
 
@@ -104,7 +108,6 @@ class ScriptPanel(QtWidgets.QWidget):
         self._validation_timer = QtCore.QTimer(self)
         self._validation_timer.setInterval(300)
         self._validation_timer.timeout.connect(self._on_validation_timer_tick)
-        self._validation_cache_root = self._ensure_validation_cache_root()
         self._validation_cache = {}
         self._closing = False
         
@@ -252,66 +255,23 @@ class ScriptPanel(QtWidgets.QWidget):
         self.folder_loader = workflow_model.FolderLoader(self)
         self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
     
-    def _ensure_validation_cache_root(self) -> str:
-        root = preferences.get_preferences_root(parent=self, ensure_dir=True)
-        cache_root = os.path.join(root, "validation_cache")
-        os.makedirs(cache_root, exist_ok=True)
-        return cache_root
-
     def _normalize_script_path(self, script_path: str) -> str:
         return os.path.normpath(script_path or "").lower()
 
-    def _cache_dir_for_script(self, script_path: str) -> str:
-        normalized = self._normalize_script_path(script_path)
-        workflow_name = os.path.basename(script_path.rstrip(os.sep)) if script_path else "workflow"
-        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", workflow_name or "workflow")
-        digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:10]
-        return os.path.join(self._validation_cache_root, f"{safe_name}_{digest}")
-
-    def _status_path_for_script(self, script_path: str) -> str:
-        return os.path.join(self._cache_dir_for_script(script_path), "status.json")
-
     def _read_validation_cache(self, script_path: str):
-        status_path = self._status_path_for_script(script_path)
-        if not os.path.exists(status_path):
-            return None
-        try:
-            with open(status_path, "r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if isinstance(payload, dict) and isinstance(payload.get("state"), str):
-                return payload
-        except Exception:
-            pass
+        cached = load_ui_validation_status(script_path or "")
+        if isinstance(cached, dict) and isinstance(cached.get("state"), str):
+            return cached
         return None
 
     def _write_validation_cache(self, script_path: str, state: str, payload) -> None:
-        status_path = self._status_path_for_script(script_path)
-        os.makedirs(os.path.dirname(status_path), exist_ok=True)
-        data = {
-            "state": state,
-            "payload": payload,
-        }
-        try:
-            with open(status_path, "w", encoding="utf-8") as handle:
-                json.dump(data, handle, indent=2)
-        except Exception:
-            pass
+        save_ui_validation_status(script_path or "", state, payload)
+        data = {"state": state, "payload": payload}
         normalized = self._normalize_script_path(script_path)
         self._validation_cache[normalized] = data
 
     def _clear_validation_cache(self, script_path: str) -> None:
-        status_path = self._status_path_for_script(script_path)
-        cache_dir = os.path.dirname(status_path)
-        try:
-            if os.path.exists(status_path):
-                os.remove(status_path)
-        except Exception:
-            pass
-        try:
-            if os.path.isdir(cache_dir) and not os.listdir(cache_dir):
-                os.rmdir(cache_dir)
-        except Exception:
-            pass
+        clear_ui_validation_status(script_path or "")
         normalized = self._normalize_script_path(script_path)
         self._validation_cache.pop(normalized, None)
 

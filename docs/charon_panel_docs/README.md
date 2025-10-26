@@ -1,4 +1,4 @@
-# Charon Architecture Documentation
+﻿# Charon Architecture Documentation
 
 This directory contains comprehensive architecture and design documentation for the Charon project.
 
@@ -37,8 +37,8 @@ This directory contains comprehensive architecture and design documentation for 
 - **11-tag-system.md** - Tag-based script organization with batched updates
 
 ### Recent Improvements
-- **Workflow Validation**: Script browser now exposes a stateful *Validate / Resolve / ✓ Passed* column that blocks Grab until a workflow passes Comfy checks.
-- **Per-User Cache**: Validation results persist under `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache\<workflow>_<hash>/status.json`, supporting bespoke model layouts per artist.
+- **Workflow Validation**: Script browser now exposes a stateful *Validate / Resolve / âœ“ Passed* column that blocks Grab until a workflow passes Comfy checks.
+- **Per-User Cache**: Validation results persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json`, supporting bespoke model layouts per artist.
 - **Context Menus**: Right-click empty space for "New Script" and "Open Folder"
 - **Panel Indicators**: Collapsible panels show << >> indicators, clickable to reopen
 - **Execution Dialog**: Real-time updates, monospace font, minimal interface
@@ -108,3 +108,4 @@ For new developers:
 - Test across Windows and Maya environments (Nuke when available)
 - Keep import patterns consistent (relative within package)
 - Document any host-specific behaviors or workarounds
+

@@ -1,4 +1,4 @@
-# Charon UI Development Patterns
+﻿# Charon UI Development Patterns
 
 ## Qt Architecture Guidelines
 
@@ -77,7 +77,7 @@ class SomeLoader(QtCore.QThread):
 - **Implementation**: Uses flat QPushButtons with custom stylesheets
 
 ### Workflow Browser Interactions
-- **Validation Column**: `ScriptTableModel` exposes a dedicated column that cycles between *Validate* ? *Validating�* ? *Resolve* ? *? Passed*. Delegates consume `ValidationStateRole` to render state and colorize the button text.`n- **Run Guarding**: Grab/Execute buttons consult the same validation role, keeping the control visible but disabled until a workflow reaches *? Passed*.`n- **Context Actions**: Right-clicking the Validate column offers *Revalidate*, and�when Advanced User Mode is enabled�*Show Raw Validation Payload*.`n- **Per-Workflow Caching**: Validation results are restored from `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache/<workflow>_<hash>/status.json` during `ScriptPanel.on_scripts_loaded`, allowing offline browsing without re-hitting ComfyUI.**: Validation results are restored from `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache/<workflow>_<hash>/status.json` during `ScriptPanel.on_scripts_loaded`, allowing offline browsing without re-hitting ComfyUI.
+- **Validation Column**: `ScriptTableModel` exposes a dedicated column that cycles between *Validate* ? *Validating…* ? *Resolve* ? *? Passed*. Delegates consume `ValidationStateRole` to render state and colorize the button text.`n- **Run Guarding**: Grab/Execute buttons consult the same validation role, keeping the control visible but disabled until a workflow reaches *? Passed*.`n- **Context Actions**: Right-clicking the Validate column offers *Revalidate*, and—when Advanced User Mode is enabled—*Show Raw Validation Payload*.`n- **Per-Workflow Caching**: Validation results are restored from `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json` during `ScriptPanel.on_scripts_loaded`, allowing offline browsing without re-hitting ComfyUI.**: Validation results are restored from `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json` during `ScriptPanel.on_scripts_loaded`, allowing offline browsing without re-hitting ComfyUI.
 - **Quick Output Access**: CharonOp action menu includes *Open Output Folder*, wired to the `charon_last_output` knob so artists jump directly to the most recent render batch.
 
 ## Tag System
@@ -90,7 +90,7 @@ class SomeLoader(QtCore.QThread):
 - Multiple tags can be selected (shows scripts with ANY selected tag)
 
 ### Tag Management
-- **Tag Manager Dialog**: Accessed via right-click → "Manage Tags"
+- **Tag Manager Dialog**: Accessed via right-click â†’ "Manage Tags"
   - Shows all tags in the folder with checkboxes
   - Checked tags are assigned to the selected script
   - Add new tags with input field
@@ -173,4 +173,5 @@ description:
 globs:
 alwaysApply: false
 ---
+
 

@@ -12,13 +12,18 @@ from typing import Any, Dict, Optional, Tuple
 from . import config, preferences
 from .charon_logger import system_debug, system_warning
 from .conversion_cache import clear_conversion_cache, compute_workflow_hash
-from .validation_cache import get_validation_log_path
 
 LOCAL_REPO_DIR = "Charon_repo_local"
 LOCAL_WORKFLOW_DIR = "workflow"
 VALIDATED_FILENAME = "workflow_validated.json"
 STATE_FILENAME = "workflow_state.json"
 CACHE_DIR_NAME = ".charon_cache"
+LEGACY_VALIDATION_CACHE_DIR = "validation_cache"
+LEGACY_WORKFLOW_CACHE_DIR = "workflow_cache"
+LEGACY_CACHE_SUBDIR = ".charon_cache"
+UI_STATUS_FILENAME = "validation_status.json"
+LEGACY_UI_STATUS_FILENAME = "status.json"
+VALIDATION_LOG_FILENAME = "validation_log.json"
 
 
 class WorkflowState(Dict[str, Any]):
@@ -27,6 +32,195 @@ class WorkflowState(Dict[str, Any]):
 
 def _preferences_root(ensure: bool = True) -> str:
     return preferences.get_preferences_root(ensure_dir=ensure)
+
+
+def get_workflow_cache_dir(remote_folder: str, *, ensure: bool = True) -> Path:
+    folder = Path(get_local_workflow_folder(remote_folder, ensure=ensure))
+    cache_dir = folder / CACHE_DIR_NAME
+    if ensure:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def validation_cache_has_artifacts(remote_folder: str) -> bool:
+    cache_root = get_validation_cache_root(remote_folder, ensure=False)
+    if not cache_root.exists():
+        return False
+    try:
+        return any(cache_root.iterdir())
+    except Exception:
+        return False
+
+
+def _legacy_ui_validation_cache_dir(remote_folder: str) -> Path:
+    root = Path(preferences.get_preferences_root(ensure_dir=True)) / LEGACY_VALIDATION_CACHE_DIR
+    normalized = os.path.normpath(remote_folder or "").lower()
+    workflow_name = os.path.basename(remote_folder.rstrip(os.sep)) if remote_folder else "workflow"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", workflow_name or "workflow") or "workflow"
+    digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return root / f"{safe_name}_{digest}"
+
+
+def _legacy_validation_cache_dir(remote_folder: str) -> Path:
+    root = Path(preferences.get_preferences_root(ensure_dir=True)) / LEGACY_WORKFLOW_CACHE_DIR
+    normalized = os.path.normpath(remote_folder or "").lower()
+    workflow_name = os.path.basename(remote_folder.rstrip(os.sep)) if remote_folder else "workflow"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", workflow_name or "workflow") or "workflow"
+    digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return root / f"{safe_name}_{digest}" / LEGACY_CACHE_SUBDIR
+
+
+def workflow_validation_log_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
+    cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
+    return cache_root / VALIDATION_LOG_FILENAME
+
+
+def _legacy_validation_log_path(remote_folder: str) -> Path:
+    return _legacy_validation_cache_dir(remote_folder) / VALIDATION_LOG_FILENAME
+
+
+def migrate_validation_log(remote_folder: str) -> None:
+    if not remote_folder:
+        return
+    new_path = workflow_validation_log_path(remote_folder, ensure_parent=False)
+    if new_path.exists():
+        return
+    legacy_path = _legacy_validation_log_path(remote_folder)
+    if not legacy_path.exists():
+        return
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_path), str(new_path))
+        legacy_dir = legacy_path.parent
+        try:
+            if legacy_dir.exists() and not any(legacy_dir.iterdir()):
+                legacy_dir.rmdir()
+            parent = legacy_dir.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception:
+            pass
+    except Exception as exc:
+        system_warning(f"Failed to migrate validation log for '{remote_folder}': {exc}")
+
+
+def ui_validation_status_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
+    cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
+    return cache_root / UI_STATUS_FILENAME
+
+
+def _legacy_ui_status_path(remote_folder: str) -> Path:
+    return _legacy_ui_validation_cache_dir(remote_folder) / LEGACY_UI_STATUS_FILENAME
+
+
+def _migrate_ui_validation_status(remote_folder: str) -> None:
+    if not remote_folder:
+        return
+    new_path = ui_validation_status_path(remote_folder, ensure_parent=False)
+    if new_path.exists():
+        return
+    legacy_path = _legacy_ui_status_path(remote_folder)
+    if not legacy_path.exists():
+        return
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_path), str(new_path))
+        # Remove emptied legacy directory if possible
+        legacy_dir = legacy_path.parent
+        if legacy_dir.exists() and not any(legacy_dir.iterdir()):
+            legacy_dir.rmdir()
+    except Exception as exc:
+        system_warning(f"Failed to migrate validation status for '{remote_folder}': {exc}")
+
+
+def load_ui_validation_status(remote_folder: str) -> Optional[Dict[str, Any]]:
+    if not remote_folder:
+        return None
+    _migrate_ui_validation_status(remote_folder)
+    status_path = ui_validation_status_path(remote_folder, ensure_parent=False)
+    legacy_local_status = status_path.with_name(LEGACY_UI_STATUS_FILENAME)
+    if not status_path.exists() and legacy_local_status.exists():
+        try:
+            legacy_local_status.rename(status_path)
+        except Exception as exc:
+            system_warning(
+                f"Failed to rename legacy validation status for '{remote_folder}': {exc}"
+            )
+            status_path = legacy_local_status
+    if not status_path.exists():
+        return None
+    try:
+        with status_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict):
+            state = payload.get("state")
+            if isinstance(state, str):
+                return payload
+    except Exception as exc:
+        system_warning(f"Failed to read validation status for '{remote_folder}': {exc}")
+    return None
+
+
+def save_ui_validation_status(remote_folder: str, state: str, payload: Any) -> None:
+    if not remote_folder or not isinstance(state, str):
+        return
+    status_path = ui_validation_status_path(remote_folder, ensure_parent=True)
+    data = {"state": state, "payload": payload}
+    try:
+        with status_path.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+    except Exception as exc:
+        system_warning(f"Failed to write validation status for '{remote_folder}': {exc}")
+        return
+    legacy_local_status = status_path.with_name(LEGACY_UI_STATUS_FILENAME)
+    if legacy_local_status.exists():
+        try:
+            legacy_local_status.unlink()
+        except Exception:
+            pass
+    legacy_path = _legacy_ui_status_path(remote_folder)
+    if legacy_path.exists():
+        try:
+            legacy_path.unlink()
+        except Exception:
+            pass
+        legacy_dir = legacy_path.parent
+        try:
+            if legacy_dir.exists() and not any(legacy_dir.iterdir()):
+                legacy_dir.rmdir()
+        except Exception:
+            pass
+
+
+def clear_ui_validation_status(remote_folder: str) -> None:
+    if not remote_folder:
+        return
+    status_path = ui_validation_status_path(remote_folder, ensure_parent=False)
+    try:
+        if status_path.exists():
+            status_path.unlink()
+    except Exception as exc:
+        system_warning(f"Failed to remove validation status for '{remote_folder}': {exc}")
+    # Attempt to clean empty directory
+    parent = status_path.parent
+    try:
+        if parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+    except Exception:
+        pass
+    # Remove legacy artifacts if they remain
+    legacy_local_status = status_path.with_name(LEGACY_UI_STATUS_FILENAME)
+    if legacy_local_status.exists():
+        try:
+            legacy_local_status.unlink()
+        except Exception:
+            pass
+    legacy_dir = _legacy_ui_validation_cache_dir(remote_folder)
+    if legacy_dir.exists():
+        try:
+            shutil.rmtree(legacy_dir)
+        except OSError as exc:
+            system_warning(f"Failed to clear legacy UI validation cache at {legacy_dir}: {exc}")
 
 
 def _local_repo_root(ensure: bool = True) -> str:
@@ -70,17 +264,31 @@ def get_validated_workflow_path(remote_folder: str, *, ensure: bool = True) -> s
     return os.path.join(folder, VALIDATED_FILENAME)
 
 
-def _state_path(remote_folder: str, *, ensure: bool = True) -> str:
-    folder = get_local_workflow_folder(remote_folder, ensure=ensure)
-    return os.path.join(folder, STATE_FILENAME)
+def _state_path(remote_folder: str, *, ensure: bool = True) -> Path:
+    cache_dir = get_workflow_cache_dir(remote_folder, ensure=ensure)
+    return cache_dir / STATE_FILENAME
+
+
+def _legacy_state_path(remote_folder: str) -> Path:
+    folder = Path(get_local_workflow_folder(remote_folder, ensure=False))
+    return folder / STATE_FILENAME
 
 
 def load_workflow_state(remote_folder: str) -> WorkflowState:
     path = _state_path(remote_folder, ensure=False)
-    if not os.path.exists(path):
+    if not path.exists():
+        legacy = _legacy_state_path(remote_folder)
+        if legacy.exists():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(path))
+            except Exception as exc:
+                system_warning(f"Failed to migrate workflow state for '{remote_folder}': {exc}")
+                path = legacy
+    if not path.exists():
         return WorkflowState()
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if isinstance(payload, dict):
             return WorkflowState(payload)
@@ -92,20 +300,33 @@ def load_workflow_state(remote_folder: str) -> WorkflowState:
 def _write_workflow_state(remote_folder: str, state: WorkflowState) -> WorkflowState:
     path = _state_path(remote_folder, ensure=True)
     try:
-        with open(path, "w", encoding="utf-8") as handle:
+        with path.open("w", encoding="utf-8") as handle:
             json.dump(state, handle, indent=2)
     except Exception as exc:
         system_warning(f"Failed to persist workflow state for '{remote_folder}': {exc}")
+    else:
+        legacy = _legacy_state_path(remote_folder)
+        if legacy.exists():
+            try:
+                legacy.unlink()
+            except Exception:
+                pass
     return state
 
 
 def _clear_validation_cache(remote_folder: str) -> None:
-    log_path = get_validation_log_path(remote_folder, ensure_parent=False)
+    log_path = workflow_validation_log_path(remote_folder, ensure_parent=False)
     try:
         if log_path.exists():
             log_path.unlink()
     except Exception as exc:
         system_warning(f"Failed to remove validation log for '{remote_folder}': {exc}")
+    legacy_log = _legacy_validation_log_path(remote_folder)
+    if legacy_log.exists():
+        try:
+            legacy_log.unlink()
+        except Exception as exc:
+            system_warning(f"Failed to remove legacy validation log for '{remote_folder}': {exc}")
 
     cache_root = get_validation_cache_root(remote_folder, ensure=False)
     resolve_log = cache_root / "validation_resolve_log.json"
@@ -116,6 +337,18 @@ def _clear_validation_cache(remote_folder: str) -> None:
                 artifact.unlink()
         except Exception as exc:
             system_warning(f"Failed to remove validation artifact {artifact}: {exc}")
+    try:
+        if cache_root.exists() and not any(cache_root.iterdir()):
+            cache_root.rmdir()
+    except Exception:
+        pass
+
+    legacy_dir = _legacy_validation_cache_dir(remote_folder)
+    if legacy_dir.exists():
+        try:
+            shutil.rmtree(legacy_dir)
+        except OSError as exc:
+            system_warning(f"Failed to clear legacy validation cache at {legacy_dir}: {exc}")
 
 
 def _clear_local_cache_folder(local_folder: str) -> None:
@@ -141,17 +374,7 @@ def _clear_ui_validation_cache(remote_folder: str) -> None:
     """
     Remove the UI validation cache (script panel) associated with the workflow.
     """
-    root = Path(preferences.get_preferences_root(ensure_dir=True)) / "validation_cache"
-    normalized = os.path.normpath(remote_folder or "").lower()
-    workflow_name = os.path.basename(remote_folder.rstrip(os.sep)) if remote_folder else "workflow"
-    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", workflow_name or "workflow") or "workflow"
-    digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:10]
-    cache_dir = root / f"{safe_name}_{digest}"
-    if cache_dir.exists():
-        try:
-            shutil.rmtree(cache_dir)
-        except OSError as exc:
-            system_warning(f"Failed to clear UI validation cache at {cache_dir}: {exc}")
+    clear_ui_validation_status(remote_folder)
 
 
 def synchronize_remote_payload(
@@ -170,8 +393,12 @@ def synchronize_remote_payload(
     local_path = get_validated_workflow_path(remote_folder, ensure=True)
     state = load_workflow_state(remote_folder)
     new_source_hash = compute_workflow_hash(workflow_payload)
-    source_changed = state.get("source_hash") != new_source_hash
-
+    cache_present = validation_cache_has_artifacts(remote_folder)
+    source_hash = state.get("source_hash")
+    if source_hash is None:
+        source_changed = not cache_present
+    else:
+        source_changed = source_hash != new_source_hash
     if source_changed:
         system_debug(
             f"[WorkflowSync] Source workflow changed for '{remote_folder}'; "
