@@ -49,7 +49,7 @@ else:  # Linux
 # Repository search paths - used when no repository is specified at runtime
 # First existing path will be used
 # Priority order: Runtime argument → CHARON_REPO env var → These paths
-WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows"
+WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\workflows"
 REPOSITORY_SEARCH_PATHS = [
     WORKFLOW_REPOSITORY_ROOT,
 ]

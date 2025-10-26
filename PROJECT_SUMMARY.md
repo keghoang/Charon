@@ -38,7 +38,7 @@ Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay unde
    - Updates `charon_status`, writes prompt dumps, and creates Read nodes for results.
 
 ## 3. Key Paths & Directories
-- Workflows live under `\buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows` (per `config.WORKFLOW_REPOSITORY_ROOT`).
+- Workflows live under `\buck\globalprefs\SHARED\CODE\Charon_repo\workflows` (per `config.WORKFLOW_REPOSITORY_ROOT`).
 - Runtime artifacts are written to `D:\Nuke\charon\{temp,exports,results,status,debug}` via helpers in `charon/paths.py`.
 - Preferences persist in `%LOCALAPPDATA%\Charon\plugins\charon\preferences.json`.
 
