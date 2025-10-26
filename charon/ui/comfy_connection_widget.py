@@ -34,6 +34,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._manual_cursor_override = False
         self._launch_in_progress = False
         self._launch_started_at = 0.0
+        self._is_shutting_down = False
 
         self._connection_check_finished.connect(self._apply_connection_result)
 
@@ -149,6 +150,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
     def _check_connection(self, manual: bool = False) -> None:
         if not self._comfy_path or self._check_in_progress:
             return
+        if self._is_shutting_down:
+            return
 
         now = time.time()
         if self._launch_in_progress and now - self._launch_started_at > 600:
@@ -163,6 +166,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
             self._manual_cursor_override = True
 
+        target_ref = QtCore.QPointer(self)
+
         def worker():
             connected = False
             client = None
@@ -175,7 +180,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 connected = False
                 client = None
 
-            self._connection_check_finished.emit(connected, client, manual)
+            if target_ref:
+                target_ref._connection_check_finished.emit(connected, client, manual)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -428,6 +434,28 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         Expose the configured ComfyUI launch path without breaking encapsulation.
         """
         return self._comfy_path
+
+    def closeEvent(self, event) -> None:
+        self._is_shutting_down = True
+        try:
+            self._watch_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._blink_timer.stop()
+        except Exception:
+            pass
+        if self._manual_cursor_override:
+            try:
+                QtWidgets.QApplication.restoreOverrideCursor()
+            except Exception:
+                pass
+            self._manual_cursor_override = False
+        try:
+            self._connection_check_finished.disconnect(self._apply_connection_result)
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 
 class ConnectionSettingsPopover(QtWidgets.QDialog):

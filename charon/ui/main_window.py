@@ -292,8 +292,60 @@ class CharonWindow(QtWidgets.QWidget):
                 system_info(f"Removed hotkeys for {len(missing_scripts)} missing scripts: {', '.join(script_names)}")
         return missing_scripts
 
+    def _list_active_charonops(self):
+        try:
+            import nuke  # type: ignore
+        except ImportError:
+            return []
+
+        try:
+            all_nodes = nuke.allNodes(recurse=True)
+        except Exception:
+            all_nodes = []
+
+        active = []
+        for node in all_nodes:
+            try:
+                status_knob = node.knob("charon_status")
+            except Exception:
+                status_knob = None
+            if status_knob is None:
+                continue
+            try:
+                status_value = status_knob.value()
+            except Exception:
+                status_value = ""
+            normalized = str(status_value or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized in {"ready", "completed", "complete", "error", "failed"}:
+                continue
+            active.append(node)
+        return active
+
     def closeEvent(self, event):
         """Clean up background threads and stream patches when window is closed."""
+        active_nodes = self._list_active_charonops()
+        if active_nodes:
+            node_names = ", ".join(node.name() for node in active_nodes[:5])
+            if len(active_nodes) > 5:
+                node_names += "..."
+            message = (
+                "CharonOp processing is still running.\n\n"
+                f"Active nodes: {node_names}\n\n"
+                "Are you sure you want to close Charon?"
+            )
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "CharonOps Processing",
+                message,
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                event.ignore()
+                return
+
         if hasattr(self, 'script_panel') and hasattr(self.script_panel, 'folder_loader'):
             self.script_panel.folder_loader.stop_loading()
         if hasattr(self, 'global_indexer'):
