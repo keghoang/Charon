@@ -13,6 +13,7 @@ from ..metadata_manager import invalidate_metadata_path
 from .. import config, preferences
 from ..comfy_validation import validate_comfy_environment
 from ..paths import get_default_comfy_launch_path
+from .validation_dialog import ValidationResolveDialog
 import os
 import shutil
 import re
@@ -196,6 +197,7 @@ class ScriptPanel(QtWidgets.QWidget):
         # Connect the script_run signal from the table view
         self.script_view.script_run.connect(self._handle_script_run_request)
         self.script_view.script_validate.connect(self._handle_script_validate_request)
+        self.script_view.script_show_validation_payload.connect(self._handle_script_show_payload_request)
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
@@ -209,6 +211,8 @@ class ScriptPanel(QtWidgets.QWidget):
         # Connect empty space context menu signals
         self.script_view.createScriptInCurrentFolder.connect(self._on_create_script_clicked)
         self.script_view.openCurrentFolder.connect(self._on_open_current_folder)
+        self.script_view.script_revalidate.connect(self._handle_script_revalidate_request)
+        self.script_view.set_advanced_mode_provider(self._is_advanced_mode_enabled)
         
         # Store reference for parent folder updates
         self.parent_folder = None
@@ -709,6 +713,18 @@ class ScriptPanel(QtWidgets.QWidget):
             comfy_path = get_default_comfy_launch_path()
         return (comfy_path or "").strip()
 
+    def _is_advanced_mode_enabled(self) -> bool:
+        """Check whether advanced user mode is enabled for the current host."""
+        host = getattr(self, "host", None)
+        try:
+            value = user_settings_db.get_app_setting_for_host(
+                "advanced_user_mode", host, default="off"
+            )
+        except Exception:
+            return False
+        normalized = str(value or "off").strip().lower()
+        return normalized in {"on", "true", "1", "yes"}
+
     def _start_validation(self, script_path: str, workflow_bundle: dict) -> None:
         comfy_path = self._resolve_comfy_path()
         if not comfy_path:
@@ -780,6 +796,30 @@ class ScriptPanel(QtWidgets.QWidget):
 
     def _show_validation_payload(self, script_path: str) -> bool:
         payload = self.script_model.get_validation_payload(script_path)
+        if not isinstance(payload, dict):
+            QtWidgets.QMessageBox.information(
+                self,
+                "Validation",
+                "No structured validation details are available yet for this workflow.",
+            )
+            return False
+
+        workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
+        comfy_path = self._resolve_comfy_path()
+        bundle = self._load_workflow_bundle_safe(script_path)
+        dialog = ValidationResolveDialog(
+            payload,
+            workflow_name=workflow_name,
+            comfy_path=comfy_path,
+            workflow_bundle=bundle,
+            parent=self,
+        )
+        exec_dialog(dialog)
+        return dialog.result() == 1
+
+    def _show_raw_validation_payload(self, script_path: str) -> bool:
+        """Display the raw validation payload for advanced users."""
+        payload = self.script_model.get_validation_payload(script_path)
         if payload is None:
             QtWidgets.QMessageBox.information(
                 self,
@@ -792,13 +832,13 @@ class ScriptPanel(QtWidgets.QWidget):
             payload_text = payload
         else:
             try:
-                payload_text = json.dumps(payload, indent=2)
+                payload_text = json.dumps(payload, indent=2, sort_keys=True)
             except TypeError:
                 payload_text = str(payload)
 
         dialog = QtWidgets.QDialog(self)
         workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
-        dialog.setWindowTitle(f"Validation Result - {workflow_name}")
+        dialog.setWindowTitle(f"Validation Payload - {workflow_name}")
         dialog_layout = QtWidgets.QVBoxLayout(dialog)
 
         text_widget = QtWidgets.QPlainTextEdit(dialog)
@@ -815,6 +855,25 @@ class ScriptPanel(QtWidgets.QWidget):
         dialog.resize(720, 540)
         exec_dialog(dialog)
         return dialog.result() == 1
+
+    def _handle_script_revalidate_request(self, script_path: str) -> None:
+        """Force a revalidation run for the given workflow."""
+        if not script_path:
+            return
+        if self.script_model.get_validation_state(script_path) == "validating":
+            return
+        bundle = self._load_workflow_bundle_safe(script_path)
+        if not bundle:
+            return
+        self._start_validation(script_path, bundle)
+
+    def _handle_script_show_payload_request(self, script_path: str) -> None:
+        """Show the raw validation payload when advanced mode is enabled."""
+        if not script_path:
+            return
+        revalidate = self._show_raw_validation_payload(script_path)
+        if revalidate:
+            self._handle_script_revalidate_request(script_path)
 
     def on_script_run(self, index):
         if not index.isValid():

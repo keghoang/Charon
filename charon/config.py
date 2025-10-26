@@ -229,6 +229,11 @@ APP_SETTING_DEFINITIONS = {
         "default": "off",
         "choices": ["off", "on"],
     },
+    "advanced_user_mode": {
+        "slug": "advanced_mode",
+        "default": "off",
+        "choices": ["off", "on"],
+    },
     "tiny_offset_x": {
         "slug": "tiny_offset_x",
         "default": "0",

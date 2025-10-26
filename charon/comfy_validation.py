@@ -174,6 +174,8 @@ try:
     from comfy.cli_args import args  # noqa: F401
     import folder_paths
 
+    models_dir = os.path.join(comfy_dir, "models")
+
     with open(input_path, "r", encoding="utf-8") as handle:
         references = json.load(handle)
 
@@ -236,34 +238,22 @@ try:
                     seen.add(norm)
                     yield norm
 
-    def _all_categories():
-        mapping = getattr(folder_paths, "folder_names_and_paths", {})
-        if isinstance(mapping, dict):
-            return list(mapping.keys())
-        getter = getattr(folder_paths, "get_folder_names", None)
-        if callable(getter):
-            try:
-                names = getter()
-                if isinstance(names, (list, tuple, set)):
-                    return list(names)
-            except Exception:
-                pass
-        return [
-            "checkpoints",
-            "vae",
-            "loras",
-            "embeddings",
-            "clip",
-            "controlnet",
-            "unet",
-        ]
-
-    def _try_resolve(category, name):
+    def _try_resolve(category, name, attempted, attempted_dirs):
+        category = (category or "").strip()
+        if not category:
+            return None
+        if category not in attempted:
+            attempted.append(category)
         getter = getattr(folder_paths, "get_full_path", None)
         if callable(getter):
             try:
                 candidate = getter(category, name)
                 if candidate and os.path.exists(candidate):
+                    directory = os.path.dirname(candidate)
+                    if directory:
+                        abs_dir = os.path.abspath(directory)
+                        if abs_dir not in attempted_dirs:
+                            attempted_dirs.append(abs_dir)
                     return os.path.abspath(candidate)
             except Exception:
                 pass
@@ -272,31 +262,45 @@ try:
             try:
                 candidate = getter(category, name)
                 if candidate and os.path.exists(candidate):
+                    directory = os.path.dirname(candidate)
+                    if directory:
+                        abs_dir = os.path.abspath(directory)
+                        if abs_dir not in attempted_dirs:
+                            attempted_dirs.append(abs_dir)
                     return os.path.abspath(candidate)
             except Exception:
                 pass
         normalized = _normalize(name)
         basename = os.path.basename(normalized)
         for base in _iter_folder_paths(category):
-            candidate = os.path.join(base, normalized)
+            abs_base = os.path.abspath(base)
+            if abs_base not in attempted_dirs:
+                attempted_dirs.append(abs_base)
+            candidate = os.path.join(abs_base, normalized)
             if os.path.exists(candidate):
                 return os.path.abspath(candidate)
-            candidate = os.path.join(base, basename)
+            candidate = os.path.join(abs_base, basename)
             if os.path.exists(candidate):
                 return os.path.abspath(candidate)
         return None
-
-    categories = _all_categories()
 
     for entry in references:
         index = entry.get("index")
         name = entry.get("name") or ""
         category = entry.get("category") or ""
         node_type = entry.get("node_type") or ""
+        attempted_dirs = []
+        attempted = []
 
         if not name:
             payload["missing"].append(
-                {"index": index, "reason": "empty", "category": category, "node_type": node_type}
+                {
+                    "index": index,
+                    "reason": "empty",
+                    "category": category,
+                    "node_type": node_type,
+                    "attempted": list(attempted),
+                }
             )
             continue
 
@@ -304,22 +308,8 @@ try:
         resolved_category = None
 
         if category:
-            resolved_path = _try_resolve(category, name)
+            resolved_path = _try_resolve(category, name, attempted, attempted_dirs)
             if resolved_path:
-                resolved_category = category
-
-        if not resolved_path:
-            for candidate_category in categories:
-                resolved_path = _try_resolve(candidate_category, name)
-                if resolved_path:
-                    resolved_category = candidate_category
-                    break
-
-        if not resolved_path and category:
-            normalized = _normalize(name)
-            direct = os.path.join(comfy_dir, normalized)
-            if os.path.exists(direct):
-                resolved_path = os.path.abspath(direct)
                 resolved_category = category
 
         if resolved_path:
@@ -333,7 +323,14 @@ try:
             )
         else:
             payload["missing"].append(
-                {"index": index, "name": name, "category": category, "node_type": node_type}
+                {
+                    "index": index,
+                    "name": name,
+                    "category": resolved_category or category,
+                    "node_type": node_type,
+                    "attempted": list(attempted),
+                    "searched": [os.path.abspath(path) for path in attempted_dirs],
+                }
             )
 except Exception as exc:  # pragma: no cover - defensive path
     payload["errors"].append(f"{exc.__class__.__name__}: {exc}")
@@ -662,6 +659,13 @@ def _validate_models(
     resolved_categories = resolver_result.get("categories") or {}
     resolver_errors = resolver_result.get("errors") or []
 
+    resolver_missing_entries = resolver_result.get("missing") or []
+    missing_by_index = {}
+    for entry in resolver_missing_entries:
+        idx = entry.get("index")
+        if isinstance(idx, int):
+            missing_by_index[idx] = entry
+
     if resolver_result:
         data["resolver"] = {
             "resolved": [
@@ -672,7 +676,7 @@ def _validate_models(
                 }
                 for idx in sorted(resolved_by_comfy.keys())
             ],
-            "missing": resolver_result.get("missing") or [],
+            "missing": resolver_missing_entries,
         }
         if resolver_errors:
             data["resolver_errors"] = list(resolver_errors)
@@ -702,6 +706,31 @@ def _validate_models(
                 found_set.add(resolved)
                 found_paths.append(resolved)
         else:
+            resolver_info = missing_by_index.get(idx)
+            if resolver_info:
+                resolver_category = resolver_info.get("category")
+                if resolver_category:
+                    reference["category"] = resolver_category
+                attempted = resolver_info.get("attempted") or []
+                if attempted:
+                    # Preserve order while removing duplicates
+                    unique_attempted = []
+                    for value in attempted:
+                        if value and value not in unique_attempted:
+                            unique_attempted.append(value)
+                    if unique_attempted:
+                        reference["attempted_categories"] = unique_attempted
+                searched_dirs = resolver_info.get("searched") or []
+                if searched_dirs:
+                    normalized_dirs: List[str] = []
+                    for directory in searched_dirs:
+                        if not isinstance(directory, str):
+                            continue
+                        abs_dir = os.path.abspath(directory)
+                        if abs_dir not in normalized_dirs:
+                            normalized_dirs.append(abs_dir)
+                    if normalized_dirs:
+                        reference["attempted_directories"] = normalized_dirs
             missing.append(reference)
 
     data["found"] = found_paths
@@ -709,11 +738,70 @@ def _validate_models(
 
     if missing:
         summary = f"Missing {len(missing)} model file(s)."
-        detail_lines = [
-            f"{item['name']} ({item.get('category') or 'models'})"
-            for item in missing
-        ]
-        detail_lines.append("Confirm the files exist under ComfyUI/models.")
+        detail_lines = []
+        for item in missing:
+            attempted_dirs = item.get("attempted_directories") or []
+            search_directories: List[str] = []
+            for directory in attempted_dirs:
+                if not isinstance(directory, str):
+                    continue
+                abs_dir = os.path.abspath(directory)
+                if not os.path.isdir(abs_dir):
+                    continue
+                try:
+                    if os.path.commonpath([abs_dir, models_root]) != os.path.abspath(models_root):
+                        continue
+                except ValueError:
+                    continue
+                if abs_dir not in search_directories:
+                    search_directories.append(abs_dir)
+
+            attempted = item.get("attempted_categories") or []
+            unique_attempted: List[str] = []
+            for entry in attempted:
+                entry = (entry or "").strip()
+                if entry and entry not in unique_attempted:
+                    unique_attempted.append(entry)
+
+            for category in unique_attempted:
+                if not category:
+                    continue
+                directory = os.path.abspath(os.path.join(models_root, category))
+                if not os.path.isdir(directory):
+                    continue
+                if directory not in search_directories:
+                    search_directories.append(directory)
+
+            display_paths: List[str] = []
+            for directory in search_directories:
+                display_value = None
+                try:
+                    rel_models = os.path.relpath(directory, models_root)
+                    if not rel_models.startswith(".."):
+                        rel_models = rel_models.replace("\\", "/")
+                        display_value = f"models/{rel_models}" if rel_models else "models"
+                except Exception:
+                    pass
+
+                if display_value is None and comfy_dir:
+                    try:
+                        rel_comfy = os.path.relpath(directory, comfy_dir)
+                        if not rel_comfy.startswith(".."):
+                            rel_comfy = rel_comfy.replace("\\", "/")
+                            display_value = rel_comfy
+                    except Exception:
+                        pass
+
+                if display_value is None:
+                    display_value = directory.replace("\\", "/")
+
+                if display_value and display_value not in display_paths:
+                    display_paths.append(display_value)
+
+            locations = ", ".join(display_paths) if display_paths else "models"
+            detail_lines.append(f"Cannot find <b>{item['name']}</b> under <b>{locations}</b>")
+
+        detail_lines.append("Confirm the files exist under the appropriate ComfyUI/models subfolder.")
         return ValidationIssue(
             key="models",
             label="Models available",
@@ -790,7 +878,8 @@ def _resolve_models_with_comfy(
 
     resolved_map: Dict[int, str] = {}
     category_map: Dict[int, str] = {}
-    missing_indexes: set = set()
+    missing_map: Dict[int, Dict[str, Any]] = {}
+    missing_entries: List[Dict[str, Any]] = []
     errors = payload.get("errors") or []
     traceback_text = payload.get("traceback") or ""
 
@@ -810,12 +899,13 @@ def _resolve_models_with_comfy(
             continue
         idx = item.get("index")
         if isinstance(idx, int):
-            missing_indexes.add(idx)
+            missing_map[idx] = item
+            missing_entries.append(item)
 
     result: Dict[str, Any] = {
         "resolved": resolved_map,
         "categories": category_map,
-        "missing": sorted(missing_indexes),
+        "missing": missing_entries,
         "errors": errors,
     }
     if traceback_text:
@@ -1090,6 +1180,8 @@ def _looks_like_model_file(value: str) -> bool:
 def _category_for_node(node_type: str, file_name: str) -> str:
     token = node_type.lower()
     name_lower = file_name.lower()
+    if "unet" in token or "unet" in name_lower:
+        return "diffusion_models"
     if "lora" in token or "lora" in name_lower:
         return "loras"
     if "control" in token or "controlnet" in name_lower:
