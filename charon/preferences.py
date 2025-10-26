@@ -112,20 +112,3 @@ def set_preference(
     save_preferences(prefs, filename=filename, parent=parent)
 
 
-def get_auto_import_default(*, parent: Optional[object] = None) -> bool:
-    value = get_preference("auto_import_default", True, parent=parent)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "on", "yes"}:
-            return True
-        if lowered in {"0", "false", "off", "no"}:
-            return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return bool(value)
-
-
-def set_auto_import_default(enabled: bool, *, parent: Optional[object] = None) -> None:
-    set_preference("auto_import_default", bool(enabled), parent=parent)

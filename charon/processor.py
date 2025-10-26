@@ -669,9 +669,7 @@ def process_charonop_node():
         def write_metadata(key, value):
             nonlocal metadata_warning_emitted
             if not metadata_writer:
-                if not metadata_warning_emitted:
-                    log_debug('Metadata persistence unavailable on this node; falling back to knob storage.', 'WARNING')
-                    metadata_warning_emitted = True
+                metadata_warning_emitted = True
                 return False
             try:
                 metadata_writer(key, value)

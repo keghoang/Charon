@@ -9,7 +9,6 @@ from ..qt_compat import QtWidgets, QtCore, Qt, QtGui
 from .. import config
 from ..charon_logger import system_debug, system_warning, system_error
 from .. import scene_nodes_runtime as runtime
-from .. import preferences
 
 
 class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
@@ -75,7 +74,6 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
         self._last_snapshot: Dict[str, Dict[str, object]] = {}
         self._node_cache: Dict[str, runtime.SceneNodeInfo] = {}
-        self._auto_import_enabled = preferences.get_auto_import_default(parent=self)
         self._footer_text: Optional[str] = None
 
         self._build_ui()
@@ -93,19 +91,11 @@ class SceneNodesPanel(QtWidgets.QWidget):
         header_layout = QtWidgets.QHBoxLayout()
         header_layout.setSpacing(6)
 
-        title = QtWidgets.QLabel("CharonOp Nodes in Scene")
-        title.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(title)
         header_layout.addStretch()
 
         self.refresh_button = QtWidgets.QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh_nodes)
         header_layout.addWidget(self.refresh_button)
-
-        self.auto_import_checkbox = QtWidgets.QCheckBox("Auto-import outputs")
-        self.auto_import_checkbox.setChecked(self._auto_import_enabled)
-        self.auto_import_checkbox.toggled.connect(self._apply_auto_import)
-        header_layout.addWidget(self.auto_import_checkbox)
 
         layout.addLayout(header_layout)
 
@@ -180,14 +170,12 @@ class SceneNodesPanel(QtWidgets.QWidget):
                 "workflow": info.workflow_name,
                 "updated": info.updated_at,
                 "output": info.output_path,
-                "auto": info.auto_import,
             }
 
         if snapshot != self._last_snapshot:
             self._last_snapshot = snapshot
             self._populate_table(infos)
 
-        self._sync_auto_import_checkbox(infos)
         self._apply_footer_text()
 
     def _populate_table(self, infos):
@@ -236,8 +224,6 @@ class SceneNodesPanel(QtWidgets.QWidget):
         lines.append(f"State: {info.state}")
         if info.status and info.state.lower() != info.status.lower():
             lines.append(f"Message: {info.status}")
-        if info.auto_import is not None:
-            lines.append(f"Auto Import: {'Enabled' if info.auto_import else 'Disabled'}")
         if info.updated_at:
             lines.append(f"Updated: {self._format_timestamp(info.updated_at)}")
         if info.output_path:
@@ -269,17 +255,6 @@ class SceneNodesPanel(QtWidgets.QWidget):
         except Exception:
             return ""
 
-    def _sync_auto_import_checkbox(self, infos):
-        if not infos:
-            return
-        combined = all(info.auto_import for info in infos)
-        if combined != self._auto_import_enabled:
-            self._auto_import_enabled = combined
-        if self.auto_import_checkbox.isChecked() != combined:
-            self.auto_import_checkbox.blockSignals(True)
-            self.auto_import_checkbox.setChecked(combined)
-            self.auto_import_checkbox.blockSignals(False)
-
     # ------------------------------------------------------------------ Slots
 
     def _toggle_auto_refresh(self, enabled: bool):
@@ -293,13 +268,25 @@ class SceneNodesPanel(QtWidgets.QWidget):
             self._timer.stop()
             system_debug("Scene Nodes auto-refresh disabled.")
 
-    def _apply_auto_import(self, enabled: bool):
-        for info in self._node_cache.values():
-            runtime.set_auto_import(info.node, enabled, info.payload)
-        if self._auto_import_enabled != enabled:
-            preferences.set_auto_import_default(enabled, parent=self)
-        self._auto_import_enabled = enabled
-        self.refresh_nodes()
+    def focus_node_by_name(self, node_name: str, ensure_visible: bool = True) -> bool:
+        """Select the given node in the table if present."""
+        if not node_name:
+            return False
+
+        if self._selected_node_name() == node_name:
+            return True
+
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item and item.data(Qt.UserRole) == node_name:
+                self.table.selectRow(row)
+                self.table.setCurrentCell(row, 0)
+                if ensure_visible:
+                    self.table.scrollToItem(
+                        item, QtWidgets.QAbstractItemView.PositionAtCenter
+                    )
+                return True
+        return False
 
     def _on_selection_changed(self):
         node_name = self._selected_node_name()
@@ -317,7 +304,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
             return
 
         if info.workflow_path:
-            text = f"Workflow: {info.workflow_name} — {info.workflow_path}"
+            text = f"Workflow: {info.workflow_name} - {info.workflow_path}"
         else:
             text = f"Node: {info.name}"
 
@@ -526,9 +513,6 @@ class SceneNodesPanel(QtWidgets.QWidget):
         prompt_id = payload.get("prompt_id")
         if prompt_id:
             lines.append(f"Prompt ID: {prompt_id}")
-        auto = "Enabled" if info.auto_import else "Disabled"
-        lines.append(f"Auto Import: {auto}")
-
         QtWidgets.QApplication.clipboard().setText("\n".join(lines))
         QtWidgets.QMessageBox.information(self, "Copy Info", "Node information copied to clipboard.")
 

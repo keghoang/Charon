@@ -1,4 +1,4 @@
-from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHint, WindowCloseButtonHint, StrongFocus,
+from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHint, WindowCloseButtonHint,
                          Key_Escape, Key_Control, Key_Shift, Key_Alt, ShiftModifier,
                          Key_Exclam, Key_At, Key_NumberSign, Key_Dollar, Key_Percent,
                          Key_AsciiCircum, Key_Ampersand, Key_Asterisk, Key_ParenLeft,
@@ -577,96 +577,6 @@ class CreateScriptDialog(BaseMetadataDialog):
         if script_type in self.script_types and self.script_types[script_type]:
             return self.script_types[script_type][0]  # Get the first extension
         return ".py"  # Default to Python
-
-class ReadmeDialog(QtWidgets.QDialog):
-    def __init__(self, script_folder=None, parent=None):
-        super(ReadmeDialog, self).__init__(parent)
-        self.setWindowFlag(WindowContextHelpButtonHint, False)
-        self.setWindowFlag(WindowCloseButtonHint, True)
-        self.script_folder = script_folder
-        self.readme_path = None  # Will be set in load_readme
-        # Set a default title, will be updated in load_readme
-        self.setWindowTitle("Readme")
-        
-        layout = QtWidgets.QVBoxLayout(self)
-
-        # Add Edit button at the top
-        edit_layout = QtWidgets.QHBoxLayout()
-        edit_layout.addStretch()
-        self.edit_btn = QtWidgets.QPushButton("Edit")
-        self.edit_btn.clicked.connect(self.edit_readme)
-        # Make sure edit button doesn't become default button
-        self.edit_btn.setAutoDefault(False)
-        self.edit_btn.setDefault(False)
-        edit_layout.addWidget(self.edit_btn)
-        layout.addLayout(edit_layout)
-
-        self.text_browser = QtWidgets.QTextBrowser()
-        # Enable loading of local resources
-        self.text_browser.setOpenExternalLinks(True)
-        self.text_browser.setOpenLinks(True)
-        layout.addWidget(self.text_browser)
-
-        # Remove the close button and bottom button layout
-
-        self.load_readme(script_folder)
-        
-        # Remove focus from text browser to ensure dialog receives key events
-        self.setFocusPolicy(StrongFocus)
-        
-        # Use a timer to set focus after dialog is shown
-        QtCore.QTimer.singleShot(0, self._set_initial_focus)
-    
-    def _set_initial_focus(self):
-        """Set initial focus after dialog is shown."""
-        self.setFocus()
-        self.activateWindow()
-
-    def load_readme(self, script_folder):
-        if script_folder:
-            self.readme_path = os.path.join(script_folder, "readme.md")
-            # Get the script name from the folder path
-            script_name = os.path.basename(script_folder)
-            self.setWindowTitle(f"Readme - {script_name}")
-        else:
-            # Load Charon's default readme from the project root.
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            self.readme_path = os.path.join(project_root, "readme.md")
-            self.setWindowTitle("Readme - Charon")
-            
-        if os.path.exists(self.readme_path):
-            try:
-                with open(self.readme_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                # Define the base path for relative image paths
-                base_path = os.path.dirname(self.readme_path)
-                html_content = utilities.md_to_html(content, base_path=base_path)
-                # Set base URL to the directory containing the readme file
-                readme_dir = os.path.abspath(os.path.dirname(self.readme_path))
-                base_url = QtCore.QUrl.fromLocalFile(readme_dir + os.sep)
-                self.text_browser.document().setBaseUrl(base_url)
-                self.text_browser.setHtml(html_content)
-            except Exception as e:
-                self.text_browser.setPlainText(f"Error loading readme: {str(e)}")
-    
-                
-    def edit_readme(self):
-        if self.readme_path and os.path.exists(self.readme_path):
-            try:
-                # Cross-platform file opening
-                import platform
-                import subprocess
-                
-                if platform.system() == "Windows":
-                    os.startfile(self.readme_path)
-                elif platform.system() == "Darwin":  # macOS
-                    subprocess.run(["open", self.readme_path])
-                else:  # Linux
-                    subprocess.run(["xdg-open", self.readme_path])
-            except Exception as e:
-                QtWidgets.QMessageBox.warning(self, "Error", f"Could not open file: {str(e)}")
-    
-
 
 class CharonMetadataDialog(QtWidgets.QDialog):
     """Dialog for editing metadata stored in `.charon.json` files."""

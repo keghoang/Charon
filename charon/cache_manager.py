@@ -152,12 +152,6 @@ class PersistentCacheManager:
             if batch_cache_key in self.general_cache:
                 del self.general_cache[batch_cache_key]
             
-            # Invalidate batch readme cache
-            readme_cache_key = f"batch_readme:{folder_path}"
-            if readme_cache_key in self.general_cache:
-                del self.general_cache[readme_cache_key]
-                system_debug(f"Invalidated batch readme cache for {folder_path}")
-            
             # Invalidate validation cache for all scripts in this folder
             scripts_to_remove = [path for path in self.validation_cache.keys() 
                                if path.startswith(folder_path + os.sep)]
@@ -219,11 +213,6 @@ class PersistentCacheManager:
                 # Cache the batch metadata
                 cache_key = f"batch_metadata:{folder_path}"
                 self.cache_data(cache_key, metadata_map, ttl_seconds=600)  # 10 min cache
-                
-                # Batch check readme files
-                readme_set = batch_reader.batch_check_readmes(folder_path)
-                readme_cache_key = f"batch_readme:{folder_path}"
-                self.cache_data(readme_cache_key, readme_set, ttl_seconds=600)
                 
                 # Collect and cache tags for the folder
                 all_tags = set()

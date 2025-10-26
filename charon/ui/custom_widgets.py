@@ -118,7 +118,6 @@ class ScriptListView(DeselectionListView):
     assignHotkeyRequested = QtCore.Signal(str)
     createMetadataRequested = QtCore.Signal(str)  # Signal for creating metadata
     editMetadataRequested = QtCore.Signal(str)  # Signal for editing metadata
-    openReadmeRequested = QtCore.Signal(str)  # Signal for opening/creating readme
     openFolderRequested = QtCore.Signal(str)  # Signal for opening script's folder
 
     def __init__(self, parent=None):
@@ -231,15 +230,6 @@ class ScriptListView(DeselectionListView):
             # Script has no metadata - show create option
             create_metadata_action = menu.addAction("Create Metadata")
             create_metadata_action.triggered.connect(lambda: self.createMetadataRequested.emit(script_path))
-
-        # Add Readme action (after metadata, before hotkey)
-        import os
-        readme_path = os.path.join(script_path, "readme.md")
-        if os.path.exists(readme_path):
-            
-        else:
-            readme_action = menu.addAction("Create Readme")
-        readme_action.triggered.connect(lambda: self.openReadmeRequested.emit(script_path))
 
         # Add separator for hotkey action
         menu.addSeparator()

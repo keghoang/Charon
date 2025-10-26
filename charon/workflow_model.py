@@ -13,32 +13,10 @@ class ScriptItem:
         self.path = path  # full folder path for the script
         self.metadata = metadata  # dict or None
         self.host = host  # Store host for software selection
-        self._has_readme = None  # Cache readme status
 
     def has_metadata(self):
         return self.metadata is not None
     
-    def has_readme(self):
-        """Check if the script folder contains a readme.md file"""
-        # Use cached value if available
-        if self._has_readme is not None:
-            return self._has_readme
-            
-        # Otherwise check (this is slow on network drives)
-        if not self.path:
-            self._has_readme = False
-            return False
-            
-        readme_path = os.path.join(self.path, "readme.md")
-        # Also check for uppercase README.md
-        readme_upper_path = os.path.join(self.path, "README.md")
-        self._has_readme = os.path.exists(readme_path) or os.path.exists(readme_upper_path)
-        return self._has_readme
-    
-    def clear_readme_cache(self):
-        """Clear the cached readme status to force re-check"""
-        self._has_readme = None
-
     def display_text(self):
         # Build prefix with bookmark and hotkey emojis
         prefix = ""
@@ -55,7 +33,7 @@ class ScriptItem:
         if getattr(self, 'has_hotkey', False):
             prefix += "▶ "
         
-        # Build the name with readme indicator
+        # Compose display name with any prefixes
         return f"{prefix}{self.name}"
 
 
@@ -195,35 +173,7 @@ class BookmarkLoader(BaseScriptLoader):
                             continue
                     valid_bookmarks.append(script_path)
             
-            # Batch check for readme files
-            readme_paths = {}
-            for script_path in valid_bookmarks:
-                script_name = os.path.basename(script_path)
-                readme_paths[script_name] = (
-                    os.path.join(script_path, "readme.md"),
-                    os.path.join(script_path, "README.md")
-                )
-            
-            # Check readme existence in parallel
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            scripts_with_readme = set()
-            
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                future_to_name = {}
-                for name, (lower_path, upper_path) in readme_paths.items():
-                    future = executor.submit(
-                        lambda p1, p2: os.path.exists(p1) or os.path.exists(p2),
-                        lower_path,
-                        upper_path
-                    )
-                    future_to_name[future] = name
-                
-                for future in as_completed(future_to_name):
-                    name = future_to_name[future]
-                    if future.result():
-                        scripts_with_readme.add(name)
-            
-            # Now load the scripts with pre-cached readme status
+            # Load the scripts
             items = []
             for script_path in valid_bookmarks:
                 if self._should_stop:
@@ -235,10 +185,6 @@ class BookmarkLoader(BaseScriptLoader):
                 item = self._load_script_item(script_path, script_name, metadata)
                 # Mark as bookmarked for proper sorting
                 item.is_bookmarked = True
-                
-                # Pre-populate readme cache
-                item._has_readme = script_name in scripts_with_readme
-                
                 items.append(item)
             
             if not self._should_stop:
@@ -299,7 +245,7 @@ class FolderLoader(BaseScriptLoader):
                 # Cache the folder contents
                 cache_manager.cache_folder_contents(self.folder_path, script_paths)
             
-            # Use batch operations for metadata and readme checks
+            # Use batch operations for metadata
             items = []
             
             if script_paths:
@@ -317,20 +263,6 @@ class FolderLoader(BaseScriptLoader):
                     # Cache it
                     cache_manager.cache_data(batch_metadata_key, metadata_map, ttl_seconds=600)
                 
-                # Check for cached readme data
-                batch_readme_key = f"batch_readme:{self.folder_path}"
-                cached_readme = cache_manager.get_cached_data(batch_readme_key)
-                
-                if cached_readme:
-                    # Use cached readme data
-                    readme_set = cached_readme
-                    system_debug(f"Using cached batch readme data for {self.folder_path}")
-                else:
-                    # Batch check readme files
-                    readme_set = batch_reader.batch_check_readmes(self.folder_path)
-                    # Cache it
-                    cache_manager.cache_data(batch_readme_key, readme_set, ttl_seconds=600)
-                
                 # Create script items
                 for path, name in script_paths:
                     if self._should_stop:
@@ -341,10 +273,6 @@ class FolderLoader(BaseScriptLoader):
                     
                     # Create item
                     item = self._load_script_item(path, name, metadata)
-                    
-                    # Set readme flag from batch results (both True and False)
-                    item._has_readme = (name in readme_set)
-                    
                     items.append(item)
             
             if not self._should_stop:
@@ -449,11 +377,8 @@ class ScriptListModel(QtCore.QAbstractListModel):
                 
                 # Preserve properties that shouldn't change with metadata
                 old_is_bookmarked = getattr(script, 'is_bookmarked', False)
-                old_has_readme = getattr(script, '_has_readme', None)
                 
                 script.is_bookmarked = old_is_bookmarked
-                if old_has_readme is not None:
-                    script._has_readme = old_has_readme
                 
                 # Emit dataChanged signal for this row
                 idx = self.index(i)

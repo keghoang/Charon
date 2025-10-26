@@ -448,13 +448,6 @@ class CharonWindow(QtWidgets.QWidget):
         self.settings_btn.clicked.connect(self.open_settings)
         refresh_layout.addWidget(self.settings_btn)
         
-        # Add Help button next to Settings
-        self.help_btn = QtWidgets.QPushButton("Help")
-        self.help_btn.setToolTip("Open Charon's main readme/help")
-        self.help_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
-        self.help_btn.clicked.connect(self.open_charon_readme)
-        refresh_layout.addWidget(self.help_btn)
-        
         # Add refresh layout to main layout
         main_layout.addLayout(refresh_layout)
         
@@ -529,7 +522,6 @@ class CharonWindow(QtWidgets.QWidget):
         # Script panel
         self.script_panel = ScriptPanel()
         self.script_panel.set_host(self.host)
-        self.script_panel.script_selected.connect(self.on_script_selected)
         self.script_panel.script_deselected.connect(self.on_script_deselected)
         self.script_panel.bookmark_requested.connect(self.on_bookmark_requested)
         self.script_panel.assign_hotkey_requested.connect(self.on_assign_hotkey_requested)
@@ -549,7 +541,6 @@ class CharonWindow(QtWidgets.QWidget):
         self.script_panel.create_metadata_requested.connect(self.on_create_metadata_requested)
         self.script_panel.edit_metadata_requested.connect(self.on_edit_metadata_requested)
         self.script_panel.manage_tags_requested.connect(self.on_manage_tags_requested)
-        self.script_panel.script_view.openReadmeRequested.connect(self.on_open_readme_requested)
         self.script_panel.script_view.openFolderRequested.connect(self.open_folder)
         self.script_panel.script_run.connect(self.execute_script) # Connect the run signal
         
@@ -692,7 +683,6 @@ class CharonWindow(QtWidgets.QWidget):
         # Connect tiny mode signals
         self.tiny_mode_widget.exit_tiny_mode.connect(self.exit_tiny_mode)
         self.tiny_mode_widget.open_settings.connect(self.open_settings)
-        self.tiny_mode_widget.open_help.connect(self.open_help)
         
         # ---------- quick search (TAB) setup ----------
         self._script_index = []
@@ -730,7 +720,6 @@ class CharonWindow(QtWidgets.QWidget):
             'run_script': self.run_script_from_shortcut,
             'refresh': self.on_refresh_clicked,
             'open_folder': self.open_folder,
-            'open_readme': self.open_selected_script_readme,
             'settings': self.open_settings
         }
 
@@ -870,13 +859,6 @@ class CharonWindow(QtWidgets.QWidget):
         
         # Ensure keybind manager state is synced
         self.keybind_manager.tiny_mode_active = False
-    
-    def open_help(self):
-        """Open help (readme) dialog."""
-        from charon.ui.dialogs import ReadmeDialog
-        dialog = ReadmeDialog(parent=self)
-        dialog.resize(600, 600)
-        exec_dialog(dialog)
     
     def _apply_tiny_mode_flags(self):
         """Apply tiny mode specific window flags."""
@@ -1081,21 +1063,6 @@ class CharonWindow(QtWidgets.QWidget):
             
             # Load scripts in background thread for better responsiveness
             self.script_panel.load_scripts_for_folder(folder_path)
-
-    def on_script_selected(self, script_path):
-        if not script_path:
-            return
-        
-        # The script panel now handles metadata panel updates directly
-        
-        # Update readme button state
-        readme_path = os.path.join(script_path, "readme.md")
-        if os.path.exists(readme_path):
-            # Reset to normal button style if it was previously a "Create" button
-        else:
-            # Make the Create button darker
-            self.script_panel.script_view.openReadmeRequested.disconnect()
-            self.script_panel.script_view.openReadmeRequested.connect(self.on_open_readme_requested)
 
     def run_script_from_shortcut(self):
         """Wrapper to run script from shortcut, checking focus and button state."""
@@ -1342,32 +1309,6 @@ class CharonWindow(QtWidgets.QWidget):
         """Execute a script by hotkey - now delegates to _run_script_by_path."""
         # This method is kept for compatibility
         self._run_script_by_path(script_folder)
-
-    def open_readme(self):
-        selected_script = self.script_panel.get_selected_script()
-        if not selected_script:
-            # If no script selected, open Charon's main readme
-            from charon.ui.dialogs import ReadmeDialog
-            dialog = ReadmeDialog(parent=self)
-            dialog.resize(600, 600)
-            exec_dialog(dialog)
-            return
-
-        # Ensure readme.md exists in the script folder
-        readme_path = os.path.join(selected_script.path, "readme.md")
-        if not os.path.exists(readme_path):
-            try:
-                with open(readme_path, "w", encoding="utf-8") as f:
-                    f.write("edit this readme to add your info :)\n")
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", f"Could not create readme.md: {e}")
-                return
-
-        # Open script's readme
-        from charon.ui.dialogs import ReadmeDialog
-        dialog = ReadmeDialog(selected_script.path, parent=self)
-        dialog.resize(600, 600)
-        exec_dialog(dialog)
 
     def on_hotkey_changed(self, hotkey, script_path):
         """
@@ -2218,45 +2159,11 @@ Cache Stats:
                     # Widget was deleted during refresh (e.g., tag buttons)
                     pass
 
-    def on_open_readme_requested(self, script_path):
-        # Ensure readme.md exists in the script folder
-        readme_path = os.path.join(script_path, "readme.md")
-        if not os.path.exists(readme_path):
-            try:
-                with open(readme_path, "w", encoding="utf-8") as f:
-                    f.write("edit this readme to add your info :)\n")
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", f"Could not create readme.md: {e}")
-                return
-        from charon.ui.dialogs import ReadmeDialog
-        dialog = ReadmeDialog(script_path, parent=self)
-        dialog.resize(600, 600)
-        exec_dialog(dialog)
-
-    def open_charon_readme(self):
-        from .dialogs import ReadmeDialog
-        dialog = ReadmeDialog(parent=self)
-        dialog.resize(600, 600)
-        exec_dialog(dialog)
-    
     def open_settings(self):
         """Open the settings dialog"""
         from .keybinds import KeybindSettingsDialog
         dialog = KeybindSettingsDialog(self.keybind_manager, parent=self)
         dialog.resize(560, 420)
-        exec_dialog(dialog)
-
-    def open_selected_script_readme(self):
-        selected_script = self.script_panel.get_selected_script()
-        if not selected_script:
-            return
-        import os
-        readme_path = os.path.join(selected_script.path, "readme.md")
-        if not os.path.exists(readme_path):
-            return
-        from charon.ui.dialogs import ReadmeDialog
-        dialog = ReadmeDialog(selected_script.path, parent=self)
-        dialog.resize(600, 600)
         exec_dialog(dialog)
 
     def on_create_script_in_folder(self, folder_name):

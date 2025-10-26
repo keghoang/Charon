@@ -16,7 +16,6 @@ class ScriptTableView(QtWidgets.QTableView):
     createMetadataRequested = QtCore.Signal(str)
     editMetadataRequested = QtCore.Signal(str)
     manageTagsRequested = QtCore.Signal(str)
-    openReadmeRequested = QtCore.Signal(str)
     openFolderRequested = QtCore.Signal(str)
     script_run = QtCore.Signal(str)
     mousePressed = QtCore.Signal()
@@ -238,15 +237,6 @@ class ScriptTableView(QtWidgets.QTableView):
             create_metadata_action = menu.addAction("Create Metadata")
             create_metadata_action.triggered.connect(lambda: self.createMetadataRequested.emit(script_path))
             
-        # Readme action
-        import os
-        readme_path = os.path.join(script_path, "readme.md")
-        if os.path.exists(readme_path):
-            
-        else:
-
-        readme_action.triggered.connect(lambda: self.openReadmeRequested.emit(script_path))
-        
         menu.addSeparator()
         
         # Hotkey action

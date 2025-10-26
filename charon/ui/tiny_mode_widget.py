@@ -24,7 +24,6 @@ class TinyModeWidget(QtWidgets.QWidget):
     # Signals
     exit_tiny_mode = QtCore.Signal()
     open_settings = QtCore.Signal()
-    open_help = QtCore.Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,14 +51,10 @@ class TinyModeWidget(QtWidgets.QWidget):
         
         top_layout.addStretch()
         
-        # Settings and Help buttons on the right
+        # Settings button on the right
         self.settings_button = QtWidgets.QPushButton("Settings")
         self.settings_button.clicked.connect(self.open_settings.emit)
         top_layout.addWidget(self.settings_button)
-        
-        self.help_button = QtWidgets.QPushButton("Help")
-        self.help_button.clicked.connect(self.open_help.emit)
-        top_layout.addWidget(self.help_button)
         
         layout.addLayout(top_layout)
         
