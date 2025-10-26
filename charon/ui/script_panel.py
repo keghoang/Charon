@@ -14,6 +14,7 @@ from .. import config, preferences
 from ..comfy_validation import validate_comfy_environment
 from ..paths import get_default_comfy_launch_path
 from .validation_dialog import ValidationResolveDialog
+from ..workflow_local_store import write_validation_raw
 import os
 import shutil
 import re
@@ -221,6 +222,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.script_run.connect(self._handle_script_run_request)
         self.script_view.script_validate.connect(self._handle_script_validate_request)
         self.script_view.script_show_validation_payload.connect(self._handle_script_show_payload_request)
+        self.script_view.script_show_raw_validation_payload.connect(self._handle_script_show_raw_payload_request)
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
@@ -794,6 +796,13 @@ class ScriptPanel(QtWidgets.QWidget):
         self._cleanup_validation_worker(script_path)
         if self._closing:
             return
+        remote_folder = ""
+        if isinstance(payload, dict):
+            workflow_info = payload.get("workflow") or {}
+            if isinstance(workflow_info, dict):
+                remote_folder = workflow_info.get("folder") or ""
+        if remote_folder:
+            write_validation_raw(remote_folder, payload)
         state = "validated" if ok else "needs_resolve"
         self.script_model.set_validation_state(script_path, state, payload)
         self._write_validation_cache(script_path, state, payload)
@@ -864,12 +873,19 @@ class ScriptPanel(QtWidgets.QWidget):
     def _show_validation_payload(self, script_path: str) -> bool:
         payload = self.script_model.get_validation_payload(script_path)
         if not isinstance(payload, dict):
-            QtWidgets.QMessageBox.information(
-                self,
-                "Validation",
-                "No structured validation details are available yet for this workflow.",
-            )
-            return False
+            cached = self._read_validation_cache(script_path)
+            if isinstance(cached, dict):
+                payload = cached.get("payload")
+                if isinstance(payload, dict):
+                    state = cached.get("state") or self.script_model.get_validation_state(script_path)
+                    self.script_model.set_validation_state(script_path, state or "idle", payload)
+            if not isinstance(payload, dict):
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Validation",
+                    "No structured validation details are available yet for this workflow.",
+                )
+                return False
 
         workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
         comfy_path = self._resolve_comfy_path()
@@ -882,11 +898,39 @@ class ScriptPanel(QtWidgets.QWidget):
             parent=self,
         )
         exec_dialog(dialog)
+
+        new_state = "needs_resolve"
+        if isinstance(payload, dict):
+            issues = payload.get("issues") or []
+            all_ok = True
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    continue
+                if issue.get("key") == "models":
+                    data = issue.get("data") or {}
+                    missing = data.get("missing") or []
+                    if missing:
+                        issue["ok"] = False
+                    else:
+                        issue["ok"] = True
+                if not issue.get("ok", False):
+                    all_ok = False
+            new_state = "validated" if all_ok else "needs_resolve"
+        self.script_model.set_validation_state(script_path, new_state, payload)
+        self._write_validation_cache(script_path, new_state, payload)
+
         return dialog.result() == 1
 
     def _show_raw_validation_payload(self, script_path: str) -> bool:
         """Display the raw validation payload for advanced users."""
         payload = self.script_model.get_validation_payload(script_path)
+        if payload is None:
+            cached = self._read_validation_cache(script_path)
+            if isinstance(cached, dict):
+                payload = cached.get("payload")
+                if payload is not None:
+                    state = cached.get("state") or self.script_model.get_validation_state(script_path)
+                    self.script_model.set_validation_state(script_path, state or "idle", payload)
         if payload is None:
             QtWidgets.QMessageBox.information(
                 self,
@@ -938,30 +982,14 @@ class ScriptPanel(QtWidgets.QWidget):
         """Show the validation result dialog with options to inspect raw data."""
         if not script_path:
             return
-        bundle = self._load_workflow_bundle_safe(script_path)
-        if not bundle:
-            return
-        cached = self._read_validation_cache(script_path)
-        payload = cached.get("payload") if isinstance(cached, dict) else None
-        if not payload:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Validation",
-                "No validation data available. Run Validate first.",
-            )
-            return
+        if self._show_validation_payload(script_path):
+            self._handle_script_revalidate_request(script_path)
 
-        comfy_path = self._resolve_comfy_path()
-        workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
-        dialog = ValidationResolveDialog(
-            payload,
-            workflow_name=workflow_name,
-            comfy_path=comfy_path,
-            workflow_bundle=bundle,
-            parent=self,
-        )
-        result = exec_dialog(dialog)
-        if result == 1:
+    def _handle_script_show_raw_payload_request(self, script_path: str) -> None:
+        """Show the raw validation payload."""
+        if not script_path:
+            return
+        if self._show_raw_validation_payload(script_path):
             self._handle_script_revalidate_request(script_path)
 
     def on_script_run(self, index):

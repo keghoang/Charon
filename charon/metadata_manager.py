@@ -2,9 +2,13 @@ import json
 import os
 import functools
 from .utilities import is_compatible_with_host
-from .charon_logger import system_error
+from .charon_logger import system_error, system_warning
 from .charon_metadata import load_charon_metadata, write_charon_metadata, CHARON_METADATA_FILENAME
 from .conversion_cache import clear_conversion_cache
+from .workflow_local_store import (
+    get_local_workflow_folder,
+    synchronize_remote_payload,
+)
 
 
 def get_metadata_path(script_path):
@@ -210,9 +214,13 @@ def load_workflow_data(script_path):
     Returns a dictionary containing:
       - folder: absolute path to the workflow directory
       - workflow_file: filename declared in metadata (defaults to workflow.json)
-      - workflow_path: resolved absolute path to the workflow JSON
+      - workflow_path: resolved absolute path to the preferred workflow JSON (local copy)
+      - source_workflow_path: path to the workflow JSON inside the shared repository
       - metadata: metadata dictionary (may be empty)
       - workflow: parsed JSON workflow payload
+      - local_folder: per-user local mirror directory
+      - local_state: cached local state information (validated flag, hashes, timestamps)
+      - validated: boolean flag reflecting the local validated state
     """
     metadata = get_charon_config(script_path) or {}
     charon_meta = metadata.get("charon_meta") if isinstance(metadata, dict) else {}
@@ -234,12 +242,34 @@ def load_workflow_data(script_path):
     except json.JSONDecodeError as exc:
         raise ValueError(f"Workflow JSON is invalid: {workflow_path}") from exc
 
+    local_path, local_state = synchronize_remote_payload(
+        script_path,
+        workflow_payload,
+        workflow_path=workflow_path,
+    )
+    local_folder = get_local_workflow_folder(script_path, ensure=True)
+    preferred_path = local_state.get("local_path") or local_path
+    validated_flag = bool(local_state.get("validated"))
+
+    if validated_flag and preferred_path and os.path.exists(preferred_path):
+        try:
+            with open(preferred_path, "r", encoding="utf-8") as handle:
+                workflow_payload = json.load(handle)
+        except Exception as exc:
+            system_warning(
+                f"Failed to load validated workflow override for {script_path}: {exc}"
+            )
+
     return {
         "folder": script_path,
         "workflow_file": workflow_file,
-        "workflow_path": workflow_path,
+        "workflow_path": preferred_path,
+        "source_workflow_path": workflow_path,
         "metadata": metadata,
         "workflow": workflow_payload,
+        "local_folder": local_folder,
+        "local_state": dict(local_state),
+        "validated": validated_flag,
     }
 
 

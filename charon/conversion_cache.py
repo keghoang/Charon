@@ -128,8 +128,15 @@ def clear_conversion_cache(folder_path: str) -> None:
         return
 
     try:
-        import shutil
-
-        shutil.rmtree(conversion_dir)
+        for entry in list(conversion_dir.iterdir()):
+            if entry.name.lower() == "validation":
+                continue
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+            except OSError:
+                continue
     except OSError:
         pass

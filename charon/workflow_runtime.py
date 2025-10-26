@@ -130,6 +130,9 @@ def spawn_charon_node(
         workflow_name = metadata.get("charon_meta", {}).get("workflow_file") or "Workflow"
 
     workflow_path = workflow_bundle.get("workflow_path")
+    source_workflow_path = workflow_bundle.get("source_workflow_path")
+    local_state = workflow_bundle.get("local_state") or {}
+    is_validated = bool(workflow_bundle.get("validated"))
 
     if "nodes" in workflow:
         inputs = analyze_ui_workflow_inputs(workflow)
@@ -173,6 +176,9 @@ def spawn_charon_node(
         recreate_script=recreate_script,
         workflow_path=workflow_path,
         parameters=parameter_specs,
+        source_workflow_path=source_workflow_path,
+        validated=is_validated,
+        local_state=local_state,
     )
 
     try:

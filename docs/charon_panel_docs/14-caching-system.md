@@ -42,20 +42,24 @@ class PersistentCacheManager:
 
 3. **General Cache**
    - General purpose cache with TTL (Time To Live)
-   - Stores batch metadata: `"batch_metadata:{folder_path}"` → metadata map
-   - Stores batch readme checks: `"batch_readme:{folder_path}"` → readme set
+   - Stores batch metadata: `"batch_metadata:{folder_path}"` â†’ metadata map
+   - Stores batch readme checks: `"batch_readme:{folder_path}"` â†’ readme set
    - Default TTL: 600 seconds (10 minutes)
 
 4. **Validation Cache**
    - Stores script validation results: `{script_path: validation_data}`
-   - Includes entry file validation, icon presence checks
-   - Reduces repeated filesystem checks for script validity
+   - Includes entry file validation, icon presence checks, and the live state for the Validation Result dialog
+   - Persists raw validation payloads and resolution events under %LOCALAPPDATA%/Charon/plugins/charon/Charon_repo_local/workflow/<user>/<workflow>/.charon_cache/validation/ (per artist)
+     - `validation_result_raw.json` preserves the first ComfyUI payload and is never removed automatically
+     - `validation_resolve_log.json` appends one entry per resolve action for auditability
+   - Reduces repeated filesystem checks for script validity while keeping a canonical paper trail
 
 5. **Workflow Input Cache**
    - Stores per-workflow parameter discovery results
    - Saved as `.charon_cache/input_mapping_cache.json` inside each workflow folder
    - Cache entries include the workflow file hash to guarantee freshness
    - Conversion prompts generated during API export also live in `.charon_cache`
+   - Conversion cache cleanup preserves the validation subdirectory so raw payloads and resolve logs remain intact
    - Keeps metadata dialogs snappy on subsequent opens without re-running the scan
    - Local to each workflow folder so artists can diff/inspect if needed
 

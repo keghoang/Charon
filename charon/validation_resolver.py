@@ -433,9 +433,8 @@ def _iter_designated_roots(
         seen.add(normalized)
         yield normalized
 
-    if models_root and os.path.isdir(models_root) and models_root not in seen:
-        seen.add(models_root)
-        yield models_root
+    if not seen and models_root and os.path.isdir(models_root):
+        yield os.path.abspath(models_root)
 
 
 def _index_dependencies(
