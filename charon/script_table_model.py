@@ -1,4 +1,15 @@
 from .qt_compat import QtCore, QtGui, UserRole, DisplayRole, ForegroundRole, TextAlignmentRole, AlignCenter, Horizontal
+from .qt_compat import (
+    QtCore,
+    QtGui,
+    UserRole,
+    DisplayRole,
+    ForegroundRole,
+    TextAlignmentRole,
+    AlignCenter,
+    Horizontal,
+    FontRole,
+)
 from .workflow_model import ScriptItem, BaseScriptLoader
 from .script_validator import ScriptValidator
 from .settings import user_settings_db
@@ -10,8 +21,9 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
     # Column indices
     COL_NAME = 0
     COL_HOTKEY = 1
-    COL_RUN = 2
-    COLUMN_COUNT = 3
+    COL_VALIDATE = 2
+    COL_RUN = 3
+    COLUMN_COUNT = 4
     
     # Custom roles
     ScriptRole = UserRole + 1
@@ -19,11 +31,16 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
     MetadataRole = UserRole + 3
     CanRunRole = UserRole + 6
     TagsRole = UserRole + 100  # Role for tag filtering
+    ValidationStateRole = UserRole + 200
+    ValidationEnabledRole = UserRole + 201
+    ValidationPayloadRole = UserRole + 202
+    PASSED_LABEL = "\u2713 Passed"
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scripts = []
         self.host = "None"
+        self.validation_states = {}
     
     def _has_valid_entry_file(self, script: ScriptItem) -> bool:
         """Check if script has a valid entry file (uses cached validation)"""
@@ -171,6 +188,18 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                     return script.hotkey
                 return ""
                 
+            elif col == self.COL_VALIDATE:
+                state = self._get_validation_state_for_script(script)
+                entry = self._get_validation_entry_for_script(script)
+                phase = int(entry.get("phase", 0)) if isinstance(entry, dict) else 0
+                if state == "validating":
+                    dots = "." * (phase % 4)
+                    return f"Validating{dots}"
+                if state == "validated":
+                    return self.PASSED_LABEL
+                if state == "needs_resolve":
+                    return "Resolve"
+                return "Validate"
             elif col == self.COL_RUN:
                 # This column will have buttons, no text
                 return ""
@@ -179,10 +208,21 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             # Only apply color to name column
             if col == self.COL_NAME:
                 return self.get_foreground_brush(script)
+            if col == self.COL_VALIDATE:
+                state = self._get_validation_state_for_script(script)
+                if state == "validated":
+                    return QtGui.QBrush(QtGui.QColor(34, 139, 34))
+                if state == "needs_resolve":
+                    return QtGui.QBrush(QtGui.QColor(178, 34, 34))
                     
         elif role == TextAlignmentRole:
             if col == self.COL_HOTKEY:
                 return AlignCenter
+        elif role == FontRole:
+            if col == self.COL_VALIDATE and self._get_validation_state_for_script(script) == "validated":
+                bold = QtGui.QFont()
+                bold.setBold(True)
+                return bold
                 
         # Custom roles for accessing script data
         elif role == self.ScriptRole:
@@ -192,7 +232,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         elif role == self.MetadataRole:
             return script.metadata
         elif role == self.CanRunRole:
-            return self.can_run_script(script)
+            base_ready = self.can_run_script(script)
+            return base_ready and self._get_validation_state_for_script(script) == "validated"
         elif role == self.TagsRole:
             # Return a string representation of tags for filtering
             if script.metadata and 'tags' in script.metadata:
@@ -200,6 +241,14 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if isinstance(tags, list):
                     return ','.join(tags)  # Join tags for easy searching
             return ""
+        elif role == self.ValidationStateRole:
+            return self._get_validation_state_for_script(script)
+        elif role == self.ValidationEnabledRole:
+            state = self._get_validation_state_for_script(script)
+            return state != "validating"
+        elif role == self.ValidationPayloadRole:
+            entry = self._get_validation_entry_for_script(script)
+            return entry.get("payload") if isinstance(entry, dict) else None
             
         return None
         
@@ -210,9 +259,89 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 return "Workflow"
             elif section == self.COL_HOTKEY:
                 return "Hotkey"
+            elif section == self.COL_VALIDATE:
+                return "Validate"
             elif section == self.COL_RUN:
                 return ""
         return None
+    
+    def _normalize_path(self, path: str) -> str:
+        return os.path.normpath(path) if path else ""
+
+    def _row_for_path(self, normalized_path: str):
+        for row, script in enumerate(self.scripts):
+            if self._normalize_path(script.path) == normalized_path:
+                return row
+        return None
+
+    def _get_validation_entry_for_script(self, script: ScriptItem) -> dict:
+        normalized = self._normalize_path(script.path)
+        entry = self.validation_states.get(normalized)
+        if not isinstance(entry, dict):
+            entry = {"state": "idle", "phase": 0, "payload": None}
+            self.validation_states[normalized] = entry
+        entry.setdefault("state", "idle")
+        entry.setdefault("phase", 0)
+        if entry["state"] != "validating":
+            entry["phase"] = 0
+        return entry
+
+    def _get_validation_state_for_script(self, script: ScriptItem) -> str:
+        entry = self._get_validation_entry_for_script(script)
+        return str(entry.get("state") or "idle")
+
+    def set_validation_state(self, script_path: str, state: str, payload=None) -> None:
+        normalized = self._normalize_path(script_path)
+        entry = self.validation_states.get(normalized, {"state": "idle", "phase": 0, "payload": None})
+        entry["state"] = state
+        if state == "validating":
+            entry["phase"] = 0
+        else:
+            entry["phase"] = 0
+        entry["payload"] = payload
+        self.validation_states[normalized] = entry
+        row = self._row_for_path(normalized)
+        if row is not None:
+            model_index = self.index(row, self.COL_VALIDATE)
+            self.dataChanged.emit(
+                model_index,
+                model_index,
+                [DisplayRole, self.ValidationStateRole, self.ValidationEnabledRole, self.ValidationPayloadRole],
+            )
+
+    def get_validation_state(self, script_path: str) -> str:
+        normalized = self._normalize_path(script_path)
+        entry = self.validation_states.get(normalized, {})
+        return str(entry.get("state") or "idle")
+
+    def get_validation_payload(self, script_path: str):
+        normalized = self._normalize_path(script_path)
+        entry = self.validation_states.get(normalized)
+        if isinstance(entry, dict):
+            return entry.get("payload")
+        return None
+
+    def advance_validation_animation(self) -> bool:
+        updated_rows = []
+        for normalized, entry in list(self.validation_states.items()):
+            if entry.get("state") == "validating":
+                entry["phase"] = (entry.get("phase", 0) + 1) % 4
+                row = self._row_for_path(normalized)
+                if row is not None:
+                    updated_rows.append(row)
+        for row in updated_rows:
+            index = self.index(row, self.COL_VALIDATE)
+            self.dataChanged.emit(index, index, [DisplayRole])
+        return bool(updated_rows)
+
+    def has_active_validation(self) -> bool:
+        return any(entry.get("state") == "validating" for entry in self.validation_states.values())
+
+    def _prune_validation_states(self) -> None:
+        valid_paths = {self._normalize_path(script.path) for script in self.scripts}
+        self.validation_states = {
+            path: entry for path, entry in self.validation_states.items() if path in valid_paths
+        }
         
     def updateItems(self, scripts, sort=True):
         """Update the model with new script items
@@ -226,12 +355,14 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             from charon.utilities import create_sort_key
             scripts.sort(key=lambda i: create_sort_key(i, self.host))
         self.scripts = scripts
+        self._prune_validation_states()
         self.endResetModel()
         
     def clear(self):
         """Clear all scripts"""
         self.beginResetModel()
         self.scripts = []
+        self.validation_states = {}
         self.endResetModel()
         
     def sortItems(self):

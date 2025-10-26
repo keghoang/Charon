@@ -18,6 +18,7 @@ class ScriptTableView(QtWidgets.QTableView):
     manageTagsRequested = QtCore.Signal(str)
     openFolderRequested = QtCore.Signal(str)
     script_run = QtCore.Signal(str)
+    script_validate = QtCore.Signal(str)
     mousePressed = QtCore.Signal()
     mouseReleased = QtCore.Signal()
     createScriptInCurrentFolder = QtCore.Signal()
@@ -46,10 +47,27 @@ class ScriptTableView(QtWidgets.QTableView):
         # Ensure the header cells have proper alignment
         self.horizontalHeader().setDefaultAlignment(AlignLeft | AlignVCenter)
         
+        # Create and set button delegate for Validate column
+        self._validate_delegate = ButtonDelegate(
+            self,
+            column=ScriptTableModel.COL_VALIDATE,
+            label=None,
+            enabled_role=ScriptTableModel.ValidationEnabledRole,
+            size_hint=QtCore.QSize(110, 30),
+        )
+        self._validate_delegate.clicked.connect(self._on_validate_clicked)
+        self.setItemDelegateForColumn(ScriptTableModel.COL_VALIDATE, self._validate_delegate)
+
         # Create and set button delegate for Run column
-        self._button_delegate = ButtonDelegate(self)
-        self._button_delegate.clicked.connect(self._on_button_clicked)
-        self.setItemDelegateForColumn(ScriptTableModel.COL_RUN, self._button_delegate)
+        self._grab_delegate = ButtonDelegate(
+            self,
+            column=ScriptTableModel.COL_RUN,
+            label="Grab",
+            enabled_role=ScriptTableModel.CanRunRole,
+            size_hint=QtCore.QSize(80, 30),
+        )
+        self._grab_delegate.clicked.connect(self._on_grab_clicked)
+        self.setItemDelegateForColumn(ScriptTableModel.COL_RUN, self._grab_delegate)
         
         # Create and set name delegate for Name column
         self._name_delegate = ScriptNameDelegate(self)
@@ -80,15 +98,16 @@ class ScriptTableView(QtWidgets.QTableView):
             # Configure column widths
             self.setColumnWidth(ScriptTableModel.COL_NAME, 300)  # Name column
             self.setColumnWidth(ScriptTableModel.COL_HOTKEY, 80)  # Hotkey column
-            self.setColumnWidth(ScriptTableModel.COL_RUN, 55)  # Run button column
+            self.setColumnWidth(ScriptTableModel.COL_VALIDATE, 110)  # Validate button column
+            self.setColumnWidth(ScriptTableModel.COL_RUN, 80)  # Run button column
             
             # Stretch the name column to fill available space
             self.horizontalHeader().setSectionResizeMode(
                 ScriptTableModel.COL_NAME, QtWidgets.QHeaderView.Stretch
             )
             
-    def _on_button_clicked(self, index):
-        """Handle button click from delegate"""
+    def _emit_script_signal(self, index, signal):
+        """Emit the provided signal with the script path resolved from the index."""
         if not index.isValid():
             return
             
@@ -106,7 +125,15 @@ class ScriptTableView(QtWidgets.QTableView):
             name_index = source_model.index(source_index.row(), ScriptTableModel.COL_NAME)
             script_path = source_model.data(name_index, ScriptTableModel.PathRole)
             if script_path:
-                self.script_run.emit(script_path)
+                signal.emit(script_path)
+
+    def _on_grab_clicked(self, index):
+        """Handle Grab button click."""
+        self._emit_script_signal(index, self.script_run)
+
+    def _on_validate_clicked(self, index):
+        """Handle Validate button click."""
+        self._emit_script_signal(index, self.script_validate)
         
     def mousePressEvent(self, event):
         """Handle mouse press to detect clicks on empty space"""
