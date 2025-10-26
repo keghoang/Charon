@@ -92,20 +92,9 @@ class SceneNodesPanel(QtWidgets.QWidget):
         layout.setContentsMargins(margin, margin, margin, margin)
         layout.setSpacing(getattr(config, "UI_ELEMENT_SPACING", 6))
 
-        header_layout = QtWidgets.QHBoxLayout()
-        header_layout.setSpacing(6)
-
-        header_layout.addStretch()
-
-        self.refresh_button = QtWidgets.QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self.refresh_nodes)
-        header_layout.addWidget(self.refresh_button)
-
-        layout.addLayout(header_layout)
-
         self.table = QtWidgets.QTableWidget(self)
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Node", "Status", "Workflow", "Actions"])
+        self.table.setHorizontalHeaderLabels(["CharonOp", "Status", "Workflow", "Actions"])
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -134,8 +123,8 @@ class SceneNodesPanel(QtWidgets.QWidget):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        header.resizeSection(0, 160)
-        header.resizeSection(1, 220)
+        header.resizeSection(0, 200)
+        header.resizeSection(1, 180)
         header.resizeSection(2, 160)
 
         vertical_header = self.table.verticalHeader()
@@ -197,7 +186,11 @@ class SceneNodesPanel(QtWidgets.QWidget):
     def _populate_table(self, infos):
         self.table.setRowCount(len(infos))
         for row, info in enumerate(infos):
-            name_item = QtWidgets.QTableWidgetItem(info.name)
+            display_name = info.name
+            prefix = getattr(runtime, "NODE_PREFIX", "CharonOp_")
+            if display_name.startswith(prefix):
+                display_name = display_name[len(prefix) :]
+            name_item = QtWidgets.QTableWidgetItem(display_name)
             name_item.setData(Qt.UserRole, info.name)
             tooltip = self._build_tooltip(info)
             if tooltip:

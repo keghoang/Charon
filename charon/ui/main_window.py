@@ -294,7 +294,7 @@ class CharonWindow(QtWidgets.QWidget):
 
     def closeEvent(self, event):
         """Clean up background threads and stream patches when window is closed."""
-        if hasattr(self.script_panel, 'folder_loader'):
+        if hasattr(self, 'script_panel') and hasattr(self.script_panel, 'folder_loader'):
             self.script_panel.folder_loader.stop_loading()
         if hasattr(self, 'global_indexer'):
             self.global_indexer.stop_loading()
@@ -413,36 +413,7 @@ class CharonWindow(QtWidgets.QWidget):
                 self._update_banner_pixmap()
                 main_layout.addWidget(self.banner_label)
                 QtCore.QTimer.singleShot(0, self._update_banner_pixmap)
-                main_layout.addSpacing(config.UI_ELEMENT_SPACING)
 
-        # Add user info and buttons to the top row
-        refresh_layout = QtWidgets.QHBoxLayout()
-        # Add 4px margin to align with the folder panel's content
-        refresh_layout.setContentsMargins(4, 0, 4, 0)
-        
-        refresh_layout.addStretch()  # Push other buttons to the right
-        
-        self.refresh_btn = QtWidgets.QPushButton("Refresh")
-        self.refresh_btn.setToolTip("Refresh metadata and re-index quick search (Ctrl+R)")
-        self.refresh_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
-        self.refresh_btn.clicked.connect(self.on_refresh_clicked)
-        refresh_layout.addWidget(self.refresh_btn)
-        
-        # Setup timer to update cache stats periodically
-        self.cache_stats_timer = QtCore.QTimer()
-        self.cache_stats_timer.timeout.connect(self.update_cache_stats)
-        self.cache_stats_timer.start(5000)  # Update every 5 seconds
-
-        # Add Settings button next to Refresh
-        self.settings_btn = QtWidgets.QPushButton("Settings")
-        self.settings_btn.setToolTip("Configure keybinds and preferences")
-        self.settings_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
-        self.settings_btn.clicked.connect(self.open_settings)
-        refresh_layout.addWidget(self.settings_btn)
-        
-        # Add refresh layout to main layout
-        main_layout.addLayout(refresh_layout)
-        
         # Add spacing before separator
         main_layout.addSpacing(config.UI_ELEMENT_SPACING)
         
@@ -474,11 +445,12 @@ class CharonWindow(QtWidgets.QWidget):
 
         self.center_tab_widget = QtWidgets.QTabWidget(center_widget)
         self.center_tab_widget.setDocumentMode(True)
+        self._install_tab_corner_controls()
         center_layout.addWidget(self.center_tab_widget)
 
         workflows_container = QtWidgets.QWidget()
         workflows_layout = QtWidgets.QHBoxLayout(workflows_container)
-        workflows_layout.setContentsMargins(0, 0, 0, 0)
+        workflows_layout.setContentsMargins(0, 5, 0, 0)
         workflows_layout.setSpacing(0)
 
         self.workflows_splitter = QtWidgets.QSplitter(Qt.Horizontal, workflows_container)
@@ -657,6 +629,35 @@ class CharonWindow(QtWidgets.QWidget):
         # Auto-select Bookmarks folder on startup if user has bookmarks
         self._auto_select_bookmarks_on_startup()
     
+    def _install_tab_corner_controls(self):
+        """Attach Refresh and Settings buttons to the tab bar corner."""
+        corner_container = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(corner_container)
+        layout.setContentsMargins(0, 2, 4, 2)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignVCenter)
+
+        self.refresh_btn = QtWidgets.QPushButton("Refresh")
+        self.refresh_btn.setToolTip("Refresh metadata and re-index quick search (Ctrl+R)")
+        self.refresh_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
+        self.refresh_btn.clicked.connect(self.on_refresh_clicked)
+        layout.addWidget(self.refresh_btn)
+
+        self.settings_btn = QtWidgets.QPushButton("Settings")
+        self.settings_btn.setToolTip("Configure keybinds and preferences")
+        self.settings_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
+        self.settings_btn.clicked.connect(self.open_settings)
+        layout.addWidget(self.settings_btn)
+
+        corner_container.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        self.center_tab_widget.setCornerWidget(corner_container, Qt.TopRightCorner)
+
+        # Update cache stats on a timer so tooltip reflects current values
+        self.cache_stats_timer = QtCore.QTimer()
+        self.cache_stats_timer.timeout.connect(self.update_cache_stats)
+        self.cache_stats_timer.start(5000)  # Update every 5 seconds
+        QtCore.QTimer.singleShot(0, self.update_cache_stats)
+
     def _setup_shared_components(self):
         """Setup components shared between normal and command mode."""
         # Share the execution history model with tiny mode
@@ -2131,7 +2132,14 @@ Cache Stats:
             
             # Re-index quick search
             self._start_async_indexing()
-            
+
+            # Update CharonBoard state as part of the unified refresh
+            try:
+                if hasattr(self, "charon_board_panel"):
+                    self.charon_board_panel.refresh_nodes()
+            except Exception as board_exc:
+                system_warning(f"CharonBoard refresh failed: {board_exc}")
+
             # No pop-up message - refresh happens silently
             
         except Exception as e:
