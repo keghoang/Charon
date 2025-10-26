@@ -140,13 +140,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
         layout.addWidget(self.table)
 
-        self.info_label = QtWidgets.QLabel("")
-        self.info_label.setWordWrap(False)
-        self.info_label.setStyleSheet("color: #a0a0a0; font-size: 11px;")
-        self.info_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.info_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        self.info_label.setFixedHeight(18)
-        layout.addWidget(self.info_label)
+        self.info_label = None
 
     def minimumSizeHint(self) -> QtCore.QSize:
         """Return a relaxed minimum size so the main window can shrink freely."""
@@ -301,15 +295,19 @@ class SceneNodesPanel(QtWidgets.QWidget):
         node_name = self._selected_node_name()
         if not node_name:
             self._footer_text = None
-            self.info_label.setText("")
-            self.info_label.setToolTip("")
+            label = getattr(self, "info_label", None)
+            if label:
+                label.setText("")
+                label.setToolTip("")
             return
 
         info = self._node_cache.get(node_name)
         if not info:
             self._footer_text = None
-            self.info_label.setText("")
-            self.info_label.setToolTip("")
+            label = getattr(self, "info_label", None)
+            if label:
+                label.setText("")
+                label.setToolTip("")
             return
 
         if info.workflow_path:
@@ -319,7 +317,9 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
         self._footer_text = text
         self._apply_footer_text()
-        self.info_label.setToolTip(info.workflow_path or "")
+        label = getattr(self, "info_label", None)
+        if label:
+            label.setToolTip(info.workflow_path or "")
 
     def _show_context_menu(self, position):
         item = self.table.itemAt(position)
@@ -333,14 +333,14 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
         menu = QtWidgets.QMenu(self)
 
-        process_action = menu.addAction("Process Node…")
-        process_action.triggered.connect(lambda: self._process_node(info.node))
+        process_action = menu.addAction("Execute Node...")
+        process_action.triggered.connect(lambda: self._process_node(info.node, require_confirmation=False))
         if info.state.lower() == "processing":
             process_action.setEnabled(False)
-            process_action.setText("Process Node… (Running)")
+            process_action.setText("Execute Node... (Running)")
 
-        open_results = menu.addAction("Open Results Folder")
-        open_results.triggered.connect(lambda: self._open_results_folder(info))
+        open_results = menu.addAction("Open Output Folder")
+        open_results.triggered.connect(lambda: self._open_output_folder(info))
 
         menu.addSeparator()
         misc_menu = menu.addMenu("Misc")
@@ -395,26 +395,27 @@ class SceneNodesPanel(QtWidgets.QWidget):
             return None
         return item.data(Qt.UserRole)
 
-    def _process_node(self, node):
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            "Confirm Processing",
-            f"Process node '{node.name()}' with ComfyUI?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
+    def _process_node(self, node, *, require_confirmation: bool = True):
+        if require_confirmation:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Confirm Execution",
+                f"Execute node '{node.name()}' with ComfyUI?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
         try:
             knob = node.knob("process")
             if knob:
                 knob.execute()
-                system_debug(f"Processing started for {node.name()}")
+                system_debug(f"Execution started for {node.name()}")
             else:
-                QtWidgets.QMessageBox.warning(self, "Process Node", "Process knob not found.")
+                QtWidgets.QMessageBox.warning(self, "Execute Node", "Process knob not found.")
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Process Node", f"Failed to process node: {exc}")
-            system_error(f"Failed to process {node.name()}: {exc}")
+            QtWidgets.QMessageBox.critical(self, "Execute Node", f"Failed to execute node: {exc}")
+            system_error(f"Failed to execute {node.name()}: {exc}")
 
     def _import_output(self, node_name: str):
         info = self._node_cache.get(node_name)
@@ -456,20 +457,51 @@ class SceneNodesPanel(QtWidgets.QWidget):
         except Exception:
             create_read()
 
-    def _open_results_folder(self, info: runtime.SceneNodeInfo):
-        temp_dir = info.payload.get("temp_root") if info.payload else None
-        if not temp_dir:
-            temp_dir = getattr(info.node.knob("charon_temp_dir"), "value", lambda: "")()
-        if not temp_dir:
-            QtWidgets.QMessageBox.warning(self, "Results Folder", "Temp directory not configured on node.")
+    def _open_output_folder(self, info: runtime.SceneNodeInfo):
+        if info is None:
+            QtWidgets.QMessageBox.warning(self, "Output Folder", "Node information is unavailable.")
             return
-        results_dir = os.path.join(temp_dir, "results")
+
+        output_path = (info.output_path or "").strip() if info.output_path else ""
+        candidate_paths = []
+        if output_path:
+            candidate_paths.append(output_path)
+
+        temp_dir = ""
+        if info.payload:
+            temp_dir = (info.payload.get("temp_root") or "").strip()
+        if not temp_dir and hasattr(info.node, "knob"):
+            temp_dir = getattr(info.node.knob("charon_temp_dir"), "value", lambda: "")() or ""
+        if temp_dir:
+            candidate_paths.append(os.path.join(temp_dir, "results"))
+
+        folder_to_open = None
+        for candidate in candidate_paths:
+            if not candidate:
+                continue
+            path_obj = candidate
+            if os.path.isfile(path_obj):
+                path_obj = os.path.dirname(path_obj)
+            if os.path.isdir(path_obj):
+                folder_to_open = path_obj
+                break
+
+        if not folder_to_open:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Output Folder",
+                "Unable to locate a results directory for this CharonOp.",
+            )
+            return
+
         try:
-            if not os.path.exists(results_dir):
-                os.makedirs(results_dir, exist_ok=True)
-            os.startfile(results_dir)
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Results Folder", f"Failed to open folder: {exc}")
+            if not QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(folder_to_open)):
+                raise RuntimeError("Desktop services rejected the URL")
+        except Exception:
+            try:
+                os.startfile(folder_to_open)
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(self, "Output Folder", f"Failed to open folder: {exc}")
 
     def _open_workflow_location(self, info: runtime.SceneNodeInfo):
         workflow_path = info.workflow_path
