@@ -14,6 +14,7 @@ from . import preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
 from .paths import resolve_comfy_environment
+from .validation_cache import load_validation_log
 
 
 DEFAULT_PING_URL = "http://127.0.0.1:8188"
@@ -662,9 +663,60 @@ def _validate_models(
     resolver_missing_entries = resolver_result.get("missing") or []
     missing_by_index = {}
     for entry in resolver_missing_entries:
+        if not isinstance(entry, dict):
+            continue
         idx = entry.get("index")
         if isinstance(idx, int):
             missing_by_index[idx] = entry
+
+    workflow_folder = None
+    if isinstance(workflow_bundle, dict):
+        workflow_folder = workflow_bundle.get("folder")
+
+    cached_resolved_entries: List[Dict[str, Any]] = []
+    if workflow_folder:
+        try:
+            cached_payload = load_validation_log(workflow_folder)
+            if isinstance(cached_payload, dict):
+                models_cache = cached_payload.get("models")
+                if isinstance(models_cache, dict):
+                    cached_entries = models_cache.get("resolved_entries") or []
+                    if isinstance(cached_entries, list):
+                        cached_resolved_entries = [
+                            entry for entry in cached_entries if isinstance(entry, dict)
+                        ]
+        except Exception:
+            cached_resolved_entries = []
+
+    invalid_resolutions: List[Dict[str, Any]] = []
+    if resolved_by_comfy:
+        filtered_resolved: Dict[int, str] = {}
+        for idx, path in list(resolved_by_comfy.items()):
+            if not isinstance(idx, int) or not isinstance(path, str):
+                continue
+            reference = references[idx] if idx < len(references) else None
+            reference_name = reference.get("name") if isinstance(reference, dict) else ""
+            if _resolved_path_matches_reference(reference_name, path, models_root):
+                filtered_resolved[idx] = path
+            else:
+                invalid_resolutions.append(
+                    {
+                        "index": idx,
+                        "path": path,
+                        "reference": reference_name,
+                    }
+                )
+                missing_entry = dict(missing_by_index.get(idx) or {})
+                missing_entry.setdefault("index", idx)
+                if reference_name:
+                    missing_entry.setdefault("name", reference_name)
+                missing_entry.setdefault("reason", "mismatched_path")
+                missing_entry["resolved_path"] = path
+                missing_by_index[idx] = missing_entry
+        resolver_missing_entries = [
+            missing_by_index[idx] for idx in sorted(missing_by_index.keys())
+        ]
+        resolved_by_comfy = filtered_resolved
 
     if resolver_result:
         data["resolver"] = {
@@ -678,6 +730,8 @@ def _validate_models(
             ],
             "missing": resolver_missing_entries,
         }
+        if invalid_resolutions:
+            data["resolver"]["invalid"] = invalid_resolutions
         if resolver_errors:
             data["resolver_errors"] = list(resolver_errors)
         traceback_text = resolver_result.get("traceback")
@@ -689,6 +743,98 @@ def _validate_models(
     found_set: set = set()
     index_cache: Optional[Dict[str, List[str]]] = None
 
+    applied_replacements: List[Dict[str, Any]] = []
+    if cached_resolved_entries:
+        for entry in cached_resolved_entries:
+            if not isinstance(entry, dict):
+                continue
+            path_value = entry.get("path")
+            if not isinstance(path_value, str) or not path_value:
+                continue
+            abs_path = os.path.abspath(path_value)
+            if os.path.exists(abs_path) and abs_path not in found_set:
+                found_set.add(abs_path)
+                found_paths.append(abs_path)
+
+        signature_lookup: Dict[Tuple[Optional[str], Optional[str], Optional[str]], str] = {}
+        name_lookup: Dict[str, str] = {}
+        for entry in cached_resolved_entries:
+            if not isinstance(entry, dict):
+                continue
+            path_value = entry.get("path")
+            workflow_value = entry.get("workflow_value")
+            if not isinstance(path_value, str) or not path_value:
+                continue
+            signature = entry.get("signature")
+            if isinstance(signature, (list, tuple)) and len(signature) == 3:
+                signature_tuple = tuple(signature)  # type: ignore[arg-type]
+            else:
+                signature_tuple = None
+            effective_value = workflow_value if isinstance(workflow_value, str) and workflow_value else _derive_workflow_value_from_path(path_value, signature_tuple, models_root, comfy_dir)
+            if not effective_value:
+                continue
+            if signature_tuple:
+                signature_lookup[signature_tuple] = effective_value
+            reference_name = entry.get("reference")
+            if isinstance(reference_name, str) and reference_name:
+                name_lookup[reference_name] = effective_value
+
+        for ref_index, reference in enumerate(references):
+            if not isinstance(reference, dict):
+                continue
+            signature = (
+                reference.get("name"),
+                reference.get("category"),
+                reference.get("node_type"),
+            )
+            replacement = signature_lookup.get(signature)
+            if not replacement:
+                ref_name = reference.get("name")
+                if isinstance(ref_name, str):
+                    replacement = name_lookup.get(ref_name)
+            if replacement:
+                original_value = reference.get("name")
+                reference["name"] = replacement
+                if original_value != replacement:
+                    applied_replacements.append(
+                        {
+                            "index": ref_index,
+                            "original": original_value,
+                            "replacement": replacement,
+                            "source": "cached_reference",
+                        }
+                    )
+
+        for entry in enumerated_refs:
+            if not isinstance(entry, dict):
+                continue
+            signature = (
+                entry.get("name"),
+                entry.get("category"),
+                entry.get("node_type"),
+            )
+            replacement = signature_lookup.get(signature)
+            if not replacement:
+                ref_name = entry.get("name")
+                if isinstance(ref_name, str):
+                    replacement = name_lookup.get(ref_name)
+            if replacement:
+                original_value = entry.get("name")
+                entry["name"] = replacement
+                if original_value != replacement:
+                    applied_replacements.append(
+                        {
+                            "index": entry.get("index"),
+                            "original": original_value,
+                            "replacement": replacement,
+                            "source": "cached_enumerated",
+                        }
+                    )
+        if applied_replacements:
+            system_debug(
+                "[Validation] Cached model replacements applied: " +
+                json.dumps(applied_replacements, indent=2)
+            )
     for idx, reference in enumerate(references):
         resolved_path = resolved_by_comfy.get(idx)
         if resolved_path:
@@ -733,9 +879,26 @@ def _validate_models(
                         reference["attempted_directories"] = normalized_dirs
             missing.append(reference)
 
-    data["found"] = found_paths
-    data["missing"] = missing
+    if cached_resolved_entries:
+        missing = _filter_missing_with_resolved_cache(missing, cached_resolved_entries)
 
+    data["found"] = found_paths
+    data["resolved_entries"] = cached_resolved_entries
+    final_reference_log = [
+        {
+            'index': i,
+            'name': reference.get('name'),
+            'category': reference.get('category'),
+            'node_type': reference.get('node_type'),
+        }
+        for i, reference in enumerate(references)
+        if isinstance(reference, dict)
+    ]
+    system_debug(
+        "[Validation] Final model references for " +
+        f"{workflow_folder or 'unknown workflow'}: " +
+        json.dumps(final_reference_log, indent=2)
+    )
     if missing:
         summary = f"Missing {len(missing)} model file(s)."
         detail_lines = []
@@ -1203,8 +1366,10 @@ def _find_model_file(
     name = reference.get("name") or ""
     if not name:
         return False, None
-
     normalized = name.replace("/", os.sep).replace("\\", os.sep)
+    base_name = os.path.basename(normalized)
+    has_subdirectories = base_name != normalized
+
     if os.path.isabs(normalized) and os.path.exists(normalized):
         return True, os.path.abspath(normalized)
 
@@ -1212,13 +1377,22 @@ def _find_model_file(
     if os.path.exists(candidate):
         return True, os.path.abspath(candidate)
 
+    if has_subdirectories:
+        trimmed = normalized
+        if normalized.lower().startswith(f"models{os.sep}"):
+            trimmed = normalized[len("models") + 1 :]
+        candidate = os.path.join(models_root, trimmed)
+        if os.path.exists(candidate):
+            return True, os.path.abspath(candidate)
+        return False, None
+
     category = reference.get("category") or ""
     if category:
-        direct = os.path.join(models_root, category, os.path.basename(normalized))
+        direct = os.path.join(models_root, category, base_name)
         if os.path.exists(direct):
             return True, os.path.abspath(direct)
 
-    fallback = os.path.join(models_root, os.path.basename(normalized))
+    fallback = os.path.join(models_root, base_name)
     if os.path.exists(fallback):
         return True, os.path.abspath(fallback)
 
@@ -1248,11 +1422,132 @@ def _lookup_model_in_index(
     if not index:
         return False, None
     name = reference.get("name") or ""
-    lowered = os.path.basename(name).lower()
+    normalized = name.replace("/", os.sep).replace("\\", os.sep)
+    base_name = os.path.basename(normalized)
+    if base_name != normalized:
+        return False, None
+    lowered = base_name.lower()
     matches = index.get(lowered)
     if matches:
         return True, os.path.abspath(matches[0])
     return False, None
+
+
+
+def _normalize_workflow_entry(value: str) -> str:
+    normalized = (value or "").replace("\\", "/")
+    if os.sep == "\\":
+        return normalized.replace("/", "\\")
+    return normalized
+
+def _derive_workflow_value_from_path(
+    path_value: Optional[str],
+    signature: Optional[Tuple[Optional[str], Optional[str], Optional[str]]],
+    models_root: str,
+    comfy_dir: Optional[str],
+) -> Optional[str]:
+    if not path_value:
+        return None
+    abs_path = os.path.abspath(path_value)
+    category = None
+    if signature and len(signature) >= 2:
+        category = signature[1]
+    if category:
+        category_root = os.path.join(models_root, category)
+        if os.path.isdir(category_root):
+            try:
+                rel = os.path.relpath(abs_path, category_root)
+                if not rel.startswith('..'):
+                    return _normalize_workflow_entry(rel)
+            except ValueError:
+                pass
+    if models_root and os.path.isdir(models_root):
+        try:
+            rel = os.path.relpath(abs_path, models_root)
+            if not rel.startswith('..'):
+                return _normalize_workflow_entry(rel)
+        except ValueError:
+            pass
+    if comfy_dir:
+        try:
+            rel = os.path.relpath(abs_path, comfy_dir)
+            if not rel.startswith('..'):
+                return _normalize_workflow_entry(rel)
+        except ValueError:
+            pass
+    return _normalize_workflow_entry(abs_path)
+
+def _filter_missing_with_resolved_cache(
+    missing: Iterable[Dict[str, Any]],
+    resolved_entries: Iterable[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    resolved_signatures: set[Tuple[Optional[str], Optional[str], Optional[str]]] = set()
+    resolved_names: set[str] = set()
+
+    for entry in resolved_entries or []:
+        if not isinstance(entry, dict):
+            continue
+        signature = entry.get("signature")
+        if isinstance(signature, (list, tuple)) and len(signature) == 3:
+            resolved_signatures.add(tuple(signature))  # type: ignore[arg-type]
+        reference_name = entry.get("reference")
+        if isinstance(reference_name, str) and reference_name:
+            resolved_names.add(reference_name)
+        workflow_value = entry.get("workflow_value")
+        if isinstance(workflow_value, str) and workflow_value:
+            resolved_names.add(workflow_value)
+
+    filtered: List[Dict[str, Any]] = []
+    for item in missing or []:
+        if not isinstance(item, dict):
+            continue
+        signature = (
+            item.get("name"),
+            item.get("category"),
+            item.get("node_type"),
+        )
+        if signature in resolved_signatures:
+            continue
+        name_value = item.get("name")
+        if isinstance(name_value, str) and name_value in resolved_names:
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _resolved_path_matches_reference(
+    reference_name: Optional[str],
+    resolved_path: str,
+    models_root: str,
+) -> bool:
+    reference_name = (reference_name or "").strip()
+    if not reference_name:
+        return True
+
+    normalized = reference_name.replace("\\", "/").strip("/")
+    if not normalized:
+        return True
+
+    if normalized.lower().startswith("models/"):
+        normalized = normalized[7:].strip("/")
+
+    # Only enforce subdirectory matches when the reference includes a slash.
+    if "/" not in normalized:
+        return True
+
+    if not models_root:
+        return True
+
+    resolved_path = os.path.abspath(resolved_path)
+    models_root_abs = os.path.abspath(models_root)
+
+    try:
+        reference_rel = os.path.relpath(resolved_path, models_root_abs)
+    except ValueError:
+        reference_rel = resolved_path
+
+    reference_rel = reference_rel.replace("\\", "/").strip("/")
+    return reference_rel.lower().endswith(normalized.lower())
 
 
 def _extract_workflow_context(

@@ -4,10 +4,13 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .paths import resolve_comfy_environment
+
+
+SHARED_MODELS_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\shared_models"
 
 
 @dataclass
@@ -32,6 +35,89 @@ class ResolutionResult:
             "failed": list(self.failed),
             "notes": list(self.notes),
         }
+
+
+def find_local_model_matches(
+    reference: Dict[str, Any],
+    models_root: str,
+    *,
+    extra_roots: Optional[Sequence[str]] = None,
+) -> List[str]:
+    """
+    Locate files that match the referenced model name within designated folders.
+
+    Returns a list of candidate absolute paths sorted by preference (nearest
+    match first).
+    """
+    file_name = os.path.basename(_safe_str(reference.get("name")))
+    if not file_name:
+        return []
+
+    search_roots: List[str] = []
+    for root in _iter_designated_roots(reference, models_root):
+        if root not in search_roots:
+            search_roots.append(root)
+    for root in extra_roots or ():
+        normalized = os.path.abspath(root)
+        if normalized and normalized not in search_roots and os.path.isdir(normalized):
+            search_roots.append(normalized)
+
+    if not search_roots:
+        return []
+
+    matches: List[str] = []
+    seen: set[str] = set()
+    for root in search_roots:
+        for candidate in _iter_matching_files(root, file_name):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            matches.append(candidate)
+    return matches
+
+
+def find_shared_model_matches(file_name: str) -> List[str]:
+    """Search the global shared models repository for matching files."""
+    file_name = os.path.basename(_safe_str(file_name))
+    if not file_name or not os.path.isdir(SHARED_MODELS_ROOT):
+        return []
+    matches: List[str] = []
+    for candidate in _iter_matching_files(SHARED_MODELS_ROOT, file_name):
+        matches.append(candidate)
+    return matches
+
+
+def format_model_reference_for_workflow(
+    candidate_path: str,
+    comfy_dir: Optional[str],
+) -> str:
+    """
+    Convert an absolute path into the string representation expected inside a workflow.
+    """
+    candidate_path = os.path.abspath(candidate_path)
+    comfy_dir = os.path.abspath(comfy_dir) if comfy_dir else None
+    if comfy_dir:
+        try:
+            rel = os.path.relpath(candidate_path, comfy_dir)
+            if not rel.startswith(".."):
+                return rel.replace("\\", "/")
+        except ValueError:
+            pass
+    return candidate_path.replace("\\", "/")
+
+
+def determine_expected_model_path(
+    reference: Dict[str, Any],
+    models_root: str,
+    comfy_dir: Optional[str],
+) -> Optional[str]:
+    return _expected_model_path(
+        reference,
+        models_root,
+        comfy_dir,
+        attempted_categories=reference.get("attempted_categories"),
+        attempted_directories=reference.get("attempted_directories"),
+    )
 
 
 def resolve_missing_models(
@@ -294,6 +380,62 @@ def _find_matching_file(root: str, file_name: str) -> Optional[str]:
         if file_name in files:
             return os.path.abspath(os.path.join(candidate_root, file_name))
     return None
+
+
+def _iter_matching_files(root: str, file_name: str) -> Iterator[str]:
+    if not root or not file_name:
+        return
+    normalized_root = os.path.abspath(root)
+    if not os.path.isdir(normalized_root):
+        return
+    direct_candidate = os.path.join(normalized_root, file_name)
+    if os.path.isfile(direct_candidate):
+        yield os.path.abspath(direct_candidate)
+    lowered = file_name.lower()
+    for candidate_root, _dirs, files in os.walk(normalized_root):
+        for entry in files:
+            if entry.lower() == lowered:
+                yield os.path.abspath(os.path.join(candidate_root, entry))
+
+
+def _iter_designated_roots(
+    reference: Dict[str, Any],
+    models_root: str,
+) -> Iterator[str]:
+    if models_root:
+        models_root = os.path.abspath(models_root)
+    seen: set[str] = set()
+    attempted_dirs = reference.get("attempted_directories") or []
+    for directory in attempted_dirs:
+        if not isinstance(directory, str):
+            continue
+        normalized = os.path.abspath(directory)
+        if not os.path.isdir(normalized):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        yield normalized
+
+    attempted_categories = reference.get("attempted_categories") or []
+    for category in attempted_categories:
+        category = _safe_str(category)
+        if not category:
+            continue
+        if not models_root:
+            continue
+        candidate = os.path.join(models_root, category)
+        if not os.path.isdir(candidate):
+            continue
+        normalized = os.path.abspath(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        yield normalized
+
+    if models_root and os.path.isdir(models_root) and models_root not in seen:
+        seen.add(models_root)
+        yield models_root
 
 
 def _index_dependencies(

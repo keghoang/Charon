@@ -25,26 +25,48 @@ from datetime import datetime
 class _ValidationWorker(QtCore.QObject):
     finished = QtCore.Signal(str, bool, dict)
     failed = QtCore.Signal(str, str)
+    canceled = QtCore.Signal(str)
 
     def __init__(self, script_path: str, comfy_path: str, workflow_bundle: dict):
         super().__init__()
         self._script_path = script_path
         self._comfy_path = comfy_path
         self._workflow_bundle = workflow_bundle
+        self._cancelled = False
 
     @QtCore.Slot()
     def run(self) -> None:
         try:
+            if self._should_abort():
+                self.canceled.emit(self._script_path)
+                return
             result = validate_comfy_environment(
                 self._comfy_path,
                 workflow_bundle=self._workflow_bundle,
                 use_cache=False,
                 force=True,
             )
+            if self._should_abort():
+                self.canceled.emit(self._script_path)
+                return
             payload = result.to_dict()
             self.finished.emit(self._script_path, bool(result.ok), payload)
         except Exception as exc:  # pragma: no cover - defensive path
+            if self._should_abort():
+                self.canceled.emit(self._script_path)
+                return
             self.failed.emit(self._script_path, str(exc))
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def _should_abort(self) -> bool:
+        if self._cancelled:
+            return True
+        thread = QtCore.QThread.currentThread()
+        if thread and thread.isInterruptionRequested():
+            return True
+        return False
 
 
 class ScriptPanel(QtWidgets.QWidget):
@@ -83,6 +105,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self._validation_timer.timeout.connect(self._on_validation_timer_tick)
         self._validation_cache_root = self._ensure_validation_cache_root()
         self._validation_cache = {}
+        self._closing = False
         
         # Setup the UI
         self.layout = QtWidgets.QVBoxLayout(self)
@@ -756,8 +779,10 @@ class ScriptPanel(QtWidgets.QWidget):
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_validation_finished)
         worker.failed.connect(self._on_validation_failed)
+        worker.canceled.connect(self._on_validation_canceled)
         worker.finished.connect(lambda *_: thread.quit())
         worker.failed.connect(lambda *_: thread.quit())
+        worker.canceled.connect(lambda *_: thread.quit())
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self._validation_workers[script_path] = worker
@@ -767,6 +792,8 @@ class ScriptPanel(QtWidgets.QWidget):
     @QtCore.Slot(str, bool, dict)
     def _on_validation_finished(self, script_path: str, ok: bool, payload: dict) -> None:
         self._cleanup_validation_worker(script_path)
+        if self._closing:
+            return
         state = "validated" if ok else "needs_resolve"
         self.script_model.set_validation_state(script_path, state, payload)
         self._write_validation_cache(script_path, state, payload)
@@ -776,11 +803,22 @@ class ScriptPanel(QtWidgets.QWidget):
     @QtCore.Slot(str, str)
     def _on_validation_failed(self, script_path: str, error_message: str) -> None:
         self._cleanup_validation_worker(script_path)
+        if self._closing:
+            return
         self.script_model.set_validation_state(script_path, "idle")
         self._clear_validation_cache(script_path)
         if not self.script_model.has_active_validation():
             self._validation_timer.stop()
         QtWidgets.QMessageBox.critical(self, "Validation Failed", error_message)
+
+    @QtCore.Slot(str)
+    def _on_validation_canceled(self, script_path: str) -> None:
+        self._cleanup_validation_worker(script_path)
+        if self._closing:
+            return
+        self.script_model.set_validation_state(script_path, "idle")
+        if not self.script_model.has_active_validation():
+            self._validation_timer.stop()
 
     def _cleanup_validation_worker(self, script_path: str) -> None:
         thread = self._validation_threads.pop(script_path, None)
@@ -788,6 +826,35 @@ class ScriptPanel(QtWidgets.QWidget):
         if thread is not None and thread.isRunning():
             thread.quit()
             thread.wait(1000)
+
+    def _stop_all_validations(self) -> None:
+        for script_path in list(self._validation_workers.keys()):
+            worker = self._validation_workers.get(script_path)
+            if worker is not None:
+                try:
+                    worker.cancel()
+                except Exception:
+                    pass
+        for script_path in list(self._validation_threads.keys()):
+            thread = self._validation_threads.pop(script_path, None)
+            if thread is None:
+                continue
+            if thread.isRunning():
+                thread.requestInterruption()
+                thread.quit()
+                thread.wait(2000)
+        self._validation_workers.clear()
+        self._validation_threads.clear()
+        self._validation_timer.stop()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        self._closing = False
+        super().showEvent(event)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._closing = True
+        self._stop_all_validations()
+        super().closeEvent(event)
 
     def _on_validation_timer_tick(self) -> None:
         updated = self.script_model.advance_validation_animation()
@@ -868,11 +935,33 @@ class ScriptPanel(QtWidgets.QWidget):
         self._start_validation(script_path, bundle)
 
     def _handle_script_show_payload_request(self, script_path: str) -> None:
-        """Show the raw validation payload when advanced mode is enabled."""
+        """Show the validation result dialog with options to inspect raw data."""
         if not script_path:
             return
-        revalidate = self._show_raw_validation_payload(script_path)
-        if revalidate:
+        bundle = self._load_workflow_bundle_safe(script_path)
+        if not bundle:
+            return
+        cached = self._read_validation_cache(script_path)
+        payload = cached.get("payload") if isinstance(cached, dict) else None
+        if not payload:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Validation",
+                "No validation data available. Run Validate first.",
+            )
+            return
+
+        comfy_path = self._resolve_comfy_path()
+        workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
+        dialog = ValidationResolveDialog(
+            payload,
+            workflow_name=workflow_name,
+            comfy_path=comfy_path,
+            workflow_bundle=bundle,
+            parent=self,
+        )
+        result = exec_dialog(dialog)
+        if result == 1:
             self._handle_script_revalidate_request(script_path)
 
     def on_script_run(self, index):
