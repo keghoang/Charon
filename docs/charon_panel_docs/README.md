@@ -37,11 +37,14 @@ This directory contains comprehensive architecture and design documentation for 
 - **11-tag-system.md** - Tag-based script organization with batched updates
 
 ### Recent Improvements
+- **Workflow Validation**: Script browser now exposes a stateful *Validate / Resolve / ✓ Passed* column that blocks Grab until a workflow passes Comfy checks.
+- **Per-User Cache**: Validation results persist under `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache\<workflow>_<hash>/status.json`, supporting bespoke model layouts per artist.
 - **Context Menus**: Right-click empty space for "New Script" and "Open Folder"
 - **Panel Indicators**: Collapsible panels show << >> indicators, clickable to reopen
 - **Execution Dialog**: Real-time updates, monospace font, minimal interface
 - **Tag System**: Batched updates prevent UI flicker during tag operations
 - **Hotkey Cleanup**: Automatic purge of missing scripts on startup and refresh
+- **Comfy Footer**: Connection widget presents live "Checking / Running / Launching" states, with a context menu to send a graceful shutdown to ComfyUI.
 
 ### Project Information
 - **PROJECT_STRUCTURE.md** - Complete project file organization
