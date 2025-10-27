@@ -460,7 +460,7 @@ class MetadataPanel(QtWidgets.QWidget):
         workflow_file = charon_meta.get("workflow_file") or conf.get("workflow_file") or "workflow.json"
         state = load_workflow_state(self.script_folder)
         use_local_override = bool(state.get("validated"))
-        local_override_path = get_validated_workflow_path(self.script_folder, ensure_dir=True)
+        local_override_path = get_validated_workflow_path(self.script_folder, ensure=True)
         if use_local_override and os.path.exists(local_override_path):
             workflow_path = local_override_path
         else:

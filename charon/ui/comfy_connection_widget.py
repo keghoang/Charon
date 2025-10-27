@@ -13,6 +13,12 @@ from ..paths import extend_sys_path_with_comfy
 import urllib.request
 import urllib.error
 
+try:  # PySide6 helper to check lifetime of wrapped objects
+    from shiboken6 import isValid as _qt_is_valid  # type: ignore
+except Exception:  # pragma: no cover - fallback
+    def _qt_is_valid(obj) -> bool:
+        return obj is not None
+
 class ComfyConnectionWidget(QtWidgets.QWidget):
     """Compact footer widget that monitors and configures ComfyUI connectivity."""
 
@@ -184,8 +190,13 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 client = None
 
             widget = target_ref()
-            if widget and not getattr(widget, "_is_shutting_down", False):
-                widget._connection_check_finished.emit(connected, client, manual)
+            if not widget:
+                return
+            if not _qt_is_valid(widget):
+                return
+            if getattr(widget, "_is_shutting_down", False):
+                return
+            widget._connection_check_finished.emit(connected, client, manual)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -480,6 +491,10 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         Compatibility helper for processor scripts that need the active client.
         """
         return self._client
+
+    def is_connected(self) -> bool:
+        """Return True when ComfyUI is currently online."""
+        return bool(self._connected)
 
     def current_comfy_path(self) -> str:
         """

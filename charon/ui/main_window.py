@@ -670,6 +670,12 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.addStretch()
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
+        self.comfy_connection_widget.connection_status_changed.connect(
+            self.script_panel.update_comfy_connection_status
+        )
+        self.script_panel.update_comfy_connection_status(
+            self.comfy_connection_widget.is_connected()
+        )
         footer_layout.addWidget(self.comfy_connection_widget)
         main_layout.addLayout(footer_layout)
         self._refresh_project_display()

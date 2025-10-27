@@ -370,6 +370,32 @@ def purge_local_artifacts(remote_folder: str) -> None:
     _clear_ui_validation_cache(remote_folder)
 
 
+def clear_validation_artifacts(remote_folder: str) -> None:
+    """
+    Remove all cached validation artifacts for the given workflow.
+    """
+    if not remote_folder:
+        return
+    _clear_validation_cache(remote_folder)
+    clear_ui_validation_status(remote_folder)
+    try:
+        validated_path = Path(get_validated_workflow_path(remote_folder, ensure=False))
+    except Exception:
+        validated_path = None
+    if validated_path and validated_path.exists():
+        try:
+            validated_path.unlink()
+        except Exception:
+            pass
+    state = load_workflow_state(remote_folder)
+    if state:
+        state['validated'] = False
+        state['validated_hash'] = None
+        state['validated_at'] = None
+        state['local_path'] = state.get('source_path') or ''
+        _write_workflow_state(remote_folder, state)
+
+
 def _clear_ui_validation_cache(remote_folder: str) -> None:
     """
     Remove the UI validation cache (script panel) associated with the workflow.
@@ -510,3 +536,4 @@ def validation_raw_path(remote_folder: str, *, ensure_parent: bool = False) -> P
 def validation_resolve_log_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
     cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
     return cache_root / "validation_resolve_log.json"
+
