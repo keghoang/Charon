@@ -24,6 +24,8 @@ from ..workflow_local_store import append_validation_resolve_entry
 
 
 SUCCESS_COLOR = "#228B22"
+VALIDATION_COLUMN_WIDTHS = (120, 80, 160, 80)
+ACTION_BUTTON_WIDTH = 90
 MODEL_CATEGORY_PREFIXES = {
     "diffusion_models",
     "checkpoints",
@@ -190,7 +192,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        self.resize(720, 540)
+        self.resize(500, 540)
 
     def _create_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
         key = str(issue.get("key") or "")
@@ -298,18 +300,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
         table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setStretchLastSection(False)
-        table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        for column in range(4):
+            mode = (
+                QtWidgets.QHeaderView.ResizeMode.Fixed
+                if column in (2, 3)
+                else QtWidgets.QHeaderView.ResizeMode.Interactive
+            )
+            table.horizontalHeader().setSectionResizeMode(column, mode)
+        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setTextElideMode(QtCore.Qt.TextElideMode.ElideMiddle)
         table.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         table.verticalHeader().setDefaultSectionSize(26)
         table.setStyleSheet(
             "QTableWidget { font-size: 12px; }"
             "QPushButton { padding: 2px 8px; font-size: 11px; }"
         )
-        table.setColumnWidth(1, 80)
-        table.setColumnWidth(3, 140)
+        for column, width in enumerate(VALIDATION_COLUMN_WIDTHS):
+            table.setColumnWidth(column, width)
         frame_layout.addWidget(table)
 
         data = issue.get("data") or {}
@@ -353,23 +360,28 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         table = QtWidgets.QTableWidget(frame)
         table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Node", "Package", "Status", "Action"])
+        table.setHorizontalHeaderLabels(["Node", "Status", "Package", "Action"])
         table.verticalHeader().setVisible(False)
         table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
         table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setStretchLastSection(False)
-        table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        for column in range(4):
+            mode = (
+                QtWidgets.QHeaderView.ResizeMode.Fixed
+                if column in (2, 3)
+                else QtWidgets.QHeaderView.ResizeMode.Interactive
+            )
+            table.horizontalHeader().setSectionResizeMode(column, mode)
+        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setTextElideMode(QtCore.Qt.TextElideMode.ElideMiddle)
         table.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         table.verticalHeader().setDefaultSectionSize(26)
         table.setStyleSheet(
             "QTableWidget { font-size: 12px; }"
             "QPushButton { padding: 2px 8px; font-size: 11px; }"
         )
-        table.setColumnWidth(2, 90)
-        table.setColumnWidth(3, 160)
+        for column, width in enumerate(VALIDATION_COLUMN_WIDTHS):
+            table.setColumnWidth(column, width)
         frame_layout.addWidget(table)
 
         data = issue.get("data") or {}
@@ -552,7 +564,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             placeholder = QtWidgets.QTableWidgetItem("No model data reported.")
             placeholder.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             table.setItem(0, 0, placeholder)
-            table.setSpan(0, 0, 1, 3)
+            table.setSpan(0, 0, 1, 4)
             return {}
 
         table.setColumnHidden(3, False)
@@ -619,7 +631,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             table.setItem(row, 2, location_item)
             button = QtWidgets.QPushButton("Resolve")
             button.setFixedHeight(24)
-            button.setMaximumWidth(110)
+            button.setMaximumWidth(ACTION_BUTTON_WIDTH)
             button.setStyleSheet(
                 "QPushButton {"
                 " background-color: #B22222;"
@@ -666,59 +678,85 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     ) -> Dict[int, Dict[str, Any]]:
         required = data.get("required") or []
         missing_entries = data.get("missing") or []
-        missing_set = {
-            str(item).strip()
-            for item in missing_entries
-            if isinstance(item, str) and item.strip()
-        }
         dependencies = self._load_dependencies()
 
         self._ensure_custom_node_package_map()
-        row_count = len(required)
+
+        filtered_required: List[Tuple[str, str]] = []
+        skip_nodes: set[str] = set()
+        for node_name in required:
+            node_type = str(node_name).strip()
+            if not node_type:
+                continue
+            package_name = self._package_for_node_type(node_type) or "Unknown package"
+            if package_name.lower() == "comfy-core":
+                skip_nodes.add(node_type.lower())
+                continue
+            filtered_required.append((node_type, package_name))
+
+        if skip_nodes and missing_entries:
+            filtered_missing = [
+                entry
+                for entry in missing_entries
+                if not (isinstance(entry, str) and entry.strip().lower() in skip_nodes)
+            ]
+            if len(filtered_missing) != len(missing_entries):
+                data["missing"] = filtered_missing
+                missing_entries = filtered_missing
+
+        missing_set = {
+            str(item).strip().lower()
+            for item in missing_entries
+            if isinstance(item, str) and item.strip()
+        }
+
+        row_count = len(filtered_required)
         if row_count == 0:
             table.setRowCount(1)
             table.setColumnHidden(3, True)
             placeholder = QtWidgets.QTableWidgetItem("No custom node data reported.")
             placeholder.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             table.setItem(0, 0, placeholder)
-            table.setSpan(0, 0, 1, 3)
+            table.setSpan(0, 0, 1, 4)
             return {}
 
         table.setColumnHidden(3, False)
         table.setRowCount(row_count)
 
         row_mapping: Dict[int, Dict[str, Any]] = {}
-        for row, node_name in enumerate(required):
-            node_type = str(node_name).strip()
-            package_name = self._package_for_node_type(node_type) or "Unknown package"
+        for row, (node_type, package_name) in enumerate(filtered_required):
             package_display = package_name
             status_value = "Available"
             dependency = None
 
+            node_item = QtWidgets.QTableWidgetItem(node_type or "Unknown Node")
+            node_item.setToolTip(node_type or "Unknown Node")
+            table.setItem(row, 0, node_item)
+
+            status_item = QtWidgets.QTableWidgetItem(status_value.title())
+            self._apply_status_style(status_item, status_value)
+            table.setItem(row, 1, status_item)
+
             package_item = QtWidgets.QTableWidgetItem(package_display)
             package_item.setToolTip(package_display)
 
-            if node_type in missing_set:
+            node_key = node_type.lower()
+            if node_key in missing_set:
                 status_value = "Missing"
+                status_item.setText(status_value.title())
+                self._apply_status_style(status_item, status_value)
                 package_item.setText(f"{package_display} (not installed)")
                 package_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
                 dependency = self._match_dependency_for_package(package_name, node_type, dependencies)
             else:
                 package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
 
-            node_item = QtWidgets.QTableWidgetItem(node_type or "Unknown Node")
-            node_item.setToolTip(node_type or "Unknown Node")
-            table.setItem(row, 0, node_item)
-            table.setItem(row, 1, package_item)
-
-            status_item = QtWidgets.QTableWidgetItem(status_value.title())
-            self._apply_status_style(status_item, status_value)
-            table.setItem(row, 2, status_item)
+            table.setItem(row, 2, package_item)
 
             if status_value == "Missing":
                 button = QtWidgets.QPushButton("Resolve")
                 button.setFixedHeight(24)
-                button.setMaximumWidth(140)
+                button.setMaximumWidth(ACTION_BUTTON_WIDTH)
                 button.setStyleSheet(
                     "QPushButton {"
                     " background-color: #B22222;"
