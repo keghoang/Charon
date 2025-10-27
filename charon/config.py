@@ -183,7 +183,7 @@ pre { margin: 0px 0; }
 
 # Debug mode flag - controls verbose output
 # Debug and Logging Settings
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 # Logging configuration
 # System messages are always shown to terminal
@@ -231,6 +231,11 @@ APP_SETTING_DEFINITIONS = {
     },
     "advanced_user_mode": {
         "slug": "advanced_mode",
+        "default": "off",
+        "choices": ["off", "on"],
+    },
+    "debug_logging": {
+        "slug": "debug_mode",
         "default": "off",
         "choices": ["off", "on"],
     },

@@ -413,31 +413,59 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         missing: Iterable[Dict[str, Any]],
         resolved_entries: Iterable[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        resolved_signatures: List[tuple] = []
-        resolved_names: set[str] = set()
+        resolved_signatures: set[Tuple[str, str, str]] = set()
+        resolved_matchers: set[str] = set()
         for entry in resolved_entries or []:
             if not isinstance(entry, dict):
                 continue
             signature = entry.get("signature")
             if isinstance(signature, (list, tuple)) and len(signature) == 3:
-                resolved_signatures.append(tuple(signature))
-            else:
-                reference_name = entry.get("reference")
-                if isinstance(reference_name, str) and reference_name:
-                    resolved_names.add(reference_name)
+                normalized_signature = tuple(
+                    self._normalize_identifier(part) for part in signature
+                )
+                resolved_signatures.add(normalized_signature)  # type: ignore[arg-type]
+            reference_name = entry.get("reference")
+            original_reference = entry.get("original_reference")
+            workflow_value = entry.get("workflow_value")
+            path_value = entry.get("path")
+            resolved_path = entry.get("resolved_path")
+            for value in (
+                reference_name,
+                original_reference,
+                workflow_value,
+                path_value,
+                resolved_path,
+            ):
+                normalized = self._normalize_identifier(value)
+                if normalized:
+                    resolved_matchers.add(normalized)
+            for value in (path_value, resolved_path):
+                if isinstance(value, str) and value:
+                    normalized = self._normalize_identifier(os.path.basename(value))
+                    if normalized:
+                        resolved_matchers.add(normalized)
         filtered: List[Dict[str, Any]] = []
         for item in missing or []:
             if not isinstance(item, dict):
                 continue
-            signature = (
-                item.get("name"),
-                item.get("category"),
-                item.get("node_type"),
+            signature_tuple = (
+                self._normalize_identifier(item.get("name")),
+                self._normalize_identifier(item.get("category")),
+                self._normalize_identifier(item.get("node_type")),
             )
-            if signature in resolved_signatures:
+            if signature_tuple in resolved_signatures:
                 continue
-            name_value = item.get("name")
-            if isinstance(name_value, str) and name_value in resolved_names:
+            candidate_values = {
+                self._normalize_identifier(item.get("name")),
+                self._normalize_identifier(os.path.basename(str(item.get("name") or ""))),
+                self._normalize_identifier(item.get("path")),
+            }
+            raw_payload = item.get("raw")
+            if isinstance(raw_payload, dict):
+                candidate_values.add(self._normalize_identifier(raw_payload.get("name")))
+                candidate_values.add(self._normalize_identifier(raw_payload.get("path")))
+            candidate_values = {value for value in candidate_values if value}
+            if candidate_values & resolved_matchers:
                 continue
             filtered.append(item)
         return filtered
@@ -586,6 +614,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             table.setCellWidget(row, 3, button)
             row_mapping[row] = {
                 "reference": dict(reference),
+                "missing_entry": reference,
                 "reference_signature": (
                     reference.get("name"),
                     reference.get("category"),
@@ -825,6 +854,17 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             normalized = normalized.replace("/", "\\")
         return normalized
 
+    @staticmethod
+    def _normalize_identifier(value: Any) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return ""
+        return value.replace("\\", "/").lower()
+
     def _apply_status_style(self, item: QtWidgets.QTableWidgetItem, status: str) -> None:
         status = (status or "").lower()
         color_map = {
@@ -860,6 +900,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         workflow_value: Optional[str] = None,
         resolved_path: Optional[str] = None,
     ) -> None:
+        system_debug(
+            "[Validation] Mark model resolved requested | "
+            f"row={row} status='{status_text}' display='{display_text}' "
+            f"workflow_value='{workflow_value}' resolved_path='{resolved_path}'"
+        )
         widget_info = self._issue_widgets.get("models")
         if not widget_info:
             return
@@ -887,22 +932,51 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             row_info["original_location"] = display_text
         button = row_info.get("button")
         if isinstance(button, QtWidgets.QPushButton):
-            button.setText(status_text)
-            button.setEnabled(False)
-            if status_text.lower() in {"resolved", "copied"}:
+            lower_status = status_text.lower()
+            is_resolved_state = lower_status in {"resolved", "copied"}
+            if is_resolved_state:
                 button.setStyleSheet(
                     "QPushButton {"
                     " background-color: #228B22;"
                     " color: white;"
                     " border: none;"
                     " border-radius: 4px;"
+                    " padding: 2px 8px;"
                     "}"
                     "QPushButton:disabled {"
                     " background-color: #228B22;"
                     " color: white;"
+                    " border: none;"
                     " border-radius: 4px;"
+                    " padding: 2px 8px;"
                     "}"
                 )
+            else:
+                button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #2f3542;"
+                    " color: #f0f0f0;"
+                    " border-radius: 4px;"
+                    " padding: 2px 8px;"
+                    "}"
+                    "QPushButton:disabled {"
+                    " background-color: #2f3542;"
+                    " color: #f0f0f0;"
+                    " border-radius: 4px;"
+                    " padding: 2px 8px;"
+                    "}"
+                )
+            button.setText(status_text)
+            button.setEnabled(False)
+            if is_resolved_state:
+                try:
+                    style = button.style()
+                    style.unpolish(button)
+                    style.polish(button)
+                except Exception:
+                    pass
+                button.update()
+                button.repaint()
         row_info["resolved"] = True
         if isinstance(row_info, dict):
             if workflow_value:
@@ -931,6 +1005,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             append_validation_resolve_entry(self._workflow_folder, entry)
         self._refresh_models_issue_status()
         self._refresh_models_issue_status()
+        issue_info = self._issue_lookup.get("models") or {}
+        issue_data = issue_info.get("data") if isinstance(issue_info, dict) else {}
+        missing_after = issue_data.get("missing") if isinstance(issue_data, dict) else None
+        system_debug(
+            "[Validation] Completed mark model resolved | "
+            f"row={row} remaining_missing={len(missing_after) if isinstance(missing_after, list) else 'unknown'} "
+            f"issue_ok={issue_info.get('ok') if isinstance(issue_info, dict) else 'unknown'}"
+        )
 
     def _apply_model_override(self, original_value: str, new_value: str) -> Tuple[bool, str]:
         original_value = (original_value or "").strip()
@@ -1044,6 +1126,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         normalized_path = abs_path.replace("\\", "/").lower()
         reference = row_info.get("reference") or {}
         reference_name = str(reference.get("name") or "")
+        row_index = row_info.get("row_index")
         signature_value = row_info.get("reference_signature")
         if isinstance(signature_value, tuple):
             signature_payload: Optional[List[Optional[str]]] = list(signature_value)
@@ -1051,6 +1134,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             signature_payload = list(signature_value)
         else:
             signature_payload = None
+        original_signature_tuple: Optional[Tuple[str, Optional[str], Optional[str]]] = None
+        if signature_payload is not None and len(signature_payload) == 3:
+            original_signature_tuple = tuple(signature_payload)  # type: ignore[arg-type]
         for entry in resolved_entries:
             existing_path = str(entry.get("path") or "").replace("\\", "/").lower()
             if existing_path == normalized_path:
@@ -1061,6 +1147,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     entry["workflow_value"] = workflow_value
                 if signature_payload is not None:
                     entry["signature"] = signature_payload
+                if original_signature_tuple and original_signature_tuple[0]:
+                    entry["original_reference"] = original_signature_tuple[0]
                 break
         else:
             payload = {"path": abs_path, "status": status}
@@ -1070,6 +1158,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 payload["workflow_value"] = workflow_value
             if signature_payload is not None:
                 payload["signature"] = signature_payload
+                if signature_payload and signature_payload[0]:
+                    payload["original_reference"] = signature_payload[0]
+            elif reference_name:
+                payload["original_reference"] = reference_name
             resolved_entries.append(payload)
 
         try:
@@ -1085,34 +1177,127 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         missing = data.get("missing")
         if isinstance(missing, list):
-            signature = row_info.get("reference_signature")
-            if isinstance(signature, tuple):
-                target_name, target_category, target_node = signature
-                for i, item in enumerate(list(missing)):
-                    if not isinstance(item, dict):
-                        continue
-                    if (
-                        item.get("name") == target_name
-                        and item.get("category") == target_category
-                        and item.get("node_type") == target_node
-                    ):
+            removed = False
+            missing_entry = row_info.get("missing_entry")
+            if isinstance(missing_entry, dict):
+                for i, entry in enumerate(list(missing)):
+                    if entry is missing_entry:
                         missing.pop(i)
+                        removed = True
+                        row_info["missing_entry"] = None
                         break
-            elif isinstance(reference, dict):
-                target_name = reference.get("name")
-                target_category = reference.get("category")
-                target_node = reference.get("node_type")
-                for i, item in enumerate(list(missing)):
-                    if not isinstance(item, dict):
-                        continue
-                    if (
-                        item.get("name") == target_name
-                        and item.get("category") == target_category
-                        and item.get("node_type") == target_node
-                    ):
-                        missing.pop(i)
-                        break
-            data["missing"] = [entry for entry in missing if isinstance(entry, dict)]
+
+            if removed:
+                updated_missing = [entry for entry in missing if isinstance(entry, dict)]
+                data["missing"] = updated_missing
+                system_debug(
+                    "[Validation] Removed missing entry via object identity | "
+                    f"row={row_index} remaining_missing={len(updated_missing)}"
+                )
+            else:
+                signature = row_info.get("reference_signature")
+                target_name: Optional[str]
+                target_category: Optional[str]
+                target_node: Optional[str]
+                if isinstance(signature, (tuple, list)) and len(signature) == 3:
+                    target_name = signature[0]
+                    target_category = signature[1]
+                    target_node = signature[2]
+                elif isinstance(reference, dict):
+                    target_name = reference.get("name")
+                    target_category = reference.get("category")
+                    target_node = reference.get("node_type")
+                else:
+                    target_name = target_category = target_node = None
+
+                target_name_norm = self._normalize_identifier(target_name)
+                target_category_norm = self._normalize_identifier(target_category)
+                target_node_norm = self._normalize_identifier(target_node)
+                workflow_value_norm = self._normalize_identifier(workflow_value)
+
+                def _matches_entry(entry: Dict[str, Any]) -> bool:
+                    if not isinstance(entry, dict):
+                        return False
+                    entry_name_norm = self._normalize_identifier(entry.get("name"))
+                    entry_category_norm = self._normalize_identifier(entry.get("category"))
+                    entry_node_norm = self._normalize_identifier(entry.get("node_type"))
+                    if target_name_norm:
+                        candidates = {entry_name_norm}
+                        raw_payload = entry.get("raw")
+                        if isinstance(raw_payload, dict):
+                            candidates.add(self._normalize_identifier(raw_payload.get("name")))
+                            candidates.add(self._normalize_identifier(raw_payload.get("path")))
+                        candidates.add(self._normalize_identifier(entry.get("path")))
+                        candidates.add(self._normalize_identifier(os.path.basename(str(entry.get("name") or ""))))
+                        if workflow_value_norm:
+                            candidates.add(workflow_value_norm)
+                        candidates = {value for value in candidates if value}
+                        if target_name_norm not in candidates:
+                            return False
+                    if target_category_norm and entry_category_norm != target_category_norm:
+                        return False
+                    if target_node_norm and entry_node_norm != target_node_norm:
+                        return False
+                    return True
+
+                ref_index = row_info.get("reference_index")
+                if isinstance(ref_index, int) and 0 <= ref_index < len(missing):
+                    candidate = missing[ref_index]
+                    if _matches_entry(candidate):
+                        missing.pop(ref_index)
+                        removed = True
+
+                if not removed:
+                    for i, item in enumerate(list(missing)):
+                        if _matches_entry(item):
+                            missing.pop(i)
+                            removed = True
+                            break
+
+                normalized_candidates = {
+                    self._normalize_identifier(abs_path),
+                    self._normalize_identifier(os.path.basename(abs_path)),
+                    workflow_value_norm,
+                    self._normalize_identifier(reference_name),
+                }
+                normalized_candidates = {value for value in normalized_candidates if value}
+
+                if not removed and normalized_candidates:
+                    fallback_removed = False
+                    for i, entry in enumerate(list(missing)):
+                        if not isinstance(entry, dict):
+                            continue
+                        entry_candidates = {
+                            self._normalize_identifier(entry.get("name")),
+                            self._normalize_identifier(os.path.basename(str(entry.get("name") or ""))),
+                            self._normalize_identifier(entry.get("path")),
+                        }
+                        raw_payload = entry.get("raw")
+                        if isinstance(raw_payload, dict):
+                            entry_candidates.add(self._normalize_identifier(raw_payload.get("name")))
+                            entry_candidates.add(self._normalize_identifier(raw_payload.get("path")))
+                        entry_candidates = {value for value in entry_candidates if value}
+                        if entry_candidates & normalized_candidates:
+                            missing.pop(i)
+                            fallback_removed = True
+                    removed = fallback_removed
+
+                filtered_missing = [entry for entry in missing if isinstance(entry, dict)]
+                data["missing"] = filtered_missing
+                if removed:
+                    system_debug(
+                        "[Validation] Removed missing entry via signature/normalized match | "
+                        f"row={row_index} remaining_missing={len(filtered_missing)}"
+                    )
+                else:
+                    try:
+                        debug_name = signature_value[0] if signature_payload else reference_name
+                    except Exception:
+                        debug_name = reference_name
+                    system_debug(
+                        "[Validation] Could not reconcile resolved model with missing list; "
+                        f"name='{debug_name}', workflow_value='{workflow_value}'."
+                    )
 
         resolver_info = data.get("resolver")
         if isinstance(resolver_info, dict):
@@ -1305,6 +1490,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _resolve_model_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
         reference = row_info.get("reference") or {}
         original_name = str(reference.get("name") or "").strip()
+        system_debug(
+            "[Validation] Attempting model auto-resolve | "
+            f"row={row} name='{original_name}' models_root='{row_info.get('models_root')}'"
+        )
         models_root = row_info.get("models_root") or ""
         comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
         expected_path: Optional[str] = None
@@ -1323,6 +1512,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 success, message = self._apply_model_override(original_name, workflow_value)
                 if success:
                     note = ""
+                    system_debug(
+                        "[Validation] Local model resolved | "
+                        f"selected='{selected}' workflow_value='{workflow_value}'"
+                    )
                     self._mark_model_resolved(
                         row,
                         "Resolved",
@@ -1380,6 +1573,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     if success:
                         note = f"Downloaded {file_name} to {destination_display}."
                         notified_manual = True
+                        system_debug(
+                            "[Validation] Global Repo copy completed | "
+                            f"source='{selected}' destination='{expected_path}'"
+                        )
                         self._mark_model_resolved(
                             row,
                             "Resolved",
@@ -1393,6 +1590,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         self._refresh_models_issue_status()
                         return True
                     if message:
+                        system_debug(
+                            "[Validation] Global Repo copy failed | "
+                            f"source='{selected}' destination='{expected_path}' message='{message}'"
+                        )
                         QtWidgets.QMessageBox.warning(self, "Copy Failed", message)
                 else:
                     self._append_issue_note("models", "Copy canceled by user.")
@@ -1400,6 +1601,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     notified_manual = True
         if not notified_manual:
             if expected_path and os.path.exists(expected_path):
+                workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+                destination_display = self._format_model_display_path(expected_path, models_root)
+                system_debug(
+                    "[Validation] Detected model already present at expected path | "
+                    f"path='{expected_path}'"
+                )
+                self._mark_model_resolved(
+                    row,
+                    "Resolved",
+                    destination_display,
+                    "",
+                    workflow_value,
+                    resolved_path=expected_path,
+                )
+                self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value)
+                self._persist_resolved_cache()
+                self._refresh_models_issue_status()
                 return True
             self._notify_manual_download(file_name, models_root, expected_path)
         return False
