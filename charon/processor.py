@@ -20,7 +20,7 @@ from .paths import (
     get_placeholder_image_path,
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
-from . import preferences
+from . import config, preferences
 from .node_factory import reset_charon_node_state
 from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile_color
 
@@ -491,8 +491,11 @@ def build_set_targets(ui_workflow):
     return targets
 
 def log_debug(message, level='INFO'):
+    level_text = (str(level) or 'INFO').upper()
+    if level_text == 'INFO' and not getattr(config, "DEBUG_MODE", False):
+        return
     timestamp = time.strftime('%H:%M:%S')
-    print(f'[{timestamp}] [CHARONOP] [{level}] {message}')
+    print(f'[{timestamp}] [CHARONOP] [{level_text}] {message}')
 
 
 def _inject_png_text_chunk(image_path: str, key: str, text: str) -> None:
