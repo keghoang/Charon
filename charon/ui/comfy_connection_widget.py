@@ -44,6 +44,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._launch_in_progress = False
         self._launch_started_at = 0.0
         self._is_shutting_down = False
+        self._compact_mode = False
+        self._last_status_state = "path_required"
 
         self._connection_check_finished.connect(self._apply_connection_result)
 
@@ -80,6 +82,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.status_caption.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         self.status_caption.setStyleSheet("color: #ffffff;")
         layout.addWidget(self.status_caption)
+
+        self._apply_caption_text()
 
         self.launch_button = QtWidgets.QPushButton("Launch")
         self.launch_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -231,6 +235,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self.client_changed.emit(None)
 
     def _set_status(self, state: str, connected: bool) -> None:
+        self._last_status_state = state or self._last_status_state
         mapping = {
             "online": ("Running", "#51cf66"),
             "offline": ("Offline", "#ff6b6b"),
@@ -240,7 +245,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             "unavailable": ("Client Unavailable", "#ffa94d"),
         }
         label_text, color = mapping.get(state, (state, "#cccccc"))
-        html = f"ComfyUI: <span style='color:{color}; font-weight:bold;'>{label_text}</span>"
+        html = f"<span style='color:{color}; font-weight:bold;'>{label_text}</span>"
 
         previous_connection = self._connected
         previous_text = self.status_label.text()
@@ -282,7 +287,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 self._stop_button_blink()
                 self._apply_button_style(button, "#f08c00", "#d9480f", hover="#f59f00")
             else:
-                button.setText("Press to Launch")
+                button.setText("Launch" if self._compact_mode else "Press to Launch")
                 self._start_button_blink()
 
     def _apply_button_style(
@@ -318,6 +323,21 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 "}"
             )
         button.setStyleSheet(style)
+
+    def set_compact_mode(self, compact: bool) -> None:
+        compact = bool(compact)
+        if self._compact_mode == compact:
+            return
+        self._compact_mode = compact
+        self._apply_caption_text()
+        # Re-emit the current status to update label/button text.
+        self._set_status(self._last_status_state, self._connected)
+
+    def _apply_caption_text(self) -> None:
+        if not hasattr(self, "status_caption"):
+            return
+        caption = "ComfyUI" if self._compact_mode else "ComfyUI Status:"
+        self.status_caption.setText(caption)
 
     def _start_button_blink(self) -> None:
         button = getattr(self, "launch_button", None)

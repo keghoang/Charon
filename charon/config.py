@@ -10,9 +10,9 @@ WINDOW_HEIGHT = 450
 
 # Tiny Mode dimensions
 TINY_MODE_WIDTH = 200       # Default width for tiny mode (pixels)
-TINY_MODE_HEIGHT = 220      # Default height for tiny mode (pixels)
+TINY_MODE_HEIGHT = 210      # Default height for tiny mode (pixels)
 TINY_MODE_MIN_WIDTH = 100   # Minimum width for tiny mode (pixels)
-TINY_MODE_MIN_HEIGHT = 200  # Minimum height for tiny mode (pixels)
+TINY_MODE_MIN_HEIGHT = 180  # Minimum height for tiny mode (pixels)
 # Layout and Spacing
 UI_WINDOW_MARGINS = 4  # Padding around main window content (pixels)
 UI_ELEMENT_SPACING = 4  # Spacing between UI elements (pixels)
