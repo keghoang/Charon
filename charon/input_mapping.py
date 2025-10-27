@@ -319,15 +319,21 @@ def _discover_with_widget_heuristic(
         if not isinstance(widgets_values, list):
             continue
 
+        widget_names = _infer_widget_names(node_data)
         attributes: List[ExposableAttribute] = []
         for index, value in enumerate(widgets_values):
             if not _is_supported_widget_value(value):
                 continue
+
+            display_name = widget_names[index] if index < len(widget_names) else f"widgets_values[{index}]"
+            key = display_name or f"widgets_values[{index}]"
+
             if isinstance(value, str) and not value.strip():
-                continue
+                # Retain empty strings when we have a named widget (e.g. prompt fields).
+                if display_name == f"widgets_values[{index}]":
+                    continue
 
             value_type = _infer_value_type(value)
-            key = f"widgets_values[{index}]"
             attributes.append(
                 ExposableAttribute(
                     key=key,
@@ -392,6 +398,40 @@ def _is_supported_widget_value(value: Any) -> bool:
     if isinstance(value, str):
         return True
     return False
+
+
+def _infer_widget_names(node_data: Dict[str, Any]) -> List[str]:
+    """
+    Attempt to recover widget names so empty string values (e.g. prompt fields)
+    can still be exposed with a user-friendly label.
+    """
+    properties = node_data.get("properties")
+    if isinstance(properties, dict):
+        ue_props = properties.get("ue_properties")
+        if isinstance(ue_props, dict):
+            widget_map = ue_props.get("widget_ue_connectable")
+            if isinstance(widget_map, dict):
+                return list(widget_map.keys())
+
+    inputs = node_data.get("inputs")
+    if isinstance(inputs, list):
+        flagged = [
+            entry.get("name")
+            for entry in inputs
+            if isinstance(entry, dict) and entry.get("widget") and entry.get("name")
+        ]
+        if flagged:
+            return flagged
+
+        inferred = [
+            entry.get("name")
+            for entry in inputs
+            if isinstance(entry, dict) and entry.get("link") is None and entry.get("name")
+        ]
+        if inferred:
+            return inferred
+
+    return []
 
 
 def _iter_workflow_nodes(

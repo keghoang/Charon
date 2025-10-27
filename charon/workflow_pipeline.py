@@ -98,6 +98,8 @@ def convert_with_external_python(ui_workflow, comfy_path, strict=False):
         script_contents = """import json
 import os
 import sys
+import asyncio
+import inspect
 
 input_path = sys.argv[1]
 output_path = sys.argv[2]
@@ -179,7 +181,9 @@ class _CharonPromptServerStub:
 if not hasattr(getattr(server, "PromptServer", object), "instance"):
     server.PromptServer.instance = _CharonPromptServerStub()
 
-nodes.init_extra_nodes(init_custom_nodes=True, init_api_nodes=False)
+maybe_coro = nodes.init_extra_nodes(init_custom_nodes=True, init_api_nodes=False)
+if inspect.iscoroutine(maybe_coro):
+    asyncio.run(maybe_coro)
 
 converter_path = os.path.join(script_dir, "workflow_converter.py")
 spec = importlib.util.spec_from_file_location("workflow_converter", converter_path)
