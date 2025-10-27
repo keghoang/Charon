@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from urllib.parse import urlparse
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..qt_compat import QtCore, QtGui, QtWidgets
@@ -23,6 +24,31 @@ from ..workflow_local_store import append_validation_resolve_entry
 
 
 SUCCESS_COLOR = "#228B22"
+MODEL_CATEGORY_PREFIXES = {
+    "diffusion_models",
+    "checkpoints",
+    "unet",
+    "unets",
+    "text_encoders",
+    "text-encoders",
+    "clip",
+    "clip_vision",
+    "clip-vision",
+    "loras",
+    "vae",
+    "vae_approx",
+    "vae-approx",
+    "embeddings",
+    "controlnet",
+    "hypernetworks",
+    "upscale_models",
+    "upscale",
+    "motion_models",
+    "motion_loras",
+    "styles",
+    "style_models",
+    "ipadapter",
+}
 
 
 class _FileCopyWorker(QtCore.QObject):
@@ -825,6 +851,21 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         comfy_dir: Optional[str],
     ) -> str:
         abs_path = os.path.abspath(abs_path)
+        original_name = str(reference.get("name") or "")
+        normalized_original = original_name.replace("\\", "/").strip()
+        prefer_simple_name = bool(normalized_original) and "/" not in normalized_original
+        simple_value = self._normalize_workflow_value(os.path.basename(abs_path))
+
+        def _finalize(candidate: str) -> str:
+            stripped = self._strip_category_prefix(candidate)
+            normalized_candidate = self._normalize_workflow_value(stripped)
+            if prefer_simple_name and simple_value:
+                if "/" in stripped or "\\" in stripped:
+                    return simple_value
+                if "/" in normalized_candidate or "\\" in normalized_candidate:
+                    return simple_value
+            return normalized_candidate
+
         category = reference.get("category")
         if isinstance(category, str) and category:
             category_root = os.path.join(models_root, category)
@@ -832,18 +873,18 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 try:
                     rel = os.path.relpath(abs_path, category_root)
                     if not rel.startswith(".."):
-                        return self._normalize_workflow_value(rel)
+                        return _finalize(rel)
                 except ValueError:
                     pass
         if models_root and os.path.isdir(models_root):
             try:
                 rel = os.path.relpath(abs_path, models_root)
                 if not rel.startswith(".."):
-                    return self._normalize_workflow_value(rel)
+                    return _finalize(rel)
             except ValueError:
                 pass
         fallback = format_model_reference_for_workflow(abs_path, comfy_dir)
-        return self._normalize_workflow_value(fallback)
+        return _finalize(fallback)
 
     def _normalize_workflow_value(self, value: str) -> str:
         normalized = (value or "").strip()
@@ -852,6 +893,24 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         normalized = normalized.replace("\\", "/")
         if os.sep == "\\":
             normalized = normalized.replace("/", "\\")
+        return normalized
+
+    def _strip_category_prefix(self, value: str) -> str:
+        normalized = (value or "").replace("\\", "/").lstrip("/")
+        if not normalized:
+            return normalized
+        lowered = normalized.lower()
+        if lowered.startswith("models/"):
+            parts = normalized.split("/", 1)
+            normalized = parts[1] if len(parts) > 1 else ""
+        segments = [segment for segment in normalized.split("/") if segment]
+        if len(segments) <= 1:
+            return normalized
+        first_lower = segments[0].lower()
+        if first_lower in MODEL_CATEGORY_PREFIXES:
+            trimmed = "/".join(segments[1:])
+            if trimmed:
+                return trimmed
         return normalized
 
     @staticmethod
@@ -1378,7 +1437,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 return dep
         return None
 
-    def _notify_custom_node_manual_install(self, node_name: str, package_name: str) -> None:
+    def _notify_custom_node_manual_install(self, row_info: Dict[str, Any]) -> bool:
+        node_name = str(row_info.get("node_name") or "").strip()
+        package_name = str(row_info.get("package_name") or "").strip()
         package_display = package_name or node_name or "the required package"
         message = (
             f"Could not locate an installation repository for <b>{package_display}</b>.<br>"
@@ -1390,12 +1451,27 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         dialog.setWindowTitle("Manual Installation Required")
         dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
         dialog.setText(message)
-        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        overrides = self._metadata_dependency_overrides()
+        override_button = None
+        ok_button = dialog.addButton(QtWidgets.QMessageBox.StandardButton.Ok)
+        if overrides:
+            override_button = dialog.addButton(
+                "Install from Metadata...",
+                QtWidgets.QMessageBox.ButtonRole.ActionRole,
+            )
+            dialog.setDefaultButton(ok_button)
         dialog.exec()
+
+        if override_button and dialog.clickedButton() == override_button:
+            selected = self._prompt_dependency_override(package_display, overrides)
+            if selected and self._install_dependency_from_metadata(row_info, selected):
+                return True
+
         self._append_issue_note(
             "custom_nodes",
             f"Manual install required for {package_display}. Install under custom_nodes and restart ComfyUI.",
         )
+        return False
 
     def _notify_manual_download(
         self,
@@ -1622,14 +1698,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._notify_manual_download(file_name, models_root, expected_path)
         return False
 
+
     def _resolve_custom_node_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
         node_name = str(row_info.get("node_name") or "").strip()
         package_name = str(row_info.get("package_name") or "").strip()
         dependency = row_info.get("dependency")
 
         if dependency and isinstance(dependency, dict):
-            repo = dependency.get("repo") or ""
-            dep_display = dependency.get("name") or package_name or node_name or "Dependency"
+            normalized_dep = self._normalize_dependency_entry(dependency)
+            if not normalized_dep:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Install Custom Node",
+                    "The workflow metadata does not provide a usable repository URL for this dependency.",
+                )
+                return False
+            repo = normalized_dep.get("repo") or ""
+            dep_display = normalized_dep.get("name") or package_name or node_name or "Dependency"
             prompt = (
                 f"A recommended Git repository was found for <b>{dep_display}</b>:<br>"
                 f"<span style='color:#228B22;'>{repo or 'Repository URL unavailable'}</span><br><br>"
@@ -1647,42 +1732,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if dialog.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
                 return False
 
-            result = resolve_missing_custom_nodes(
-                {"missing": [node_name] if node_name else []},
-                self._comfy_path,
-                dependencies=[dependency],
-            )
-            if result.failed:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Installation Failed",
-                    result.failed[0] if result.failed else "Could not install the dependency.",
-                )
-                return False
+            if self._install_dependency_from_metadata(row_info, normalized_dep):
+                return True
+            return False
 
-            note = ""
-            if result.resolved:
-                note = result.resolved[0]
-            elif result.skipped:
-                note = result.skipped[0]
-            if not note:
-                note = (
-                    f"{dep_display} installed. Restart ComfyUI to load the new node."
-                )
-
-            self._mark_custom_node_resolved(row_info, note)
-            row_info["dependency"] = None
-            QtWidgets.QMessageBox.information(
-                self,
-                "Installation Complete",
-                (
-                    f"{dep_display} has been cloned into your ComfyUI custom_nodes directory.\n"
-                    "Restart ComfyUI to load the new node."
-                ),
-            )
+        if self._notify_custom_node_manual_install(row_info):
             return True
-
-        self._notify_custom_node_manual_install(node_name, package_name)
         return False
 
     def _mark_custom_node_resolved(self, row_info: Dict[str, Any], note: Optional[str] = None) -> None:
@@ -1779,3 +1834,132 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             dependencies = charon_meta.get("dependencies") or []
         self._dependencies_cache = list(dependencies)
         return self._dependencies_cache
+
+    def _metadata_dependency_overrides(self) -> List[Dict[str, Any]]:
+        overrides: List[Dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for dep in self._load_dependencies():
+            normalized = self._normalize_dependency_entry(dep)
+            if not normalized:
+                continue
+            repo = normalized.get("repo")
+            if not repo:
+                continue
+            key = repo.lower()
+            if key in seen_urls:
+                continue
+            overrides.append(normalized)
+            seen_urls.add(key)
+        return overrides
+
+    def _normalize_dependency_entry(self, dependency: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(dependency, dict):
+            return None
+        repo = str(dependency.get("repo") or dependency.get("url") or "").strip()
+        if not repo:
+            return None
+        name = str(dependency.get("name") or "").strip()
+        if not name:
+            parsed = urlparse(repo)
+            path = (parsed.path or "").rstrip("/")
+            if path:
+                name = path.split("/")[-1]
+            if name.endswith(".git"):
+                name = name[:-4]
+        if not name:
+            tail = os.path.basename(repo.rstrip("/"))
+            if tail.endswith(".git"):
+                tail = tail[:-4]
+            name = tail or repo
+        normalized: Dict[str, Any] = {"repo": repo}
+        if name:
+            normalized["name"] = name
+        ref = str(dependency.get("ref") or "").strip()
+        if ref:
+            normalized["ref"] = ref
+        return normalized
+
+    def _prompt_dependency_override(
+        self,
+        package_display: str,
+        overrides: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        items: List[str] = []
+        mapping: Dict[str, Dict[str, Any]] = {}
+        for dep in overrides:
+            repo = dep.get("repo")
+            if not repo:
+                continue
+            name = dep.get("name") or ""
+            label = repo
+            if name and name.strip() and name.lower() not in repo.lower():
+                label = f"{name} - {repo}"
+            mapping[label] = dep
+            items.append(label)
+        if not items:
+            return None
+        selection, ok = QtWidgets.QInputDialog.getItem(
+            self,
+            "Select Repository",
+            (
+                "Select a repository URL from the workflow metadata to install.\n"
+                f"Missing package: {package_display}"
+            ),
+            items,
+            0,
+            False,
+        )
+        if ok and selection:
+            return mapping.get(selection)
+        return None
+
+    def _install_dependency_from_metadata(
+        self,
+        row_info: Dict[str, Any],
+        dependency: Dict[str, Any],
+    ) -> bool:
+        normalized = self._normalize_dependency_entry(dependency)
+        if not normalized:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Installation Failed",
+                "The selected repository entry is missing a valid URL.",
+            )
+            return False
+
+        node_name = str(row_info.get("node_name") or "").strip()
+        package_name = str(row_info.get("package_name") or "").strip()
+        dep_display = normalized.get("name") or package_name or node_name or "Dependency"
+
+        result = resolve_missing_custom_nodes(
+            {"missing": [node_name] if node_name else []},
+            self._comfy_path,
+            dependencies=[normalized],
+        )
+        if result.failed:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Installation Failed",
+                result.failed[0] if result.failed else "Could not install the dependency.",
+            )
+            return False
+
+        note = ""
+        if result.resolved:
+            note = result.resolved[0]
+        elif result.skipped:
+            note = result.skipped[0]
+        if not note:
+            note = f"{dep_display} installed. Restart ComfyUI to load the new node."
+
+        self._mark_custom_node_resolved(row_info, note)
+        row_info["dependency"] = normalized
+        QtWidgets.QMessageBox.information(
+            self,
+            "Installation Complete",
+            (
+                f"{dep_display} has been cloned into your ComfyUI custom_nodes directory.\n"
+                "Restart ComfyUI to load the new node."
+            ),
+        )
+        return True
