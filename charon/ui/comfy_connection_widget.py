@@ -330,6 +330,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return
         self._compact_mode = compact
         self._apply_caption_text()
+        self._apply_settings_visibility(not compact)
         # Re-emit the current status to update label/button text.
         self._set_status(self._last_status_state, self._connected)
 
@@ -338,6 +339,16 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return
         caption = "ComfyUI" if self._compact_mode else "ComfyUI Status:"
         self.status_caption.setText(caption)
+
+    def _apply_settings_visibility(self, visible: bool) -> None:
+        """Show or hide the settings affordance based on the active mode."""
+        button = getattr(self, "settings_button", None)
+        separator = getattr(self, "separator_label", None)
+        for widget in (separator, button):
+            if widget is not None:
+                widget.setVisible(visible)
+        if button is not None:
+            button.setEnabled(visible)
 
     def _start_button_blink(self) -> None:
         button = getattr(self, "launch_button", None)
