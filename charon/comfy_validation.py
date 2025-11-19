@@ -402,8 +402,6 @@ def validate_comfy_environment(
         return result
 
     env_info = resolve_comfy_environment(comfy_path)
-    issues.append(_validate_environment(comfy_path, env_info))
-    issues.append(_validate_runtime(ping_url, env_info))
     issues.append(_validate_models(env_info, workflow_bundle))
     issues.append(_validate_custom_nodes(env_info, workflow_bundle))
 
