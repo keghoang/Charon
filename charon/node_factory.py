@@ -554,7 +554,7 @@ def _create_parameter_knob(nuke_module, name, label, value_type, default):
             knob = nuke_module.Multiline_Eval_String_Knob(name, label)
             knob.setValue(_coerce_string(default))
             try:
-                knob.setHeight(3)
+                knob.setHeight(60)
             except Exception:
                 pass
         knob.setFlag(nuke_module.NO_ANIMATION)

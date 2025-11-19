@@ -685,6 +685,8 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setHeaderHidden(True)
         self.input_mapping_tree.setRootIsDecorated(True)
         self.input_mapping_tree.setAlternatingRowColors(True)
+        self.input_mapping_tree.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.input_mapping_tree.setFocusPolicy(QtCore.Qt.NoFocus)
         self._apply_parameter_tree_palette()
         group_layout.addWidget(self.input_mapping_tree)
 
@@ -717,12 +719,6 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             QTreeWidget#charon-parameter-tree::item {{
                 color: #f0f0f0;
             }}
-            QTreeWidget#charon-parameter-tree::item:selected,
-            QTreeWidget#charon-parameter-tree::item:selected:active,
-            QTreeWidget#charon-parameter-tree::item:selected:!active {{
-                background-color: #4c4c4c;
-                color: #ffffff;
-            }}
             QTreeWidget#charon-parameter-tree::indicator {{
                 width: 16px;
                 height: 16px;
@@ -731,8 +727,8 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 background-color: #3a3a3a;
             }}
             QTreeWidget#charon-parameter-tree::indicator:checked {{
-                background-color: #545454;
-                border-color: #dcdcdc;
+                background-color: #37b24d;
+                border-color: #2f9e44;
                 image: url("data:image/svg+xml;base64,{checkmark_svg}");
             }}
             """
@@ -868,7 +864,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
             for attribute in node.attributes:
                 attr_item = QtWidgets.QTreeWidgetItem(node_item, [attribute.label])
-                flags = attr_item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable
+                flags = (attr_item.flags() | QtCore.Qt.ItemIsUserCheckable) & ~QtCore.Qt.ItemIsSelectable
                 attr_item.setFlags(flags)
                 if self._is_parameter_selected(node.node_id, attribute.key, attribute.aliases):
                     attr_item.setCheckState(0, QtCore.Qt.CheckState.Checked)
@@ -942,10 +938,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             return
 
         tree = self.input_mapping_tree
-        highlight_child = QtGui.QBrush(QtGui.QColor("#6ee7b7"))
-        highlight_parent = QtGui.QBrush(QtGui.QColor("#047857"))
-        child_text = QtGui.QBrush(QtGui.QColor("#083344"))
-        parent_text = QtGui.QBrush(QtGui.QColor("#ffffff"))
+        comfy_green = QtGui.QColor("#51cf66")
+        comfy_dark = QtGui.QColor("#2b8a3e")
+        child_text = QtGui.QBrush(QtGui.QColor("#041b0d"))
+        parent_text = QtGui.QBrush(QtGui.QColor("#f0fff4"))
+        highlight_child = QtGui.QBrush(comfy_green)
+        highlight_parent = QtGui.QBrush(comfy_dark)
         clear_brush = QtGui.QBrush()
 
         for index in range(tree.topLevelItemCount()):
