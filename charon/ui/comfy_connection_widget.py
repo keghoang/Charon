@@ -38,7 +38,6 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._comfy_path = self._settings.get(self._PATH_SETTING_KEY, "").strip()
         self._check_in_progress = False
         self._connected = False
-        self._status_color = "#cccccc"
         self._popover: Optional["ConnectionSettingsPopover"] = None
         self._manual_cursor_override = False
         self._launch_in_progress = False
@@ -73,14 +72,6 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(3)
 
-        self.status_label = QtWidgets.QLabel()
-        self.status_label.setTextFormat(QtCore.Qt.RichText)
-        self.status_label.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
-        self.status_label.setTextInteractionFlags(QtCore.Qt.NoTextInteraction)
-        layout.addWidget(self.status_label)
-        self.status_label.hide()
-        self.status_label.setFixedWidth(0)
-
         self.status_caption = QtWidgets.QLabel("ComfyUI Status:")
         self.status_caption.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         self.status_caption.setStyleSheet("color: #ffffff;")
@@ -94,6 +85,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.launch_button.setMinimumWidth(64)
         self.launch_button.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.launch_button.customContextMenuRequested.connect(self._show_launch_context_menu)
+        self.launch_button.installEventFilter(self)
         layout.addWidget(self.launch_button)
 
         self.separator_label = QtWidgets.QLabel("|")
@@ -254,20 +246,27 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             "unavailable": ("Client Unavailable", "#ffa94d"),
         }
         label_text, color = mapping.get(state, (state, "#cccccc"))
-        html = f"<span style='color:{color}; font-weight:bold;'>{label_text}</span>"
-
+        button_style = (
+            "QPushButton {"
+            f" color: {color};"
+            " font-weight: bold;"
+            " border: 1px solid #555555;"
+            " border-radius: 3px;"
+            " padding: 2px 10px;"
+            " background-color: #1c1c1c;"
+            "}"
+        )
         previous_connection = self._connected
-        previous_text = self.status_label.text()
+        previous_text = self.launch_button.text()
 
-        self.status_label.setText(html)
-        self.status_label.setStyleSheet("")
-        self._status_color = color
+        self.launch_button.setText(label_text)
+        self.launch_button.setStyleSheet(button_style)
         self._connected = connected
 
         if connected != previous_connection:
             self.connection_status_changed.emit(connected)
-        elif html != previous_text:
-            self.status_label.update()
+        elif label_text != previous_text:
+            self.launch_button.update()
 
         self._update_launch_button(state, connected)
 
@@ -436,15 +435,36 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) | getattr(
                     subprocess, "CREATE_NEW_PROCESS_GROUP", 0
                 )
+            env = os.environ.copy()
+            env.setdefault("COMFYUI_DISABLE_AUTO_LAUNCH", "1")
 
             if lower_path.endswith(".bat"):
-                cmd_line = ["cmd.exe", "/c", path, disable_flag]
-                process = subprocess.Popen(
-                    cmd_line,
-                    cwd=base_dir,
-                    shell=False,
-                    creationflags=creation_flags,
-                )
+                python_exe = os.path.join(base_dir, "python_embeded", "python.exe")
+                main_script = os.path.join(base_dir, "ComfyUI", "main.py")
+                if os.path.exists(python_exe) and os.path.exists(main_script):
+                    cmd_line = [
+                        python_exe,
+                        "-s",
+                        main_script,
+                        "--windows-standalone-build",
+                        disable_flag,
+                    ]
+                    process = subprocess.Popen(
+                        cmd_line,
+                        cwd=base_dir,
+                        shell=False,
+                        creationflags=creation_flags,
+                        env=env,
+                    )
+                else:
+                    cmd_line = ["cmd.exe", "/c", path, disable_flag]
+                    process = subprocess.Popen(
+                        cmd_line,
+                        cwd=base_dir,
+                        shell=False,
+                        creationflags=creation_flags,
+                        env=env,
+                    )
             elif lower_path.endswith(".py"):
                 cmd_line = ["python", path, "--api", disable_flag]
                 process = subprocess.Popen(
@@ -452,6 +472,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                     cwd=base_dir,
                     shell=False,
                     creationflags=creation_flags,
+                    env=env,
                 )
             else:
                 cmd_line = [path, disable_flag]
@@ -460,6 +481,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                     cwd=base_dir,
                     shell=False,
                     creationflags=creation_flags,
+                    env=env,
                 )
             self._managed_process = process
             self._launch_in_progress = True
@@ -580,7 +602,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     # ------------------------------------------------------------ Qt Events
     def eventFilter(self, obj, event):
-        if obj is self.settings_button:
+        settings_btn = getattr(self, "settings_button", None)
+        if settings_btn is not None and obj is settings_btn:
             if event.type() == QtCore.QEvent.Enter:
                 self._show_settings_popover()
             elif event.type() == QtCore.QEvent.MouseButtonPress:
@@ -589,6 +612,17 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             elif event.type() == QtCore.QEvent.Leave:
                 if self._popover and self._popover.isVisible():
                     self._popover.start_dismiss_countdown()
+        launch_btn = getattr(self, "launch_button", None)
+        if launch_btn is not None and obj is launch_btn:
+            if event.type() == QtCore.QEvent.ContextMenu:
+                self._show_launch_context_menu(event.pos())
+                return True
+            if (
+                event.type() == QtCore.QEvent.MouseButtonPress
+                and event.button() == QtCore.Qt.MouseButton.RightButton
+            ):
+                self._show_launch_context_menu(event.pos())
+                return True
         return super().eventFilter(obj, event)
 
     @property
