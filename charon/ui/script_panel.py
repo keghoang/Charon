@@ -753,7 +753,7 @@ class ScriptPanel(QtWidgets.QWidget):
             self._validation_timer.start()
 
         worker = _ValidationWorker(script_path, comfy_path, workflow_bundle)
-        thread = QtCore.QThread(self)
+        thread = QtCore.QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_validation_finished)
@@ -811,7 +811,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self._validation_workers.pop(script_path, None)
         if thread is not None and thread.isRunning():
             thread.quit()
-            thread.wait(1000)
+            thread.wait()
 
     def _stop_all_validations(self) -> None:
         for script_path in list(self._validation_workers.keys()):
@@ -828,7 +828,7 @@ class ScriptPanel(QtWidgets.QWidget):
             if thread.isRunning():
                 thread.requestInterruption()
                 thread.quit()
-                thread.wait(2000)
+                thread.wait()
         self._validation_workers.clear()
         self._validation_threads.clear()
         self._validation_timer.stop()
@@ -874,6 +874,10 @@ class ScriptPanel(QtWidgets.QWidget):
             workflow_bundle=bundle,
             parent=self,
         )
+        main_window = self.window()
+        connection_widget = getattr(main_window, "comfy_connection_widget", None)
+        if connection_widget is not None:
+            dialog.comfy_restart_requested.connect(connection_widget.handle_external_restart_request)
         exec_dialog(dialog)
 
         new_state = "needs_resolve"
