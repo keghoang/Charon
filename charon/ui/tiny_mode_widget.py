@@ -86,19 +86,19 @@ class TinyModeWidget(QtWidgets.QWidget):
         if target_info:
             execute_action = menu.addAction("Execute")
             execute_action.triggered.connect(
-                lambda _, info=target_info: self._execute_node(info)
+                lambda _checked=False, info=target_info: self._execute_node(info)
             )
 
             import_action = menu.addAction("Import Output")
             import_action.setEnabled(self._has_output_path(target_info))
             import_action.triggered.connect(
-                lambda _, info=target_info: self._import_output(info)
+                lambda _checked=False, info=target_info: self._import_output(info)
             )
 
             open_results = menu.addAction("Open Output Folder")
             open_results.setEnabled(self._has_output_path(target_info))
             open_results.triggered.connect(
-                lambda _, info=target_info: self._open_output_folder(info)
+                lambda _checked=False, info=target_info: self._open_output_folder(info)
             )
         else:
             menu.addAction("No CharonOps detected").setEnabled(False)
@@ -106,16 +106,9 @@ class TinyModeWidget(QtWidgets.QWidget):
         if not menu.isEmpty():
             menu.addSeparator()
 
-        open_board = menu.addAction("Open Full CharonBoard")
-        open_board.triggered.connect(self.open_charon_board.emit)
-
-        menu.addSeparator()
         exit_action = menu.addAction("Exit Tiny Mode")
         exit_action.setShortcutVisibleInContextMenu(True)
         exit_action.triggered.connect(self.exit_tiny_mode.emit)
-
-        settings_action = menu.addAction("Settings...")
-        settings_action.triggered.connect(self.open_settings.emit)
 
         menu.exec(event.globalPos())
 
@@ -173,7 +166,7 @@ class TinyModeWidget(QtWidgets.QWidget):
         self.node_list.setUniformItemSizes(True)
         self.node_list.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.node_list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
-        self.node_list.setSpacing(6)
+        self.node_list.setSpacing(4)
         self.node_list.itemDoubleClicked.connect(self._on_node_item_double_clicked)
 
         card_layout.addWidget(self.empty_state_widget)
@@ -200,13 +193,29 @@ class TinyModeWidget(QtWidgets.QWidget):
         self.setStyleSheet(
             """
             #tiny-mode-card {
-                background-color: rgba(15, 23, 42, 0.85);
-                border: 1px solid rgba(94, 106, 128, 0.4);
-                border-radius: 8px;
+                background-color: transparent;
+                border: none;
             }
             #tiny-mode-card QListWidget {
                 background-color: transparent;
                 border: none;
+                outline: none;
+                padding: 4px 2px;
+            }
+            #tiny-mode-card QListWidget::item {
+                margin: 2px 0;
+            }
+            QWidget#tiny-node-row {
+                background: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                border-radius: 0;
+            }
+            QWidget#tiny-node-row:hover, QWidget#tiny-node-row[hovered="true"] {
+                background: rgba(255, 255, 255, 0.15);
+                border: 1px solid rgba(255, 255, 255, 0.32);
+            }
+            QWidget#tiny-node-row QLabel {
+                color: rgba(240, 244, 248, 0.92);
             }
             #tiny-mode-empty QLabel {
                 color: rgba(226, 232, 240, 0.8);
@@ -372,6 +381,27 @@ class TinyModeWidget(QtWidgets.QWidget):
         if not focused:
             system_warning(f"Could not focus CharonOp {info.name}.")
 
+    def _execute_node(self, info: Optional[runtime.SceneNodeInfo]) -> None:
+        if info is None or getattr(info, "node", None) is None:
+            QtWidgets.QMessageBox.warning(self, "Execute CharonOp", "CharonOp not available.")
+            return
+        node = info.node
+        try:
+            import nuke  # type: ignore
+        except Exception:
+            nuke = None
+        if nuke is None:
+            QtWidgets.QMessageBox.critical(self, "Execute CharonOp", "Nuke is not available.")
+            return
+        try:
+            knob = node.knob("process") if hasattr(node, "knob") else None
+            if knob:
+                knob.execute()
+            else:
+                QtWidgets.QMessageBox.warning(self, "Execute CharonOp", "Process knob not found.")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Execute CharonOp", f"Failed to execute node: {exc}")
+
     def _priority_key(self, info: runtime.SceneNodeInfo) -> tuple:
         state_lower = (info.state or "").lower()
         if info.progress < 0 or state_lower == "error":
@@ -439,6 +469,43 @@ class TinyModeWidget(QtWidgets.QWidget):
                     self, "Output Folder", f"Failed to open folder: {exc}"
                 )
 
+    def _import_output(self, info: Optional[runtime.SceneNodeInfo] = None) -> None:
+        if info is None:
+            return
+        output_path = info.output_path
+        if not output_path:
+            QtWidgets.QMessageBox.warning(self, "Import Output", "No output available yet.")
+            return
+        normalized = output_path.replace("\\", "/")
+        if not os.path.exists(output_path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Import Output",
+                f"Output not found:\n{output_path}\nIt may have been moved or deleted.",
+            )
+            return
+        try:
+            import nuke  # type: ignore
+        except Exception:
+            QtWidgets.QMessageBox.critical(self, "Import Output", "Nuke is not available.")
+            return
+
+        def create_read():
+            try:
+                read_node = nuke.createNode("Read")
+                read_node["file"].setValue(normalized)
+                if getattr(info, "node", None):
+                    read_node.setXpos(info.node.xpos() + 200)
+                    read_node.setYpos(info.node.ypos())
+                read_node.setSelected(True)
+            except Exception as exc:  # pragma: no cover - UI feedback
+                QtWidgets.QMessageBox.critical(self, "Import Output", f"Failed to import output: {exc}")
+
+        try:
+            nuke.executeInMainThread(create_read)
+        except Exception:
+            create_read()
+
     def _open_workflow_location(self, info: Optional[runtime.SceneNodeInfo] = None) -> None:
         if not info or not info.workflow_path:
             QtWidgets.QMessageBox.information(
@@ -505,17 +572,28 @@ class TinyModeWidget(QtWidgets.QWidget):
 class _NodeRowWidget(QtWidgets.QWidget):
     """Lightweight widget showing a node name with progress feedback."""
 
+    COLOR_ERROR = "#c94d4d"
+    COLOR_COMPLETE = "#3d995b"
+    COLOR_ACTIVE = "#d0a23f"
+    COLOR_IDLE = "#565656"
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("tiny-node-row")
+        self.setAttribute(QtCore.Qt.WA_Hover, True)
+        self.setMouseTracking(True)
+        self.setProperty("hovered", False)
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.setAutoFillBackground(True)
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(2)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(3)
 
         self.name_label = QtWidgets.QLabel("")
         name_font = self.name_label.font()
         name_font.setBold(True)
         self.name_label.setFont(name_font)
-        self.name_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self.name_label.setTextInteractionFlags(QtCore.Qt.NoTextInteraction)
         layout.addWidget(self.name_label)
 
         self.progress_bar = QtWidgets.QProgressBar()
@@ -523,9 +601,19 @@ class _NodeRowWidget(QtWidgets.QWidget):
         self.progress_bar.setMinimumHeight(14)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setAlignment(QtCore.Qt.AlignCenter)
+        # Ensure stylesheet-driven coloring per row
+        self.progress_bar.setStyleSheet("")
         layout.addWidget(self.progress_bar)
 
         self._node_name: str = ""
+
+    def enterEvent(self, event: QtCore.QEvent) -> None:
+        self._set_hover_state(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:
+        self._set_hover_state(False)
+        super().leaveEvent(event)
 
     @property
     def node_name(self) -> str:
@@ -549,3 +637,52 @@ class _NodeRowWidget(QtWidgets.QWidget):
             progress_value = max(0, min(int(info.progress * 100), 100))
         self.progress_bar.setValue(progress_value)
         self.progress_bar.setFormat(status_text)
+        self._apply_progress_palette(info)
+
+    def _apply_progress_palette(self, info: runtime.SceneNodeInfo) -> None:
+        chunk_color = self._progress_color(info)
+        self.progress_bar.setStyleSheet(
+            f"""
+            QProgressBar {{
+                background: #2c2c2c;
+                border: 1px solid #4a4a4a;
+                border-radius: 0;
+                padding: 1px 2px;
+                color: rgba(240, 244, 248, 0.9);
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background-color: {chunk_color};
+                border-radius: 0;
+            }}
+            """
+        )
+
+    def _progress_color(self, info: runtime.SceneNodeInfo) -> str:
+        state_lower = (info.state or "").lower()
+        status_lower = (info.status or "").lower()
+        progress_value = info.progress if info.progress is not None else -1
+
+        if "error" in state_lower or "error" in status_lower or progress_value < 0:
+            return self.COLOR_ERROR
+        if (
+            "complete" in state_lower
+            or "complete" in status_lower
+            or progress_value >= 0.999
+        ):
+            return self.COLOR_COMPLETE
+        if (
+            state_lower in {"processing", "running"}
+            or "processing" in status_lower
+            or "running" in status_lower
+            or (progress_value > 0)
+        ):
+            return self.COLOR_ACTIVE
+        return self.COLOR_IDLE
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        self.setProperty("hovered", hovered)
+        # Refresh styling to apply the hovered property selector
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
