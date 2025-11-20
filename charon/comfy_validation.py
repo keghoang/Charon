@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from . import preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
@@ -1046,6 +1047,7 @@ def _validate_custom_nodes(
             details=["Install comfyui-manager to enable dependency inspection."],
         )
     manager_cli, manager_root = located_cli
+    _refresh_manager_catalog(manager_root)
 
     workflow = workflow_bundle.get("workflow") if isinstance(workflow_bundle, dict) else None
     if not isinstance(workflow, dict):
@@ -1073,7 +1075,7 @@ def _validate_custom_nodes(
             "--output",
             output_path,
             "--mode",
-            "cache",
+            "local",
         ]
         env = os.environ.copy()
         env.setdefault("COMFYUI_PATH", comfy_dir)
@@ -1116,6 +1118,19 @@ def _validate_custom_nodes(
 
         dependencies = payload.get("custom_nodes") or {}
         unknown_nodes = sorted(payload.get("unknown_nodes") or [])
+        aux_repos = _collect_aux_repos(workflow_bundle)
+        unknown_matches = _match_unknown_nodes_to_installed(unknown_nodes, comfy_dir)
+        catalog_matches = _match_unknown_nodes_to_catalog(unknown_nodes, manager_root)
+        aux_matches = _match_unknown_nodes_to_aux(unknown_nodes, aux_repos)
+        if unknown_matches:
+            resolved = set(unknown_matches.keys())
+            unknown_nodes = [name for name in unknown_nodes if name not in resolved]
+        if catalog_matches:
+            resolved = set(catalog_matches.keys())
+            unknown_nodes = [name for name in unknown_nodes if name not in resolved]
+        if aux_matches:
+            resolved = set(aux_matches.keys())
+            unknown_nodes = [name for name in unknown_nodes if name not in resolved]
         missing = []
         disabled = []
         for repo, meta in dependencies.items():
@@ -1127,6 +1142,52 @@ def _validate_custom_nodes(
 
         extension_map = _load_manager_extension_map(manager_root)
         node_repo_map = _build_node_repo_map(required, extension_map)
+        # Use catalog matches to map unknown classes to known repositories.
+        for node_name, repo in catalog_matches.items():
+            key = str(node_name or "").strip().lower()
+            if not key:
+                continue
+            node_repo_map.setdefault(
+                key,
+                {
+                    "repo": repo,
+                    "display": _display_name_for_repo(repo),
+                },
+            )
+            missing.append(repo)
+        for node_name, repo in aux_matches.items():
+            key = str(node_name or "").strip().lower()
+            if not key:
+                continue
+            node_repo_map.setdefault(
+                key,
+                {
+                    "repo": repo,
+                    "display": _display_name_for_repo(repo),
+                },
+            )
+            missing.append(repo)
+        # Also seed mappings directly from aux_id hints even if cm-cli didn't flag the node as unknown.
+        for node_name, repo in aux_repos.items():
+            key = str(node_name or "").strip().lower()
+            if not key:
+                continue
+            node_repo_map.setdefault(
+                key,
+                {
+                    "repo": repo,
+                    "display": _display_name_for_repo(repo),
+                },
+            )
+            missing.append(repo)
+        # Preserve inferred mappings for unknown nodes that match installed folders.
+        for node_name, folder in unknown_matches.items():
+            key = str(node_name or "").strip().lower()
+            if key and key not in node_repo_map:
+                node_repo_map[key] = {
+                    "repo": folder,
+                    "display": folder,
+                }
         package_overrides = {
             key: entry.get("display")
             for key, entry in node_repo_map.items()
@@ -1157,6 +1218,7 @@ def _validate_custom_nodes(
             "disabled_repos": disabled,
             "node_packages": package_overrides,
             "node_repos": node_repo_lookup,
+            "aux_repos": aux_repos,
         }
 
         detail_lines: List[str] = []
@@ -1172,6 +1234,18 @@ def _validate_custom_nodes(
             detail_lines.append("  Use ComfyUI Manager (cm-cli install <repo>) to install missing repositories.")
         if disabled:
             detail_lines.append("  Enable disabled custom nodes inside ComfyUI Manager.")
+        if unknown_matches:
+            detail_lines.append("Resolved unknown node classes to installed custom node folders:")
+            for node_name, folder in unknown_matches.items():
+                detail_lines.append(f"  - {node_name} -> {folder}")
+        if catalog_matches:
+            detail_lines.append("Mapped unknown node classes to catalog entries:")
+            for node_name, repo in catalog_matches.items():
+                detail_lines.append(f"  - {node_name} -> {_display_name_for_repo(repo)} ({repo})")
+        if aux_matches:
+            detail_lines.append("Mapped unknown node classes via workflow aux_id:")
+            for node_name, repo in aux_matches.items():
+                detail_lines.append(f"  - {node_name} -> {_display_name_for_repo(repo)} ({repo})")
         if unknown_nodes:
             detail_lines.append("Unknown node classes:")
             detail_lines.extend(f"  - {name}" for name in unknown_nodes)
@@ -1310,6 +1384,165 @@ def _derive_missing_node_types(
             missing_nodes.append(normalized)
             seen.add(normalized)
     return missing_nodes
+
+
+def _normalize_token(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _refresh_manager_catalog(manager_root: str) -> None:
+    """Ensure custom-node-list.json is refreshed from the upstream catalog."""
+    if not manager_root:
+        return
+    local_path = os.path.join(manager_root, "custom-node-list.json")
+    remote_url = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json"
+    try:
+        req = Request(remote_url, headers={"User-Agent": "charon-validator/1.0"})
+        with urlopen(req, timeout=15) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return
+            payload = resp.read()
+            if not payload:
+                return
+        os.makedirs(manager_root, exist_ok=True)
+        with open(local_path, "wb") as handle:
+            handle.write(payload)
+        system_debug("Updated ComfyUI Manager catalog from upstream.")
+    except Exception as exc:  # pragma: no cover - best-effort fetch
+        system_warning(f"Failed to refresh Manager catalog: {exc}")
+
+
+def _match_unknown_nodes_to_installed(
+    unknown_nodes: Iterable[str],
+    comfy_dir: str,
+) -> Dict[str, str]:
+    """Best-effort matching of unknown node classes to installed custom_nodes folders."""
+    matches: Dict[str, str] = {}
+    if not comfy_dir:
+        return matches
+
+    custom_nodes_dir = os.path.join(comfy_dir, "custom_nodes")
+    if not os.path.isdir(custom_nodes_dir):
+        return matches
+
+    folder_tokens: Dict[str, str] = {}
+    try:
+        for entry in os.listdir(custom_nodes_dir):
+            path = os.path.join(custom_nodes_dir, entry)
+            if os.path.isdir(path):
+                token = _normalize_token(entry)
+                if token:
+                    folder_tokens[token] = entry
+    except OSError:
+        return matches
+
+    for node_name in unknown_nodes or []:
+        normalized = _normalize_token(node_name)
+        if not normalized:
+            continue
+        for token, folder in folder_tokens.items():
+            if token in normalized or normalized in token:
+                matches[str(node_name)] = folder
+                break
+    return matches
+
+
+def _load_manager_catalog(manager_root: str) -> List[Dict[str, Any]]:
+    if not manager_root:
+        return []
+    candidate = os.path.join(manager_root, "custom-node-list.json")
+    try:
+        with open(candidate, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict):
+            items = payload.get("custom_nodes")
+            return items if isinstance(items, list) else []
+    except Exception:
+        return []
+    return []
+
+
+def _match_unknown_nodes_to_catalog(
+    unknown_nodes: Iterable[str],
+    manager_root: str,
+) -> Dict[str, str]:
+    """Match unknown classes to catalog entries by name/repo tokens."""
+    matches: Dict[str, str] = {}
+    catalog = _load_manager_catalog(manager_root)
+    if not catalog:
+        return matches
+
+    tokenized_catalog: List[Tuple[str, str]] = []
+    for entry in catalog:
+        if not isinstance(entry, dict):
+            continue
+        title = entry.get("title") or entry.get("name") or ""
+        repo = entry.get("repository") or entry.get("reference") or entry.get("repo") or ""
+        token = _normalize_token(title) or _normalize_token(repo)
+        if token and repo:
+            tokenized_catalog.append((token, repo))
+
+    for node_name in unknown_nodes or []:
+        normalized = _normalize_token(node_name)
+        if not normalized:
+            continue
+        for token, repo in tokenized_catalog:
+            if token in normalized or normalized in token:
+                matches[str(node_name)] = repo
+                break
+    return matches
+
+
+def _collect_aux_repos(workflow_bundle: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Collect aux_id hints from workflow nodes."""
+    mapping: Dict[str, str] = {}
+    if not isinstance(workflow_bundle, dict):
+        return mapping
+    workflow = workflow_bundle.get("workflow")
+    nodes = []
+    if isinstance(workflow, dict):
+        if isinstance(workflow.get("nodes"), list):
+            nodes = workflow["nodes"]
+        else:
+            nodes = list(workflow.values())
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_type = str(node.get("type") or node.get("class_type") or "").strip()
+        if not node_type:
+            continue
+        props = node.get("properties") or {}
+        if isinstance(props, dict):
+            aux_id = props.get("aux_id")
+            if isinstance(aux_id, str) and aux_id.strip():
+                repo = _repo_from_aux(aux_id)
+                if repo:
+                    mapping[node_type.lower()] = repo
+    return mapping
+
+
+def _repo_from_aux(aux_id: str) -> str:
+    aux = (aux_id or "").strip()
+    if not aux:
+        return ""
+    if aux.lower().startswith("http://") or aux.lower().startswith("https://"):
+        return aux
+    # Assume GitHub shorthand org/repo
+    return f"https://github.com/{aux}"
+
+
+def _match_unknown_nodes_to_aux(
+    unknown_nodes: Iterable[str],
+    aux_repos: Dict[str, str],
+) -> Dict[str, str]:
+    matches: Dict[str, str] = {}
+    for node_name in unknown_nodes or []:
+        repo = aux_repos.get(str(node_name) or "")
+        if repo:
+            matches[str(node_name)] = repo
+    return matches
 
 
 def _display_name_for_repo(repo: str) -> str:
