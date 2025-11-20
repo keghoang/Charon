@@ -2114,7 +2114,26 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 for entry in missing
                 if isinstance(entry, str)
             }
-            normalized_missing.pop(self._normalize_identifier(node_name), None)
+
+            # Header rows bundle multiple nodes; clear all matched entries so the issue status updates.
+            resolved_nodes: set[str] = set()
+            for entry in row_info.get("missing_nodes") or []:
+                normalized = self._normalize_identifier(entry)
+                if normalized:
+                    resolved_nodes.add(normalized)
+            if not resolved_nodes:
+                for part in str(node_name or "").split(","):
+                    normalized = self._normalize_identifier(part)
+                    if normalized:
+                        resolved_nodes.add(normalized)
+            if not resolved_nodes:
+                normalized = self._normalize_identifier(node_name)
+                if normalized:
+                    resolved_nodes.add(normalized)
+
+            for resolved_key in resolved_nodes:
+                normalized_missing.pop(resolved_key, None)
+
             data["missing"] = list(normalized_missing.values())
             repo = row_info.get("manager_repo")
             if repo:
