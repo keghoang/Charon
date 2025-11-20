@@ -44,7 +44,7 @@
 - Module constants stay UPPER_SNAKE_CASE; PySide classes use PascalCase.
 - Use explicit relative imports inside `charon/` and route user-visible strings through `charon.charon_logger`.
 - Workflow-facing copy must use "workflow" (no residual "script" wording).
-- `.charon.json` stores only `workflow_file`, `description`, `dependencies`, `last_changed`, `tags`.
+- `.charon.json` stores only `workflow_file`, `description`, `dependencies`, `last_changed`, `tags`, and `cm-cli` now populates `dependencies` from workflow metadata (don't hand-enter Git URLs).
 - `.gitignore` must exclude `__pycache__/` and `*.pyc`.
 
 ## Testing Guidelines

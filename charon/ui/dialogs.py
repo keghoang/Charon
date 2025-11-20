@@ -626,43 +626,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
         self._build_input_mapping_section(layout)
 
-        layout.addWidget(QtWidgets.QLabel("3.  Dependencies (Optional)"))
-        deps_container = QtWidgets.QWidget()
-        deps_layout = QtWidgets.QVBoxLayout(deps_container)
-        deps_layout.setContentsMargins(0, 0, 0, 0)
-        deps_layout.setSpacing(4)
-
-        self.deps_table = QtWidgets.QTableWidget(0, 1)
-        self.deps_table.setHorizontalHeaderLabels(["Git URL"])
-        header = self.deps_table.horizontalHeader()
-        try:
-            header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        except AttributeError:
-            header.setStretchLastSection(True)
-        self.deps_table.verticalHeader().setVisible(False)
-        self.deps_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.deps_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.deps_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.AllEditTriggers)
-        self.deps_table.setMaximumHeight(140)
-        deps_layout.addWidget(self.deps_table)
-
-        deps_buttons = QtWidgets.QHBoxLayout()
-        self.add_dep_button = QtWidgets.QPushButton("Add")
-        self.remove_dep_button = QtWidgets.QPushButton("Remove")
-        deps_buttons.addWidget(self.add_dep_button)
-        deps_buttons.addWidget(self.remove_dep_button)
-        deps_buttons.addStretch()
-        deps_layout.addLayout(deps_buttons)
-
-        layout.addWidget(deps_container)
-
-        self.add_dep_button.clicked.connect(self._add_dependency_row)
-        self.remove_dep_button.clicked.connect(self._remove_selected_dependencies)
-
-        for dep in self._metadata.get("dependencies", []) or []:
-            self._add_dependency_row(dep)
-
-        layout.addWidget(QtWidgets.QLabel("4.  Tags (comma separated)"))
+        layout.addWidget(QtWidgets.QLabel("3.  Tags (comma separated)"))
         self.tags_edit = QtWidgets.QLineEdit(", ".join(self._metadata.get("tags", [])))
         self.tags_edit.setPlaceholderText("e.g. comfy, FLUX, Nano-Banana")
         layout.addWidget(self.tags_edit)
@@ -672,6 +636,9 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
+
+        hint = self.sizeHint()
+        self.resize(hint.width(), hint.height() + 50)
 
     def _build_input_mapping_section(self, layout: QtWidgets.QVBoxLayout) -> None:
         """Create and populate the workflow parameter preview list."""
@@ -1014,42 +981,22 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self._cancel_parameter_discovery()
         super(CharonMetadataDialog, self).closeEvent(event)
 
-    def _add_dependency_row(self, dep: Dict[str, Any] = None):
-        row = self.deps_table.rowCount()
-        self.deps_table.insertRow(row)
-        if isinstance(dep, dict):
-            value = dep.get("repo") or dep.get("url") or ""
-        else:
-            value = dep or ""
-        item = QtWidgets.QTableWidgetItem(value)
-        self.deps_table.setItem(row, 0, item)
-        self.deps_table.editItem(item)
-
-    def _remove_selected_dependencies(self):
-        rows = sorted({index.row() for index in self.deps_table.selectedIndexes()}, reverse=True)
-        for row in rows:
-            self.deps_table.removeRow(row)
-
     def get_metadata(self) -> Dict[str, Any]:
-        dependencies: List[str] = []
-        for row in range(self.deps_table.rowCount()):
-            repo_item = self.deps_table.item(row, 0)
-            repo = repo_item.text().strip() if repo_item else ""
-            if repo:
-                dependencies.append(repo)
-
         tags_raw = self.tags_edit.text()
         tags = [tag.strip() for tag in tags_raw.split(",") if tag.strip()] if tags_raw else []
         parameters = self._collect_selected_parameters()
 
         self._metadata["parameters"] = parameters
 
-        return {
+        metadata = {
             "description": self.description_edit.toPlainText().strip(),
-            "dependencies": dependencies,
             "tags": tags,
             "parameters": parameters,
         }
+        dependencies = self._metadata.get("dependencies")
+        if dependencies is not None:
+            metadata["dependencies"] = dependencies
+        return metadata
 
 
 class HotkeyDialog(QtWidgets.QDialog):

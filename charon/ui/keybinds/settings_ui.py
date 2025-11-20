@@ -8,7 +8,7 @@ viewing conflicts, and customizing keybind behavior.
 from typing import Dict, Optional
 from ...qt_compat import QtWidgets, QtCore, QtGui, WindowContextHelpButtonHint, WindowCloseButtonHint
 from ...settings import user_settings_db
-from ... import config
+from ... import config, workflow_local_store
 from .keybind_manager import KeybindManager
 from .local_handler import LocalKeybindHandler
 from ..dialogs import HotkeyDialog
@@ -89,6 +89,9 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.reset_settings_button = QtWidgets.QPushButton("Reset to Defaults")
         self.reset_settings_button.clicked.connect(self._reset_host_settings)
         button_layout.addWidget(self.reset_settings_button)
+        self.reset_local_cache_button = QtWidgets.QPushButton("Reset Local Cache")
+        self.reset_local_cache_button.clicked.connect(self._reset_local_cache)
+        button_layout.addWidget(self.reset_local_cache_button)
         self.open_settings_folder_button = QtWidgets.QPushButton("Open Settings Folder")
         self.open_settings_folder_button.clicked.connect(self._open_settings_folder)
         button_layout.addWidget(self.open_settings_folder_button)
@@ -397,6 +400,45 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self._notify_tiny_offset_changed()
         self._refresh_tiny_mode_if_needed()
         self.keybind_manager.apply_debug_logging_setting()
+
+    def _reset_local_cache(self) -> None:
+        """Clear the per-user Charon_repo_local folder."""
+        root_path = workflow_local_store.get_local_repository_root(ensure=False)
+        if not root_path:
+            root_path = workflow_local_store.get_local_repository_root(ensure=True)
+        prompt = (
+            "Delete the local workflow cache?\n\n"
+            f"All cached workflows under:\n{root_path}\n\n"
+            "will be removed. This does not touch the shared repository."
+        )
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Reset Local Cache",
+            prompt,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self.reset_local_cache_button.setEnabled(False)
+        QtWidgets.QApplication.processEvents()
+        try:
+            success = workflow_local_store.reset_local_repository()
+        finally:
+            self.reset_local_cache_button.setEnabled(True)
+
+        if success:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Reset Local Cache",
+                "Local cache cleared successfully.",
+            )
+        else:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Reset Local Cache",
+                "Unable to clear the local cache. Check the Charon console for details.",
+            )
 
     def _refresh_tiny_mode_if_needed(self):
         parent = self.parent()

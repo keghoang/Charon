@@ -53,6 +53,8 @@ _WIDGET_TYPE_ALIASES: Dict[str, str] = {
     "COLOR": "string",
 }
 
+_CONTROL_WIDGET_SENTINELS = {"fixed", "increment", "decrement", "randomize"}
+
 
 def _import_nodes_module():
     try:
@@ -120,7 +122,10 @@ def map_node_widgets(node_id: str, node_data: Dict[str, Any]) -> Tuple[NodeWidge
 
     widget_values = node_data.get("widgets_values")
     if isinstance(widget_values, list):
-        for index, (spec, value) in enumerate(zip(specs, widget_values)):
+        normalized_values = widget_values
+        if len(widget_values) != len(specs):
+            normalized_values = _filter_control_widget_values(widget_values)
+        for index, (spec, value) in enumerate(zip(specs, normalized_values)):
             bindings.append(
                 NodeWidgetBinding(
                     node_id=str(node_id),
@@ -232,3 +237,21 @@ def _extract_scalar_inputs(node_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def _is_scalar(value: Any) -> bool:
     return isinstance(value, (str, int, float, bool)) or value is None
+
+
+def _filter_control_widget_values(values: List[Any]) -> List[Any]:
+    """
+    Remove control-after-generate sentinel values from widget lists so positional
+    mapping stays aligned with node specs.
+    """
+    filtered: List[Any] = []
+    total = len(values)
+    for index, value in enumerate(values):
+        if isinstance(value, str) and value in _CONTROL_WIDGET_SENTINELS:
+            continue
+        next_value = values[index + 1] if index + 1 < total else None
+        if isinstance(next_value, str) and next_value in _CONTROL_WIDGET_SENTINELS:
+            filtered.append(value)
+            continue
+        filtered.append(value)
+    return filtered
