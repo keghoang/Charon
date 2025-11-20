@@ -20,8 +20,11 @@ WORK_FOLDER_TEMPLATE = "{user}"
 CHARON_FOLDER_NAME = "_CHARON"
 NUKE_FALLBACK_NAME = "untitled"
 NODE_FALLBACK_ID = "unknown"
+WORKFLOW_FALLBACK_NAME = "Workflow"
+OUTPUT_CATEGORY_2D = "2D"
+OUTPUT_CATEGORY_3D = "3D"
 OUTPUT_PREFIX = "CharonOutput_v"
-OUTPUT_DIRECTORY_TEMPLATE = os.path.join("CharonOp_{node_id}", "2D")
+OUTPUT_DIRECTORY_TEMPLATE = os.path.join("{category}", "{workflow}", "CharonOp_{node_id}")
 
 
 def get_default_comfy_launch_path():
@@ -161,6 +164,18 @@ def _determine_node_segment(node_id: Optional[str]) -> Tuple[str, str]:
     return f"CharonOp_{normalized}", normalized
 
 
+def _determine_workflow_segment(workflow_name: Optional[str]) -> str:
+    return _sanitize_component(workflow_name, WORKFLOW_FALLBACK_NAME)
+
+
+def _determine_category_segment(category: Optional[str]) -> str:
+    sanitized = _sanitize_component(category, OUTPUT_CATEGORY_2D)
+    upper = sanitized.upper()
+    if upper in {OUTPUT_CATEGORY_2D, OUTPUT_CATEGORY_3D}:
+        return upper
+    return sanitized
+
+
 def _resolve_output_root() -> Tuple[str, bool]:
     project_path = _read_env_path("BUCK_PROJECT_PATH")
     if project_path:
@@ -184,16 +199,18 @@ def allocate_charon_output_path(
     script_name: Optional[str],
     extension: Optional[str] = None,
     user_slug: Optional[str] = None,
+    workflow_name: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> str:
     """
     Determine the versioned output path for a CharonOp run.
 
     The directory structure follows the BUCK project conventions. When
     BUCK_PROJECT_PATH is available the file is stored under:
-        <project>/Production/Work/<user>/_CHARON/CharonOp_<id>/2D/
+        <project>/Production/Work/<user>/_CHARON/<category>/<workflow>/CharonOp_<id>/
 
     If BUCK_PROJECT_PATH is missing, BUCK_WORK_ROOT is used instead:
-        <work_root>/Work/<user>/_CHARON/CharonOp_<id>/2D/
+        <work_root>/Work/<user>/_CHARON/<category>/<workflow>/CharonOp_<id>/
 
     When neither environment variable is present, the path falls back to the
     default Charon results directory.
@@ -205,6 +222,8 @@ def allocate_charon_output_path(
     user = _sanitize_component(user_slug or get_current_user_slug(), "user")
     _ = script_name  # script name no longer influences output directory
     _, normalized_node_id = _determine_node_segment(node_id)
+    workflow_segment = _determine_workflow_segment(workflow_name)
+    category_segment = _determine_category_segment(category)
 
     root, uses_project = _resolve_output_root()
     if uses_project:
@@ -215,7 +234,11 @@ def allocate_charon_output_path(
         else:
             work_root = os.path.join(root, WORK_FOLDER_TEMPLATE.format(user=user))
 
-    directory_suffix = OUTPUT_DIRECTORY_TEMPLATE.format(node_id=normalized_node_id)
+    directory_suffix = OUTPUT_DIRECTORY_TEMPLATE.format(
+        category=category_segment,
+        workflow=workflow_segment,
+        node_id=normalized_node_id,
+    )
     base_output_dir = os.path.join(work_root, CHARON_FOLDER_NAME, directory_suffix)
 
     _ensure_directory(base_output_dir)
