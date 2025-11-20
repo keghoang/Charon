@@ -1859,6 +1859,11 @@ def process_charonop_node():
         _charon_window, comfy_client, comfy_path = _resolve_comfy_environment()
         if not comfy_client:
             log_debug('ComfyUI client not available', 'ERROR')
+            try:
+                import nuke  # type: ignore
+                nuke.message("Charon is not running. Please launch Charon via Galt first.")
+            except Exception:
+                pass
             raise RuntimeError('ComfyUI client is not available')
 
         results_dir = os.path.join(temp_root, 'results')
