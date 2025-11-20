@@ -6,6 +6,7 @@ from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHi
                          Key_7, Key_8, Key_9, Key_0)
 from ..qt_compat import exec_dialog
 import os
+from pathlib import Path
 from .. import utilities
 from ..input_mapping import (
     discover_prompt_widget_parameters,
@@ -612,8 +613,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(8)
 
-        workflow_file = self._metadata.get("workflow_file") or "workflow.json"
-        workflow_label = QtWidgets.QLabel(f"Workflow JSON (read-only): {workflow_file}")
+        workflow_folder = ""
+        if workflow_path:
+            workflow_folder = Path(workflow_path).parent.name
+        if not workflow_folder:
+            workflow_folder = Path(self._metadata.get("workflow_file") or "workflow.json").stem
+        workflow_label = QtWidgets.QLabel(f"Workflow: {workflow_folder}")
         workflow_label.setEnabled(False)
         layout.addWidget(workflow_label)
 
