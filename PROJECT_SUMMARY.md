@@ -5,7 +5,7 @@ Charon is a Nuke add-on that bridges the node graph to ComfyUI's API workflows. 
 
 - **UI (`charon/ui/`)** - PySide6 panels and widgets for workflow browsing, metadata editing, and CharonOp orchestration.
 - **Workflow runtime (`charon/workflow_runtime.py`)** - Discovers workflows, loads bundles, and spawns CharonOps.
-- **Conversion pipeline (`charon/workflow_pipeline.py`, `charon/workflow_converter.py`)** - Shells into ComfyUI's embedded Python, loads custom nodes, flattens Set/Get pairs, and emits API-ready prompts.
+- **Conversion pipeline (`charon/workflow_pipeline.py`, `charon/workflow_browser_exporter.py`)** - Shells into ComfyUI's embedded Python, drives the real ComfyUI frontend via Playwright, and emits API-ready prompts.
 - **Analysis helpers (`charon/workflow_analysis.py`)** - Derives knob definitions and summaries for UI and converted graphs.
 - **Processing path (`charon/processor.py`, `charon/node_factory.py`, `charon/scene_nodes_runtime.py`)** - Builds CharonOp nodes, drives ComfyUI submissions, and manages result ingestion.
 - **Infrastructure (`charon/paths.py`, `charon/preferences.py`, `charon/config.py`, `charon/comfy_client.py`)** - Filesystem resolution, persisted settings, and REST utilities.

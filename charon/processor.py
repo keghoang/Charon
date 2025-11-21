@@ -25,7 +25,6 @@ from .node_factory import reset_charon_node_state
 from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile_color
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
-_WORKFLOW_CONVERTER_AVAILABLE: Optional[bool] = None
 
 
 def _load_parameter_specs(node) -> List[Dict[str, Any]]:
@@ -309,31 +308,53 @@ def _apply_parameter_overrides(
 
 def _get_widget_mappings(node_type: str, ui_node: Dict[str, Any]) -> List[Optional[str]]:
     """
-    Attempt to retrieve widget-to-input mappings using the workflow converter.
-    Falls back gracefully when Comfy modules are unavailable in the host.
+    Attempt to retrieve widget-to-input mappings using UI hints only.
+    This avoids importing ComfyUI modules inside the host application.
     """
-    global _WORKFLOW_CONVERTER_AVAILABLE
-    if _WORKFLOW_CONVERTER_AVAILABLE is False:
-        return []
-    try:
-        from .workflow_converter import WorkflowConverter  # type: ignore
-    except Exception as exc:
-        if _WORKFLOW_CONVERTER_AVAILABLE is not False:
-            log_debug(f"Workflow converter unavailable for widget mapping: {exc}", "WARNING")
-        _WORKFLOW_CONVERTER_AVAILABLE = False
+    if not isinstance(ui_node, dict):
         return []
 
-    try:
-        mappings = WorkflowConverter._get_widget_mappings(node_type, ui_node)
-    except Exception as exc:
-        if _WORKFLOW_CONVERTER_AVAILABLE is not False:
-            log_debug(f"Failed to fetch widget mappings: {exc}", "WARNING")
-        _WORKFLOW_CONVERTER_AVAILABLE = False
+    widget_values = ui_node.get("widgets_values")
+    if not isinstance(widget_values, list) or not widget_values:
         return []
 
-    _WORKFLOW_CONVERTER_AVAILABLE = True
-    if isinstance(mappings, list):
-        return mappings
+    properties = ui_node.get("properties") or {}
+    if isinstance(properties, dict):
+        ue_properties = properties.get("ue_properties") or {}
+        if isinstance(ue_properties, dict):
+            widget_connectable = ue_properties.get("widget_ue_connectable")
+            if isinstance(widget_connectable, dict):
+                names = list(widget_connectable.keys())
+                if names and len(names) >= len(widget_values):
+                    return names[: len(widget_values)]
+
+    all_inputs = []
+    connected_inputs = set()
+    widget_flagged_inputs = []
+    for input_info in ui_node.get("inputs") or []:
+        name = input_info.get("name")
+        if not name:
+            continue
+        all_inputs.append(name)
+        if input_info.get("link") is not None:
+            connected_inputs.add(name)
+        if input_info.get("widget"):
+            widget_flagged_inputs.append(name)
+
+    if widget_flagged_inputs:
+        if len(widget_values) > len(widget_flagged_inputs):
+            potentials = [
+                candidate
+                for candidate in all_inputs
+                if candidate not in connected_inputs and candidate not in widget_flagged_inputs
+            ]
+            return widget_flagged_inputs + potentials[: len(widget_values) - len(widget_flagged_inputs)]
+        return widget_flagged_inputs
+
+    unconnected = [inp for inp in all_inputs if inp not in connected_inputs]
+    if unconnected and len(unconnected) >= len(widget_values):
+        return unconnected[: len(widget_values)]
+
     return []
 
 
