@@ -175,6 +175,21 @@ class ScriptPanel(QtWidgets.QWidget):
         self.new_script_button.clicked.connect(self._on_create_script_clicked)
         self.new_script_button.setVisible(True)
         title_layout.addWidget(self.new_script_button)
+
+        # Inline Refresh and Settings buttons
+        self.refresh_btn = QtWidgets.QPushButton("Refresh")
+        self.refresh_btn.setFixedHeight(button_height)
+        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_btn.clicked.connect(self._on_refresh_clicked)
+        self.refresh_btn.setToolTip("Refresh metadata and re-index quick search (Ctrl+R)")
+        title_layout.addWidget(self.refresh_btn)
+
+        self.settings_btn = QtWidgets.QPushButton("Settings")
+        self.settings_btn.setFixedHeight(button_height)
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.clicked.connect(self._on_settings_clicked)
+        self.settings_btn.setToolTip("Configure keybinds and preferences")
+        title_layout.addWidget(self.settings_btn)
         
         title_layout.addStretch()  # Push indicator to the right
         
@@ -1329,6 +1344,22 @@ class ScriptPanel(QtWidgets.QWidget):
     def _on_history_indicator_clicked(self):
         """Handle click on history collapse indicator."""
         self.open_history_panel_requested.emit()
+
+    def _on_refresh_clicked(self):
+        main_window, _ = self._get_user_folder_context()
+        if main_window and hasattr(main_window, "on_refresh_clicked"):
+            try:
+                main_window.on_refresh_clicked()
+            except Exception:
+                pass
+
+    def _on_settings_clicked(self):
+        main_window, _ = self._get_user_folder_context()
+        if main_window and hasattr(main_window, "open_settings"):
+            try:
+                main_window.open_settings()
+            except Exception:
+                pass
     
     def flash_script_execution(self, script_path):
         """Flash the script row to indicate execution."""
