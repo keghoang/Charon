@@ -445,21 +445,24 @@ class CharonWindow(QtWidgets.QWidget):
         )
         main_layout.setSpacing(config.UI_ELEMENT_SPACING + 4)
 
-        content_margin = 10
+        base_margin = 10
+        header_margin = base_margin + 15
 
         # Text-only header (replaces legacy banner)
         header_layout = QtWidgets.QVBoxLayout()
-        header_layout.setContentsMargins(content_margin, 0, content_margin, 0)
-        header_layout.setSpacing(2)
+        header_layout.setContentsMargins(header_margin, 0, base_margin, 0)
+        header_layout.setSpacing(0)
         title_label = QtWidgets.QLabel("Charon")
         title_label.setObjectName("CharonTitle")
-        title_label.setStyleSheet("font-size: 30px; font-weight: 700; color: #ffffff;")
+        title_label.setStyleSheet("font-size: 34px; font-weight: 800; color: #ffffff;")
         subtitle_label = QtWidgets.QLabel("Nuke/ComfyUI Integration")
         subtitle_label.setObjectName("CharonSubtitle")
-        subtitle_label.setStyleSheet("font-size: 15px; color: #ffffff;")
+        subtitle_label.setStyleSheet("font-size: 13px; color: #d0d0d0; font-weight: 500;")
+        title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        subtitle_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         header_layout.addWidget(title_label)
         header_layout.addWidget(subtitle_label)
-        header_layout.addStretch(0)
+        header_layout.setAlignment(QtCore.Qt.AlignVCenter)
         main_layout.addLayout(header_layout)
         main_layout.addSpacing(config.UI_ELEMENT_SPACING + 2)
 
@@ -475,7 +478,7 @@ class CharonWindow(QtWidgets.QWidget):
         
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
-        content_layout.setContentsMargins(content_margin, 10, content_margin, 10)
+        content_layout.setContentsMargins(base_margin, 10, base_margin, 10)
         content_layout.setSpacing(8)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
