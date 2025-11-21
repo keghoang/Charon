@@ -2530,17 +2530,35 @@ def process_charonop_node():
                                     except Exception:
                                         reuse_existing = False
 
+                                    def _matches_parent(candidate):
+                                        normalized_parent = (charon_node_id or "").strip().lower()
+                                        if not normalized_parent:
+                                            return False
+                                        try:
+                                            meta_parent = (candidate.metadata('charon/parent_id') or "").strip().lower()
+                                        except Exception:
+                                            meta_parent = ""
+                                        if meta_parent == normalized_parent:
+                                            return True
+                                        try:
+                                            knob_parent = (candidate.knob('charon_parent_id').value() or "").strip().lower()
+                                        except Exception:
+                                            knob_parent = ""
+                                        if knob_parent == normalized_parent:
+                                            return True
+                                        try:
+                                            meta_charon = (candidate.metadata('charon/node_id') or "").strip().lower()
+                                        except Exception:
+                                            meta_charon = ""
+                                        return meta_charon == normalized_parent
+
                                     def _remove_mismatched_reads(required_class: str):
                                         try:
                                             candidates = list(nuke.allNodes("Read")) + list(nuke.allNodes("ReadGeo2"))
                                         except Exception:
                                             candidates = []
                                         for candidate in candidates:
-                                            try:
-                                                parent_val = candidate.metadata('charon/parent_id')
-                                            except Exception:
-                                                parent_val = ""
-                                            if (parent_val or "").strip().lower() != (charon_node_id or "").strip().lower():
+                                            if not _matches_parent(candidate):
                                                 continue
                                             try:
                                                 current_class = getattr(candidate, "Class", lambda: "")()
@@ -2565,6 +2583,7 @@ def process_charonop_node():
 
                                     required_class = "ReadGeo2" if os.path.splitext(outputs[-1])[1].lower() in MODEL_OUTPUT_EXTENSIONS else "Read"
                                     if required_class == "ReadGeo2":
+                                        reuse_existing = False
                                         _remove_mismatched_reads(required_class)
 
                                     read_node = find_linked_read_node()
@@ -2582,9 +2601,17 @@ def process_charonop_node():
 
                                     if read_node is None:
                                         try:
+                                            try:
+                                                nuke.selectAll(False)
+                                            except Exception:
+                                                pass
                                             read_node = nuke.createNode(required_class)
                                             read_node.setXpos(node_x)
                                             read_node.setYpos(node_y + 60)
+                                            try:
+                                                read_node.setInput(0, None)
+                                            except Exception:
+                                                pass
                                             read_node.setSelected(True)
                                         except Exception as create_error:
                                             log_debug(f'Failed to create CharonRead node: {create_error}', 'ERROR')
