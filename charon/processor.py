@@ -42,6 +42,39 @@ IMAGE_OUTPUT_EXTENSIONS = {
 }
 
 
+def _allocate_output_path(
+    node_id: Optional[str],
+    script_name: Optional[str],
+    extension: str,
+    user_slug: Optional[str],
+    workflow_name: Optional[str],
+    category: str,
+    output_name: Optional[str] = None,
+) -> str:
+    """
+    Wrap allocate_charon_output_path to remain compatible with older signatures.
+    """
+    try:
+        return allocate_charon_output_path(
+            node_id,
+            script_name,
+            extension,
+            user_slug=user_slug,
+            workflow_name=workflow_name,
+            category=category,
+            output_name=output_name,
+        )
+    except TypeError:
+        return allocate_charon_output_path(
+            node_id,
+            script_name,
+            extension,
+            user_slug=user_slug,
+            workflow_name=workflow_name,
+            category=category,
+        )
+
+
 def _load_parameter_specs(node) -> List[Dict[str, Any]]:
     """Return parameter specs stored on the CharonOp knob."""
     try:
@@ -1694,15 +1727,15 @@ def process_charonop_node():
                     pass
 
             read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
-            target_read_name = f"CharonRead_{read_base}"
+            target_read_name = f"CharonRead2D_{read_base}"
             try:
                 read_node.setName(target_read_name)
             except Exception:
                 try:
-                    read_node.setName(f"CharonRead_{read_base}_{charon_node_id}")
+                    read_node.setName(f"CharonRead2D_{read_base}_{charon_node_id}")
                 except Exception:
                     try:
-                        read_node.setName("CharonRead")
+                        read_node.setName("CharonRead2D")
                     except Exception:
                         pass
             try:
@@ -2394,13 +2427,22 @@ def process_charonop_node():
                                         )
                                         raw_extension = artifact.get("extension") or ".png"
                                         category = "3D" if raw_extension.lower() in MODEL_OUTPUT_EXTENSIONS else "2D"
-                                        allocated_output_path = allocate_charon_output_path(
+                                        output_label = (
+                                            artifact.get("comfy_node_class")
+                                            or artifact.get("class_type")
+                                            or "Output"
+                                        )
+                                        output_node_name = output_label
+                                        if artifact.get("node_id"):
+                                            output_node_name = f"{output_label}_{artifact.get('node_id')}"
+                                        allocated_output_path = _allocate_output_path(
                                             charon_node_id,
                                             _resolve_nuke_script_name(),
                                             raw_extension,
-                                            user_slug=user_slug,
-                                            workflow_name=workflow_display_name,
-                                            category=category,
+                                            user_slug,
+                                            workflow_display_name,
+                                            category,
+                                            output_node_name,
                                         )
                                         log_debug(f'Resolved output path: {allocated_output_path}')
                                         success = comfy_client.download_file(
@@ -2594,6 +2636,9 @@ def process_charonop_node():
                                                     pass
 
                                     def _is_mesh_entry(entry: Dict[str, Any]) -> bool:
+                                        output_kind = (entry.get('output_kind') or '').upper()
+                                        if output_kind == '3D':
+                                            return True
                                         kind = (entry.get('comfy_output_kind') or '').lower()
                                         path = entry.get('output_path') or ''
                                         ext = os.path.splitext(str(path))[1].lower()
@@ -2602,6 +2647,9 @@ def process_charonop_node():
                                     def _is_image_entry(entry: Dict[str, Any]) -> bool:
                                         if _is_mesh_entry(entry):
                                             return False
+                                        output_kind = (entry.get('output_kind') or '').upper()
+                                        if output_kind == '2D':
+                                            return True
                                         kind = (entry.get('comfy_output_kind') or '').lower()
                                         if kind == 'images':
                                             return True
@@ -2609,296 +2657,316 @@ def process_charonop_node():
                                         ext = os.path.splitext(str(path))[1].lower()
                                         return ext in IMAGE_OUTPUT_EXTENSIONS
 
-                                    all_output_paths = []
-                                    image_entries = []
-                                    mesh_entries = []
-                                    for entry in entries:
-                                        path = entry.get('output_path')
-                                        if not path:
-                                            continue
-                                        all_output_paths.append(path)
-                                        if _is_image_entry(entry):
-                                            image_entries.append(entry)
-                                        elif _is_mesh_entry(entry):
-                                            mesh_entries.append(entry)
+                                    def _output_label(entry: Dict[str, Any], default_prefix: str = "Output") -> str:
+                                        label = (
+                                            entry.get('comfy_node_class')
+                                            or entry.get('class_type')
+                                            or entry.get('original_filename')
+                                            or default_prefix
+                                        )
+                                        node_id_val = entry.get('comfy_node_id') or entry.get('node_id')
+                                        base = _sanitize_name(str(label), default_prefix)
+                                        if node_id_val:
+                                            base = f"{base}_{_sanitize_name(str(node_id_val), '')}"
+                                        return base
 
-                                    if not all_output_paths:
+                                    def _find_grouped_read(required_class: str, parent_norm: str, group_label: str):
+                                        try:
+                                            candidates = list(nuke.allNodes(required_class))
+                                        except Exception:
+                                            candidates = []
+                                        for candidate in candidates:
+                                            if not _matches_parent(candidate):
+                                                continue
+                                            try:
+                                                current_label = (candidate.metadata('charon/output_label') or "").strip().lower()
+                                            except Exception:
+                                                current_label = ""
+                                            if not current_label:
+                                                try:
+                                                    knob_val = candidate.knob('charon_output_label')
+                                                    if knob_val:
+                                                        current_label = str(knob_val.value() or "").strip().lower()
+                                                except Exception:
+                                                    current_label = ""
+                                            if current_label == group_label.lower():
+                                                return candidate
+                                        return None
+
+                                    parent_norm = _normalize_node_id(charon_node_id)
+
+                                    image_entries = [e for e in entries if _is_image_entry(e)]
+                                    mesh_entries = [e for e in entries if _is_mesh_entry(e)]
+
+                                    if not image_entries and not mesh_entries:
                                         log_debug('No output paths available for Read update.', 'WARNING')
                                         cleanup_files()
                                         return
 
-                                    chosen_entries = image_entries or mesh_entries
-                                    if not chosen_entries:
-                                        log_debug(
-                                            'Outputs generated but none are importable as Read/ReadGeo2 '
-                                            f'(images: {len(image_entries)}, meshes: {len(mesh_entries)}).',
-                                            'WARNING',
-                                        )
-                                        cleanup_files()
-                                        return
-
-                                    if image_entries and mesh_entries:
-                                        log_debug(
-                                            f'Auto-import prioritizing 2D outputs ({len(image_entries)} found); '
-                                            f'3D outputs available: {len(mesh_entries)}.'
-                                        )
-                                    selected_paths = [
-                                        entry.get('output_path') for entry in chosen_entries if entry.get('output_path')
-                                    ]
-
-                                    required_class = "ReadGeo2" if mesh_entries and not image_entries else "Read"
-                                    if required_class == "ReadGeo2":
-                                        reuse_existing = False
-                                        _remove_mismatched_reads(required_class)
-
-                                    read_node = find_linked_read_node()
-                                    if read_node is not None:
+                                    def _ensure_output_label_metadata(read_node, label_text: str):
                                         try:
-                                            current_class = getattr(read_node, "Class", lambda: "")()
+                                            read_node.setMetaData('charon/output_label', label_text or "")
                                         except Exception:
-                                            current_class = ""
-                                        if not reuse_existing or (current_class and current_class != required_class):
-                                            unlink_read_node(read_node)
-                                            try:
-                                                nuke.delete(read_node)
-                                            except Exception:
-                                                pass
-                                            read_node = None
-
-                                    if read_node is None:
+                                            pass
                                         try:
-                                            try:
-                                                nuke.selectAll(False)
-                                            except Exception:
-                                                pass
-                                            read_node = nuke.createNode(required_class)
-                                            read_node.setXpos(node_x)
-                                            read_node.setYpos(node_y + 60)
-                                            try:
-                                                read_node.setInput(0, None)
-                                            except Exception:
-                                                pass
-                                            read_node.setSelected(True)
-                                        except Exception as create_error:
-                                            log_debug(f'Failed to create CharonRead node: {create_error}', 'ERROR')
-                                            cleanup_files()
-                                            return
-                                        read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
-                                        target_read_name = f"CharonRead_{read_base}"
-                                        try:
-                                            read_node.setName(target_read_name)
+                                            label_knob = read_node.knob('charon_output_label')
                                         except Exception:
+                                            label_knob = None
+                                        if label_knob is None:
                                             try:
-                                                read_node.setName(f"CharonRead_{read_base}_{charon_node_id}")
+                                                label_knob = nuke.String_Knob('charon_output_label', 'Charon Output Label', '')
+                                                label_knob.setFlag(nuke.NO_ANIMATION)
+                                                label_knob.setFlag(nuke.INVISIBLE)
+                                                read_node.addKnob(label_knob)
                                             except Exception:
+                                                label_knob = None
+                                        if label_knob is not None:
+                                            try:
+                                                label_knob.setValue(label_text or "")
+                                            except Exception:
+                                                pass
+
+                                    grouped_images: Dict[str, List[Dict[str, Any]]] = {}
+                                    for entry in image_entries:
+                                        label = _output_label(entry, "Output2D")
+                                        grouped_images.setdefault(label, []).append(entry)
+
+                                    x_offset_step = 140
+
+                                    for group_index, (label, group_entries) in enumerate(grouped_images.items()):
+                                        group_paths = [e.get('output_path') for e in group_entries if e.get('output_path')]
+                                        if not group_paths:
+                                            continue
+                                        required_class = "Read"
+                                        read_node = _find_grouped_read(required_class, parent_norm, label)
+                                        if read_node is None:
+                                            try:
+                                                read_node = nuke.createNode(required_class)
+                                                read_node.setXpos(node_x + (group_index * x_offset_step))
+                                                read_node.setYpos(node_y + 60)
                                                 try:
-                                                    read_node.setName("CharonRead")
+                                                    read_node.setInput(0, None)
                                                 except Exception:
                                                     pass
-                                        log_debug('Created new Read node for output.')
-                                    else:
-                                        try:
-                                            read_node.setSelected(True)
-                                        except Exception:
-                                            pass
-                                        log_debug('Reusing existing Read node for output update.')
-
-                                    try:
-                                        navigation_json = json.dumps(chosen_entries)
-                                    except Exception as serialize_error:
-                                        log_debug(f'Could not serialize importable outputs: {serialize_error}', 'WARNING')
-                                        navigation_json = json.dumps(
-                                            [{'output_path': path} for path in selected_paths]
-                                        )
-                                    try:
-                                        all_outputs_json = json.dumps(entries)
-                                    except Exception as serialize_error:
-                                        log_debug(f'Could not serialize batch metadata: {serialize_error}', 'WARNING')
-                                        all_outputs_json = navigation_json
-
-                                    outputs_knob, index_knob, label_knob = ensure_batch_navigation_controls(read_node)
-                                    default_index = len(selected_paths) - 1
-                                    if reuse_existing and index_knob is not None:
-                                        try:
-                                            existing_index = int(index_knob.value())
-                                        except Exception:
-                                            existing_index = default_index
-                                        if 0 <= existing_index < len(selected_paths):
-                                            default_index = existing_index
-
-                                    try:
-                                        read_node['file'].setValue(selected_paths[default_index])
-                                    except Exception as assign_error:
-                                        log_debug(f'Could not assign output path to CharonRead node: {assign_error}', 'ERROR')
-
-                                    if outputs_knob is not None:
-                                        try:
-                                            outputs_knob.setValue(navigation_json)
-                                        except Exception:
-                                            pass
-                                    if index_knob is not None:
-                                        try:
-                                            index_knob.setValue(default_index)
-                                        except Exception:
-                                            pass
-                                    if label_knob is not None:
-                                        try:
-                                            label_knob.setValue(f'Batch {default_index + 1}/{len(selected_paths)}')
-                                        except Exception:
-                                            pass
-
-                                    try:
-                                        read_node.setMetaData('charon/batch_outputs', all_outputs_json)
-                                    except Exception:
-                                        pass
-                                    try:
-                                        write_metadata('charon/batch_outputs', all_outputs_json)
-                                    except Exception:
-                                        pass
-
-                                    mark_read_node(read_node)
-
-                                    if mesh_entries:
-                                        mesh_entry = mesh_entries[-1]
-                                        mesh_path = mesh_entry.get('output_path')
-                                        if mesh_path:
-                                            def _find_mesh_read_for_parent():
+                                                read_node.setSelected(True)
+                                            except Exception as create_error:
+                                                log_debug(f'Failed to create CharonRead2D node: {create_error}', 'ERROR')
+                                                continue
+                                            read_base = _sanitize_name(label, "Output2D")
+                                            try:
+                                                read_node.setName(f"CharonRead2D_{read_base}")
+                                            except Exception:
                                                 try:
-                                                    candidates = list(nuke.allNodes("ReadGeo2"))
+                                                    read_node.setName("CharonRead2D")
                                                 except Exception:
-                                                    candidates = []
-                                                for candidate in candidates:
-                                                    if not _matches_parent(candidate):
-                                                        continue
-                                                    try:
-                                                        current_class = getattr(candidate, "Class", lambda: "")()
-                                                    except Exception:
-                                                        current_class = ""
-                                                    if current_class == "ReadGeo2":
-                                                        return candidate
-                                                return None
+                                                    pass
+                                            log_debug(f'Created CharonRead2D for output group: {label}')
+                                        else:
+                                            try:
+                                                read_node.setSelected(True)
+                                            except Exception:
+                                                pass
 
-                                            mesh_read = _find_mesh_read_for_parent()
-                                            if mesh_read is None:
-                                                try:
-                                                    mesh_read = nuke.createNode("ReadGeo2")
-                                                    mesh_read.setXpos(node_x + 220)
-                                                    mesh_read.setYpos(node_y + 120)
-                                                    try:
-                                                        mesh_read.setInput(0, None)
-                                                    except Exception:
-                                                        pass
-                                                except Exception as mesh_error:
-                                                    log_debug(f'Failed to create mesh Read node: {mesh_error}', 'ERROR')
-                                                    mesh_read = None
+                                        try:
+                                            navigation_json = json.dumps(group_entries)
+                                        except Exception as serialize_error:
+                                            log_debug(f'Could not serialize 2D outputs for {label}: {serialize_error}', 'WARNING')
+                                            navigation_json = json.dumps([{'output_path': path} for path in group_paths])
+                                        try:
+                                            all_outputs_json = json.dumps(entries)
+                                        except Exception:
+                                            all_outputs_json = navigation_json
 
-                                            if mesh_read is not None:
-                                                parent_norm = _normalize_node_id(charon_node_id)
+                                        outputs_knob, index_knob, label_knob = ensure_batch_navigation_controls(read_node)
+                                        default_index = len(group_paths) - 1
+                                        if reuse_existing and index_knob is not None:
+                                            try:
+                                                existing_index = int(index_knob.value())
+                                            except Exception:
+                                                existing_index = default_index
+                                            if 0 <= existing_index < len(group_paths):
+                                                default_index = existing_index
+
+                                        try:
+                                            read_node['file'].setValue(group_paths[default_index])
+                                        except Exception as assign_error:
+                                            log_debug(f'Could not assign output path to CharonRead2D ({label}): {assign_error}', 'ERROR')
+
+                                        if outputs_knob is not None:
+                                            try:
+                                                outputs_knob.setValue(navigation_json)
+                                            except Exception:
+                                                pass
+                                        if index_knob is not None:
+                                            try:
+                                                index_knob.setValue(default_index)
+                                            except Exception:
+                                                pass
+                                        if label_knob is not None:
+                                            try:
+                                                label_knob.setValue(f'Batch {default_index + 1}/{len(group_paths)}')
+                                            except Exception:
+                                                pass
+
+                                        try:
+                                            read_node.setMetaData('charon/batch_outputs', all_outputs_json)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            write_metadata('charon/batch_outputs', all_outputs_json)
+                                        except Exception:
+                                            pass
+
+                                        _ensure_output_label_metadata(read_node, label)
+                                        mark_read_node(read_node)
+
+                                    grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
+                                    for entry in mesh_entries:
+                                        label = _output_label(entry, "Output3D")
+                                        grouped_meshes.setdefault(label, []).append(entry)
+
+                                    for group_index, (label, group_entries) in enumerate(grouped_meshes.items()):
+                                        group_paths = [e.get('output_path') for e in group_entries if e.get('output_path')]
+                                        if not group_paths:
+                                            continue
+                                        required_class = "ReadGeo2"
+                                        read_node = _find_grouped_read(required_class, parent_norm, label)
+                                        if read_node is None:
+                                            try:
+                                                read_node = nuke.createNode(required_class)
+                                                read_node.setXpos(node_x + 220 + (group_index * x_offset_step))
+                                                read_node.setYpos(node_y + 120)
                                                 try:
-                                                    mesh_read['file'].setValue(mesh_path)
-                                                except Exception as assign_error:
-                                                    log_debug(f'Could not assign mesh output to ReadGeo2: {assign_error}', 'ERROR')
+                                                    read_node.setInput(0, None)
+                                                except Exception:
+                                                    pass
+                                            except Exception as mesh_error:
+                                                log_debug(f'Failed to create mesh Read node ({label}): {mesh_error}', 'ERROR')
+                                                continue
+                                        try:
+                                            navigation_json = json.dumps(group_entries)
+                                        except Exception as serialize_error:
+                                            log_debug(f'Could not serialize 3D outputs for {label}: {serialize_error}', 'WARNING')
+                                            navigation_json = json.dumps([{'output_path': path} for path in group_paths])
+
+                                        parent_norm_local = _normalize_node_id(charon_node_id)
+                                        try:
+                                            read_node['file'].setValue(group_paths[-1])
+                                        except Exception as assign_error:
+                                            log_debug(f'Could not assign mesh output to ReadGeo2 ({label}): {assign_error}', 'ERROR')
+                                        try:
+                                            read_id_mesh = (read_node.metadata('charon/read_id') or "").strip()
+                                        except Exception:
+                                            read_id_mesh = ""
+                                        try:
+                                            read_node.setMetaData('charon/parent_id', parent_norm_local or "")
+                                        except Exception:
+                                            pass
+                                        try:
+                                            parent_knob = read_node.knob('charon_parent_id')
+                                        except Exception:
+                                            parent_knob = None
+                                        if parent_knob is None:
+                                            try:
+                                                parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', '')
+                                                parent_knob.setFlag(nuke.NO_ANIMATION)
+                                                parent_knob.setFlag(nuke.INVISIBLE)
+                                                read_node.addKnob(parent_knob)
+                                            except Exception:
+                                                parent_knob = None
+                                        if parent_knob is not None:
+                                            try:
+                                                parent_knob.setValue(parent_norm_local or "")
+                                            except Exception:
+                                                pass
+                                        try:
+                                            existing_read_id_knob = read_node.knob('charon_read_id')
+                                        except Exception:
+                                            existing_read_id_knob = None
+                                        if not read_id_mesh and existing_read_id_knob is not None:
+                                            try:
+                                                read_id_mesh = (existing_read_id_knob.value() or "").strip()
+                                            except Exception:
                                                 read_id_mesh = ""
-                                                try:
-                                                    read_id_mesh = (mesh_read.metadata('charon/read_id') or "").strip()
-                                                except Exception:
-                                                    read_id_mesh = ""
-                                                try:
-                                                    mesh_read.setMetaData('charon/parent_id', parent_norm or "")
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    parent_knob = mesh_read.knob('charon_parent_id')
-                                                except Exception:
-                                                    parent_knob = None
-                                                if parent_knob is None:
-                                                    try:
-                                                        parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', '')
-                                                        parent_knob.setFlag(nuke.NO_ANIMATION)
-                                                        parent_knob.setFlag(nuke.INVISIBLE)
-                                                        mesh_read.addKnob(parent_knob)
-                                                    except Exception:
-                                                        parent_knob = None
-                                                if parent_knob is not None:
-                                                    try:
-                                                        parent_knob.setValue(parent_norm or "")
-                                                    except Exception:
-                                                        pass
-                                                try:
-                                                    existing_read_id_knob = mesh_read.knob('charon_read_id')
-                                                except Exception:
-                                                    existing_read_id_knob = None
-                                                if not read_id_mesh and existing_read_id_knob is not None:
-                                                    try:
-                                                        read_id_mesh = (existing_read_id_knob.value() or "").strip()
-                                                    except Exception:
-                                                        read_id_mesh = ""
-                                                if not read_id_mesh:
-                                                    read_id_mesh = uuid.uuid4().hex[:12].lower()
-                                                try:
-                                                    mesh_read.setMetaData('charon/read_id', read_id_mesh)
-                                                except Exception:
-                                                    pass
-                                                if existing_read_id_knob is None:
-                                                    try:
-                                                        existing_read_id_knob = nuke.String_Knob('charon_read_id', 'Charon Read ID', '')
-                                                        existing_read_id_knob.setFlag(nuke.NO_ANIMATION)
-                                                        existing_read_id_knob.setFlag(nuke.INVISIBLE)
-                                                        mesh_read.addKnob(existing_read_id_knob)
-                                                    except Exception:
-                                                        existing_read_id_knob = None
-                                                if existing_read_id_knob is not None:
-                                                    try:
-                                                        existing_read_id_knob.setValue(read_id_mesh)
-                                                    except Exception:
-                                                        pass
+                                        if not read_id_mesh:
+                                            read_id_mesh = uuid.uuid4().hex[:12].lower()
+                                        try:
+                                            read_node.setMetaData('charon/read_id', read_id_mesh)
+                                        except Exception:
+                                            pass
+                                        if existing_read_id_knob is None:
+                                            try:
+                                                existing_read_id_knob = nuke.String_Knob('charon_read_id', 'Charon Read ID', '')
+                                                existing_read_id_knob.setFlag(nuke.NO_ANIMATION)
+                                                existing_read_id_knob.setFlag(nuke.INVISIBLE)
+                                                read_node.addKnob(existing_read_id_knob)
+                                            except Exception:
+                                                existing_read_id_knob = None
+                                        if existing_read_id_knob is not None:
+                                            try:
+                                                existing_read_id_knob.setValue(read_id_mesh)
+                                            except Exception:
+                                                pass
 
-                                                try:
-                                                    outputs_knob_mesh, index_knob_mesh, label_knob_mesh = ensure_batch_navigation_controls(mesh_read)
-                                                    if outputs_knob_mesh is not None:
-                                                        outputs_knob_mesh.setValue(json.dumps(mesh_entries))
-                                                    if index_knob_mesh is not None:
-                                                        index_knob_mesh.setValue(len(mesh_entries) - 1)
-                                                    if label_knob_mesh is not None:
-                                                        label_knob_mesh.setValue(f'Mesh {len(mesh_entries)}/{len(mesh_entries)}')
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    assign_read_label(mesh_read)
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    ensure_read_node_info(mesh_read, read_id_mesh)
-                                                except Exception:
-                                                    pass
+                                        try:
+                                            outputs_knob_mesh, index_knob_mesh, label_knob_mesh = ensure_batch_navigation_controls(read_node)
+                                            if outputs_knob_mesh is not None:
+                                                outputs_knob_mesh.setValue(navigation_json)
+                                            if index_knob_mesh is not None:
+                                                index_knob_mesh.setValue(len(group_paths) - 1)
+                                            if label_knob_mesh is not None:
+                                                label_knob_mesh.setValue(f'Mesh {len(group_paths)}/{len(group_paths)}')
+                                        except Exception:
+                                            pass
+                                        try:
+                                            assign_read_label(read_node)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            ensure_read_node_info(read_node, read_id_mesh)
+                                        except Exception:
+                                            pass
 
-                                                try:
-                                                    mesh_read.setName(f"CharonRead3D_{_sanitize_name(_resolve_workflow_display_name(), 'Workflow')}")
-                                                except Exception:
-                                                    pass
+                                        try:
+                                            read_base = _sanitize_name(label, "Output3D")
+                                            read_node.setName(f"CharonRead3D_{read_base}")
+                                        except Exception:
+                                            try:
+                                                read_node.setName("CharonRead3D")
+                                            except Exception:
+                                                pass
 
+                                        try:
+                                            color_value = status_to_tile_color(current_node_state)
+                                            read_node['tile_color'].setValue(color_value)
+                                        except Exception:
+                                            pass
+                                        mesh_gl_color = status_to_gl_color(current_node_state)
+                                        if mesh_gl_color is not None:
+                                            try:
+                                                read_node['gl_color'].setValue(mesh_gl_color)
+                                            except Exception:
                                                 try:
-                                                    color_value = status_to_tile_color(current_node_state)
-                                                    mesh_read['tile_color'].setValue(color_value)
+                                                    read_node['gl_color'].setValue(list(mesh_gl_color))
                                                 except Exception:
                                                     pass
-                                                mesh_gl_color = status_to_gl_color(current_node_state)
-                                                if mesh_gl_color is not None:
-                                                    try:
-                                                        mesh_read['gl_color'].setValue(mesh_gl_color)
-                                                    except Exception:
-                                                        try:
-                                                            mesh_read['gl_color'].setValue(list(mesh_gl_color))
-                                                        except Exception:
-                                                            pass
-                                                try:
-                                                    apply_status_color(current_node_state, mesh_read)
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    mark_read_node(mesh_read)
-                                                except Exception:
-                                                    pass
+                                        try:
+                                            apply_status_color(current_node_state, read_node)
+                                        except Exception:
+                                            pass
+                                        _ensure_output_label_metadata(read_node, label)
+                                        try:
+                                            read_node.setMetaData('charon/batch_outputs', navigation_json)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            write_metadata('charon/batch_outputs', navigation_json)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            mark_read_node(read_node)
+                                        except Exception:
+                                            pass
 
                                     cleanup_files()
 
@@ -3205,9 +3273,15 @@ def recreate_missing_read_node():
     except Exception:
         pass
     try:
-        read_node.setName("CharonRead")
+        read_base = _sanitize_name(os.path.splitext(os.path.basename(normalized_output))[0], "Workflow")
+        target_name = f"CharonRead3D_{read_base}" if read_class == "ReadGeo2" else f"CharonRead2D_{read_base}"
+        read_node.setName(target_name)
     except Exception:
-        pass
+        try:
+            fallback_name = "CharonRead3D" if read_class == "ReadGeo2" else "CharonRead2D"
+            read_node.setName(fallback_name)
+        except Exception:
+            pass
     try:
         read_node.setXY(int(node.xpos()) + 200, int(node.ypos()))
     except Exception:

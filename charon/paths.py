@@ -201,6 +201,7 @@ def allocate_charon_output_path(
     user_slug: Optional[str] = None,
     workflow_name: Optional[str] = None,
     category: Optional[str] = None,
+    output_name: Optional[str] = None,
 ) -> str:
     """
     Determine the versioned output path for a CharonOp run.
@@ -214,6 +215,9 @@ def allocate_charon_output_path(
 
     When neither environment variable is present, the path falls back to the
     default Charon results directory.
+
+    An optional output_name adds a deeper folder (per Comfy output node) to
+    prevent different outputs from stacking in the same directory.
     """
     extension = (extension or "").strip() or ".png"
     if not extension.startswith("."):
@@ -240,6 +244,9 @@ def allocate_charon_output_path(
         node_id=normalized_node_id,
     )
     base_output_dir = os.path.join(work_root, CHARON_FOLDER_NAME, directory_suffix)
+    output_segment = _sanitize_component(output_name, "") if output_name else ""
+    if output_segment:
+        base_output_dir = os.path.join(base_output_dir, output_segment)
 
     _ensure_directory(base_output_dir)
 
