@@ -8,6 +8,7 @@ from .custom_table_widgets import ScriptTableView
 from ..charon_metadata import write_charon_metadata
 from ..workflow_runtime import load_workflow_bundle, spawn_charon_node
 from ..utilities import get_current_user_slug
+from ..charon_logger import system_debug
 from ..cache_manager import get_cache_manager
 from ..metadata_manager import invalidate_metadata_path
 from .. import config, preferences
