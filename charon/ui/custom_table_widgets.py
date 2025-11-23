@@ -25,6 +25,7 @@ class ScriptTableView(QtWidgets.QTableView):
     script_show_validation_payload = QtCore.Signal(str)
     script_show_raw_validation_payload = QtCore.Signal(str)
     script_revalidate = QtCore.Signal(str)
+    script_override_validation = QtCore.Signal(str)
     mousePressed = QtCore.Signal()
     mouseReleased = QtCore.Signal()
     createScriptInCurrentFolder = QtCore.Signal()
@@ -300,6 +301,9 @@ class ScriptTableView(QtWidgets.QTableView):
 
             view_result_action = menu.addAction("View Validation Result")
             view_result_action.triggered.connect(lambda: self.script_show_validation_payload.emit(script_path))
+
+            override_action = menu.addAction("Override Validation (Force Passed)")
+            override_action.triggered.connect(lambda: self.script_override_validation.emit(script_path))
 
             exec_menu(menu, event.globalPos())
             return

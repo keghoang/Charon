@@ -244,6 +244,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.script_validate.connect(self._handle_script_validate_request)
         self.script_view.script_show_validation_payload.connect(self._handle_script_show_payload_request)
         self.script_view.script_show_raw_validation_payload.connect(self._handle_script_show_raw_payload_request)
+        self.script_view.script_override_validation.connect(self._handle_override_validation)
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
@@ -702,6 +703,17 @@ class ScriptPanel(QtWidgets.QWidget):
             return
 
         self._start_validation(script_path, bundle)
+
+    def _handle_override_validation(self, script_path: str):
+        """Force validation state to passed for a workflow."""
+        if not script_path:
+            return
+        try:
+            self.script_model.set_validation_state(script_path, "validated", payload={"overridden": True})
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Override Failed", str(exc))
+            return
+        system_debug(f"[Validation] Override set to Passed for {script_path}")
 
     def _load_workflow_bundle_safe(self, script_path: str):
         try:
