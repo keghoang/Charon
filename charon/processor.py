@@ -1283,6 +1283,17 @@ def process_charonop_node():
                     targets.append(candidate)
 
             try:
+                for candidate in iter_candidate_read_nodes():
+                    try:
+                        parent_val = read_node_parent_id(candidate)
+                    except Exception:
+                        parent_val = ""
+                    if parent_val == charon_node_id and candidate not in targets:
+                        targets.append(candidate)
+            except Exception:
+                pass
+
+            try:
                 recreate_knob = node.knob('charon_recreate_read')
             except Exception:
                 recreate_knob = None
