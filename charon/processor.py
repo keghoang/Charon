@@ -29,6 +29,17 @@ from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
 MODEL_OUTPUT_EXTENSIONS = {".obj", ".fbx", ".abc", ".gltf", ".glb", ".usd", ".usdz"}
+IMAGE_OUTPUT_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tif",
+    ".tiff",
+    ".exr",
+    ".bmp",
+    ".tga",
+    ".webp",
+}
 
 
 def _load_parameter_specs(node) -> List[Dict[str, Any]]:
@@ -2274,13 +2285,14 @@ def process_charonop_node():
                     base_value = 0.5 + per_batch_progress * batch_index
                     return min(base_value + per_batch_progress * local_clamped, 1.0)
 
-                def _select_output_artifact(outputs_map, prompt_lookup):
+                def _collect_output_artifacts(outputs_map, prompt_lookup):
                     """
-                    Extract the first available output artifact (image/file/mesh).
-                    Returns dict with filename, subfolder, type, extension, node_id, class_type.
+                    Extract all available output artifacts (images/files/meshes).
+                    Returns list of dicts with filename, subfolder, type, extension, node_id, class_type, kind.
                     """
+                    artifacts = []
                     if not isinstance(outputs_map, dict):
-                        return None
+                        return artifacts
                     for node_id, output_data in outputs_map.items():
                         if not isinstance(output_data, dict):
                             continue
@@ -2288,21 +2300,23 @@ def process_charonop_node():
                             entries = output_data.get(key)
                             if not isinstance(entries, list) or not entries:
                                 continue
-                            entry = entries[0]
-                            filename = entry.get("filename")
-                            if not filename:
-                                continue
-                            ext = (os.path.splitext(filename)[1] or "").lower()
-                            return {
-                                "filename": filename,
-                                "subfolder": entry.get("subfolder") or "",
-                                "type": entry.get("type") or "output",
-                                "extension": ext,
-                                "node_id": node_id,
-                                "class_type": (prompt_lookup.get(node_id) or {}).get("class_type") or "",
-                                "kind": key,
-                            }
-                    return None
+                            for entry in entries:
+                                filename = entry.get("filename")
+                                if not filename:
+                                    continue
+                                ext = (os.path.splitext(filename)[1] or "").lower()
+                                artifacts.append(
+                                    {
+                                        "filename": filename,
+                                        "subfolder": entry.get("subfolder") or "",
+                                        "type": entry.get("type") or "output",
+                                        "extension": ext,
+                                        "node_id": node_id,
+                                        "class_type": (prompt_lookup.get(node_id) or {}).get("class_type") or "",
+                                        "kind": key,
+                                    }
+                                )
+                    return artifacts
 
                 for batch_index in range(batch_count):
                     seed_offset = batch_index * 9973
@@ -2363,13 +2377,15 @@ def process_charonop_node():
                                 status_str = history_data.get('status', {}).get('status_str')
                                 if status_str == 'success':
                                     outputs = history_data.get('outputs', {})
-                                    if outputs:
-                                        artifact = _select_output_artifact(outputs, base_prompt)
-                                        if not artifact:
-                                            raise Exception('ComfyUI did not return an output file')
+                                    artifacts = _collect_output_artifacts(outputs, base_prompt) if outputs else []
+                                    if not artifacts:
+                                        raise Exception('ComfyUI did not return an output file')
+
+                                    for artifact_index, artifact in enumerate(artifacts):
+                                        artifact_progress = 0.8 + (0.2 * ((artifact_index + 1) / len(artifacts)))
                                         update_progress(
-                                            _progress_for(batch_index, 0.9),
-                                            f'{batch_label}: downloading result',
+                                            _progress_for(batch_index, artifact_progress),
+                                            f'{batch_label}: downloading result ({artifact_index + 1}/{len(artifacts)})',
                                             extra={
                                                 'prompt_id': prompt_id,
                                                 'batch_index': batch_index + 1,
@@ -2431,25 +2447,31 @@ def process_charonop_node():
                                             'output_kind': category,
                                             'original_filename': artifact.get("filename"),
                                             'download_path': allocated_output_path.replace('\\', '/'),
+                                            'comfy_node_id': artifact.get("node_id"),
+                                            'comfy_node_class': artifact.get("class_type"),
+                                            'comfy_output_kind': artifact.get("kind"),
                                         }
                                         if converted_from:
                                             batch_entry['converted_from'] = converted_from.replace('\\', '/')
                                         batch_outputs.append(batch_entry)
+
+                                    if batch_outputs:
+                                        last_entry = batch_outputs[-1]
                                         extra_payload = {
-                                            'output_path': normalized_output_path,
-                                            'elapsed_time': elapsed,
+                                            'output_path': last_entry.get('output_path'),
+                                            'elapsed_time': last_entry.get('elapsed_time'),
                                             'prompt_id': prompt_id,
                                             'batch_index': batch_index + 1,
                                             'batch_total': batch_count,
                                             'batch_outputs': batch_outputs.copy(),
-                                            'output_kind': category,
+                                            'output_kind': last_entry.get('output_kind'),
                                         }
                                         update_progress(
                                             _progress_for(batch_index, 1.0),
                                             f'{batch_label}: completed',
                                             extra=extra_payload,
                                         )
-                                        break
+                                    break
                             elif status_str == 'error':
                                 error_msg = history_data.get('status', {}).get('status_message', 'Unknown error')
                                 raise Exception(f'ComfyUI failed: {error_msg}')
@@ -2571,17 +2593,60 @@ def process_charonop_node():
                                                 except Exception:
                                                     pass
 
-                                    outputs = []
+                                    def _is_mesh_entry(entry: Dict[str, Any]) -> bool:
+                                        kind = (entry.get('comfy_output_kind') or '').lower()
+                                        path = entry.get('output_path') or ''
+                                        ext = os.path.splitext(str(path))[1].lower()
+                                        return kind == 'meshes' or ext in MODEL_OUTPUT_EXTENSIONS
+
+                                    def _is_image_entry(entry: Dict[str, Any]) -> bool:
+                                        if _is_mesh_entry(entry):
+                                            return False
+                                        kind = (entry.get('comfy_output_kind') or '').lower()
+                                        if kind == 'images':
+                                            return True
+                                        path = entry.get('output_path') or ''
+                                        ext = os.path.splitext(str(path))[1].lower()
+                                        return ext in IMAGE_OUTPUT_EXTENSIONS
+
+                                    all_output_paths = []
+                                    image_entries = []
+                                    mesh_entries = []
                                     for entry in entries:
                                         path = entry.get('output_path')
-                                        if path:
-                                            outputs.append(path)
-                                    if not outputs:
+                                        if not path:
+                                            continue
+                                        all_output_paths.append(path)
+                                        if _is_image_entry(entry):
+                                            image_entries.append(entry)
+                                        elif _is_mesh_entry(entry):
+                                            mesh_entries.append(entry)
+
+                                    if not all_output_paths:
                                         log_debug('No output paths available for Read update.', 'WARNING')
                                         cleanup_files()
                                         return
 
-                                    required_class = "ReadGeo2" if os.path.splitext(outputs[-1])[1].lower() in MODEL_OUTPUT_EXTENSIONS else "Read"
+                                    chosen_entries = image_entries or mesh_entries
+                                    if not chosen_entries:
+                                        log_debug(
+                                            'Outputs generated but none are importable as Read/ReadGeo2 '
+                                            f'(images: {len(image_entries)}, meshes: {len(mesh_entries)}).',
+                                            'WARNING',
+                                        )
+                                        cleanup_files()
+                                        return
+
+                                    if image_entries and mesh_entries:
+                                        log_debug(
+                                            f'Auto-import prioritizing 2D outputs ({len(image_entries)} found); '
+                                            f'3D outputs available: {len(mesh_entries)}.'
+                                        )
+                                    selected_paths = [
+                                        entry.get('output_path') for entry in chosen_entries if entry.get('output_path')
+                                    ]
+
+                                    required_class = "ReadGeo2" if mesh_entries and not image_entries else "Read"
                                     if required_class == "ReadGeo2":
                                         reuse_existing = False
                                         _remove_mismatched_reads(required_class)
@@ -2639,29 +2704,36 @@ def process_charonop_node():
                                         log_debug('Reusing existing Read node for output update.')
 
                                     try:
-                                        outputs_json = json.dumps(entries)
+                                        navigation_json = json.dumps(chosen_entries)
+                                    except Exception as serialize_error:
+                                        log_debug(f'Could not serialize importable outputs: {serialize_error}', 'WARNING')
+                                        navigation_json = json.dumps(
+                                            [{'output_path': path} for path in selected_paths]
+                                        )
+                                    try:
+                                        all_outputs_json = json.dumps(entries)
                                     except Exception as serialize_error:
                                         log_debug(f'Could not serialize batch metadata: {serialize_error}', 'WARNING')
-                                        outputs_json = json.dumps([{'output_path': path} for path in outputs])
+                                        all_outputs_json = navigation_json
 
                                     outputs_knob, index_knob, label_knob = ensure_batch_navigation_controls(read_node)
-                                    default_index = len(outputs) - 1
+                                    default_index = len(selected_paths) - 1
                                     if reuse_existing and index_knob is not None:
                                         try:
                                             existing_index = int(index_knob.value())
                                         except Exception:
                                             existing_index = default_index
-                                        if 0 <= existing_index < len(outputs):
+                                        if 0 <= existing_index < len(selected_paths):
                                             default_index = existing_index
 
                                     try:
-                                        read_node['file'].setValue(outputs[default_index])
+                                        read_node['file'].setValue(selected_paths[default_index])
                                     except Exception as assign_error:
                                         log_debug(f'Could not assign output path to CharonRead node: {assign_error}', 'ERROR')
 
                                     if outputs_knob is not None:
                                         try:
-                                            outputs_knob.setValue(outputs_json)
+                                            outputs_knob.setValue(navigation_json)
                                         except Exception:
                                             pass
                                     if index_knob is not None:
@@ -2671,20 +2743,163 @@ def process_charonop_node():
                                             pass
                                     if label_knob is not None:
                                         try:
-                                            label_knob.setValue(f'Batch {default_index + 1}/{len(outputs)}')
+                                            label_knob.setValue(f'Batch {default_index + 1}/{len(selected_paths)}')
                                         except Exception:
                                             pass
 
                                     try:
-                                        read_node.setMetaData('charon/batch_outputs', outputs_json)
+                                        read_node.setMetaData('charon/batch_outputs', all_outputs_json)
                                     except Exception:
                                         pass
                                     try:
-                                        write_metadata('charon/batch_outputs', outputs_json)
+                                        write_metadata('charon/batch_outputs', all_outputs_json)
                                     except Exception:
                                         pass
 
                                     mark_read_node(read_node)
+
+                                    if mesh_entries:
+                                        mesh_entry = mesh_entries[-1]
+                                        mesh_path = mesh_entry.get('output_path')
+                                        if mesh_path:
+                                            def _find_mesh_read_for_parent():
+                                                try:
+                                                    candidates = list(nuke.allNodes("ReadGeo2"))
+                                                except Exception:
+                                                    candidates = []
+                                                for candidate in candidates:
+                                                    if not _matches_parent(candidate):
+                                                        continue
+                                                    try:
+                                                        current_class = getattr(candidate, "Class", lambda: "")()
+                                                    except Exception:
+                                                        current_class = ""
+                                                    if current_class == "ReadGeo2":
+                                                        return candidate
+                                                return None
+
+                                            mesh_read = _find_mesh_read_for_parent()
+                                            if mesh_read is None:
+                                                try:
+                                                    mesh_read = nuke.createNode("ReadGeo2")
+                                                    mesh_read.setXpos(node_x + 220)
+                                                    mesh_read.setYpos(node_y + 120)
+                                                    try:
+                                                        mesh_read.setInput(0, None)
+                                                    except Exception:
+                                                        pass
+                                                except Exception as mesh_error:
+                                                    log_debug(f'Failed to create mesh Read node: {mesh_error}', 'ERROR')
+                                                    mesh_read = None
+
+                                            if mesh_read is not None:
+                                                parent_norm = _normalize_node_id(charon_node_id)
+                                                try:
+                                                    mesh_read['file'].setValue(mesh_path)
+                                                except Exception as assign_error:
+                                                    log_debug(f'Could not assign mesh output to ReadGeo2: {assign_error}', 'ERROR')
+                                                read_id_mesh = ""
+                                                try:
+                                                    read_id_mesh = (mesh_read.metadata('charon/read_id') or "").strip()
+                                                except Exception:
+                                                    read_id_mesh = ""
+                                                try:
+                                                    mesh_read.setMetaData('charon/parent_id', parent_norm or "")
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    parent_knob = mesh_read.knob('charon_parent_id')
+                                                except Exception:
+                                                    parent_knob = None
+                                                if parent_knob is None:
+                                                    try:
+                                                        parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', '')
+                                                        parent_knob.setFlag(nuke.NO_ANIMATION)
+                                                        parent_knob.setFlag(nuke.INVISIBLE)
+                                                        mesh_read.addKnob(parent_knob)
+                                                    except Exception:
+                                                        parent_knob = None
+                                                if parent_knob is not None:
+                                                    try:
+                                                        parent_knob.setValue(parent_norm or "")
+                                                    except Exception:
+                                                        pass
+                                                try:
+                                                    existing_read_id_knob = mesh_read.knob('charon_read_id')
+                                                except Exception:
+                                                    existing_read_id_knob = None
+                                                if not read_id_mesh and existing_read_id_knob is not None:
+                                                    try:
+                                                        read_id_mesh = (existing_read_id_knob.value() or "").strip()
+                                                    except Exception:
+                                                        read_id_mesh = ""
+                                                if not read_id_mesh:
+                                                    read_id_mesh = uuid.uuid4().hex[:12].lower()
+                                                try:
+                                                    mesh_read.setMetaData('charon/read_id', read_id_mesh)
+                                                except Exception:
+                                                    pass
+                                                if existing_read_id_knob is None:
+                                                    try:
+                                                        existing_read_id_knob = nuke.String_Knob('charon_read_id', 'Charon Read ID', '')
+                                                        existing_read_id_knob.setFlag(nuke.NO_ANIMATION)
+                                                        existing_read_id_knob.setFlag(nuke.INVISIBLE)
+                                                        mesh_read.addKnob(existing_read_id_knob)
+                                                    except Exception:
+                                                        existing_read_id_knob = None
+                                                if existing_read_id_knob is not None:
+                                                    try:
+                                                        existing_read_id_knob.setValue(read_id_mesh)
+                                                    except Exception:
+                                                        pass
+
+                                                try:
+                                                    outputs_knob_mesh, index_knob_mesh, label_knob_mesh = ensure_batch_navigation_controls(mesh_read)
+                                                    if outputs_knob_mesh is not None:
+                                                        outputs_knob_mesh.setValue(json.dumps(mesh_entries))
+                                                    if index_knob_mesh is not None:
+                                                        index_knob_mesh.setValue(len(mesh_entries) - 1)
+                                                    if label_knob_mesh is not None:
+                                                        label_knob_mesh.setValue(f'Mesh {len(mesh_entries)}/{len(mesh_entries)}')
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    assign_read_label(mesh_read)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    ensure_read_node_info(mesh_read, read_id_mesh)
+                                                except Exception:
+                                                    pass
+
+                                                try:
+                                                    mesh_read.setName(f"CharonRead3D_{_sanitize_name(_resolve_workflow_display_name(), 'Workflow')}")
+                                                except Exception:
+                                                    pass
+
+                                                try:
+                                                    color_value = status_to_tile_color(current_node_state)
+                                                    mesh_read['tile_color'].setValue(color_value)
+                                                except Exception:
+                                                    pass
+                                                mesh_gl_color = status_to_gl_color(current_node_state)
+                                                if mesh_gl_color is not None:
+                                                    try:
+                                                        mesh_read['gl_color'].setValue(mesh_gl_color)
+                                                    except Exception:
+                                                        try:
+                                                            mesh_read['gl_color'].setValue(list(mesh_gl_color))
+                                                        except Exception:
+                                                            pass
+                                                try:
+                                                    apply_status_color(current_node_state, mesh_read)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    mark_read_node(mesh_read)
+                                                except Exception:
+                                                    pass
+
                                     cleanup_files()
 
                                 nuke.executeInMainThread(update_or_create_read_nodes)
