@@ -11,9 +11,9 @@ Tiny Mode now mirrors CharonBoard in a compact floating surface. Artists can lea
 
 ## Activation
 ### Global Hotkey
-- Default toggle: `F2` (configurable in Settings -> Charon Keybinds).
+- Default toggle: `F3` (configurable in Settings -> Charon Keybinds).
 - Works both inside and outside the main Charon window.
-- Tapping `F2` swaps between the full panel and Tiny Mode, keeping focus on entry.
+- Tapping `F3` swaps between the full panel and Tiny Mode, keeping focus on entry.
 
 ### Window Behaviour
 - Width/height defaults come from `config.TINY_MODE_*` constants.
@@ -37,7 +37,7 @@ Right click anywhere inside the window to access actions. Double-clicking a node
 - **Copy Node Summary** - places a text summary (status, workflow, output paths) on the clipboard.
 - **Focus in Node Graph** - explicitly recenters the selected node without double-clicking.
 - **Open Full CharonBoard** - leaves Tiny Mode and focuses the CharonBoard tab in the main window.
-- **Exit Tiny Mode** - returns to the full panel (same result as pressing `F2`).
+- **Exit Tiny Mode** - returns to the full panel (same result as pressing `F3`).
 - **Settings...** - opens the settings dialog to adjust keybinds and preferences.
 
 ## Integration Notes

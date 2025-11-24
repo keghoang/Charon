@@ -236,7 +236,6 @@ class KeybindManager(QtCore.QObject):
             # Allow overwriting Charon keybind with confirmation dialog (same as settings UI)
             action_names = {
                 'quick_search': 'Quick Search',
-                'run_script': 'Run Script',
                 'refresh': 'Refresh',
                 'open_folder': 'Open Folder',
             }

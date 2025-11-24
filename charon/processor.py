@@ -1078,7 +1078,66 @@ def process_charonop_node():
             write_metadata('charon/node_id', node_id or "")
             return node_id
 
+        def _collect_linked_read_ids(parent_id: str) -> List[str]:
+            normalized_parent = _normalize_node_id(parent_id)
+            if not normalized_parent:
+                return []
+            try:
+                candidates = list(nuke.allNodes())
+            except Exception:
+                return []
+            ids: List[str] = []
+            for candidate in candidates:
+                parent_match = ""
+                try:
+                    parent_match = _normalize_node_id(candidate.metadata('charon/parent_id'))
+                except Exception:
+                    parent_match = ""
+                if parent_match != normalized_parent:
+                    try:
+                        parent_match = _normalize_node_id(_safe_knob_value(candidate, 'charon_parent_id'))
+                    except Exception:
+                        parent_match = ""
+                if parent_match != normalized_parent:
+                    continue
+                read_identifier = ""
+                for getter in (
+                    lambda: candidate.metadata('charon/read_id'),
+                    lambda: candidate.metadata('charon/read_node_id'),
+                    lambda: _safe_knob_value(candidate, 'charon_read_id'),
+                    lambda: _safe_knob_value(candidate, 'charon_read_node_id'),
+                    lambda: candidate.name(),
+                ):
+                    try:
+                        candidate_val = getter()
+                    except Exception:
+                        candidate_val = ""
+                    read_identifier = _normalize_node_id(candidate_val)
+                    if read_identifier:
+                        break
+                if read_identifier and read_identifier not in ids:
+                    ids.append(read_identifier)
+            return ids
+
+        def _refresh_linked_read_info():
+            try:
+                info_knob = node.knob('charon_read_id_info')
+            except Exception:
+                info_knob = None
+            if info_knob is None:
+                return
+            linked_ids = _collect_linked_read_ids(charon_node_id)
+            display = "\n".join(linked_ids) if linked_ids else "Not linked"
+            try:
+                info_knob.setValue(display)
+            except Exception:
+                try:
+                    info_knob.setText(display)  # type: ignore
+                except Exception:
+                    pass
+
         charon_node_id = ensure_charon_node_id()
+        _refresh_linked_read_info()
         user_slug = get_current_user_slug()
         def resolve_batch_count() -> int:
             try:
@@ -1436,67 +1495,7 @@ def process_charonop_node():
                 pass
 
         def ensure_batch_navigation_controls(read_node):
-            if read_node is None:
-                return None, None, None
-            try:
-                outputs_knob = read_node.knob('charon_batch_outputs')
-            except Exception:
-                outputs_knob = None
-            if outputs_knob is None:
-                try:
-                    outputs_knob = nuke.Multiline_Eval_String_Knob('charon_batch_outputs', 'Batch Outputs', '')
-                    outputs_knob.setFlag(nuke.NO_ANIMATION)
-                    outputs_knob.setFlag(nuke.INVISIBLE)
-                    read_node.addKnob(outputs_knob)
-                except Exception:
-                    outputs_knob = None
-            try:
-                index_knob = read_node.knob('charon_batch_index')
-            except Exception:
-                index_knob = None
-            if index_knob is None:
-                try:
-                    index_knob = nuke.Int_Knob('charon_batch_index', 'Batch Index', 0)
-                    index_knob.setFlag(nuke.NO_ANIMATION)
-                    index_knob.setFlag(nuke.INVISIBLE)
-                    read_node.addKnob(index_knob)
-                except Exception:
-                    index_knob = None
-            try:
-                label_knob = read_node.knob('charon_batch_label')
-            except Exception:
-                label_knob = None
-            if label_knob is None:
-                try:
-                    label_knob = nuke.Text_Knob('charon_batch_label', 'Batch', 'No batch outputs yet')
-                    read_node.addKnob(label_knob)
-                except Exception:
-                    label_knob = None
-            try:
-                prev_knob = read_node.knob('charon_batch_prev')
-            except Exception:
-                prev_knob = None
-            if prev_knob is None:
-                try:
-                    prev_knob = nuke.PyScript_Knob('charon_batch_prev', 'Prev Batch')
-                    prev_knob.setCommand(_batch_nav_command(-1))
-                    prev_knob.setFlag(nuke.STARTLINE)
-                    read_node.addKnob(prev_knob)
-                except Exception:
-                    prev_knob = None
-            try:
-                next_knob = read_node.knob('charon_batch_next')
-            except Exception:
-                next_knob = None
-            if next_knob is None:
-                try:
-                    next_knob = nuke.PyScript_Knob('charon_batch_next', 'Next Batch')
-                    next_knob.setCommand(_batch_nav_command(1))
-                    next_knob.setFlag(nuke.STARTLINE)
-                    read_node.addKnob(next_knob)
-                except Exception:
-                    next_knob = None
-            return outputs_knob, index_knob, label_knob
+            return None, None, None
 
         def ensure_read_node_info(read_node, read_id: str, state: Optional[str] = None):
             if read_node is None:
@@ -1630,12 +1629,7 @@ def process_charonop_node():
             except Exception:
                 pass
             write_metadata('charon/read_node_id', read_id or "")
-            try:
-                info_knob = node.knob('charon_read_id_info')
-                if info_knob is not None:
-                    info_knob.setValue(read_id or "Not linked")
-            except Exception:
-                pass
+            _refresh_linked_read_info()
             try:
                 recreate_knob = node.knob('charon_recreate_read')
                 if recreate_knob is not None:
@@ -1720,12 +1714,7 @@ def process_charonop_node():
             except Exception:
                 pass
             write_metadata('charon/read_node_id', "")
-            try:
-                knob = node.knob('charon_read_id_info')
-                if knob is not None:
-                    knob.setValue("Not linked")
-            except Exception:
-                pass
+            _refresh_linked_read_info()
             try:
                 name_knob = node.knob('charon_read_node')
                 if name_knob is not None:
@@ -3712,9 +3701,7 @@ def recreate_missing_read_node():
     except Exception:
         pass
     try:
-        info_knob = node.knob('charon_read_id_info')
-        if info_knob is not None:
-            info_knob.setValue(read_id or "Not linked")
+        _refresh_linked_read_info()
     except Exception:
         pass
 

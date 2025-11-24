@@ -146,65 +146,6 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             self._settings_widgets[key] = spin
             return spin
 
-        # Startup mode row (dropdown)
-        row = table.rowCount()
-        table.insertRow(row)
-        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Startup mode"))
-        mode_combo = QtWidgets.QComboBox()
-        _setup_combo(mode_combo, "startup_mode")
-        mode_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
-        container = QtWidgets.QWidget()
-        container_layout = QtWidgets.QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setAlignment(QtCore.Qt.AlignCenter)
-        container_layout.addWidget(mode_combo)
-        container.setFixedWidth(VALUE_COLUMN_WIDTH)
-        mode_combo.setFixedWidth(VALUE_COLUMN_WIDTH)
-        if mode_combo.view():
-            mode_combo.view().setMinimumWidth(VALUE_COLUMN_WIDTH)
-        mode_combo.currentIndexChanged.connect(
-            lambda idx, combo=mode_combo: self._on_combo_changed("startup_mode", combo.itemData(idx))
-        )
-        table.setCellWidget(row, 1, container)
-        self._settings_widgets["startup_mode"] = mode_combo
-
-        # Run at App Startup row (checkbox)
-        row = table.rowCount()
-        table.insertRow(row)
-        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Run at App Startup"))
-        run_checkbox = QtWidgets.QCheckBox()
-        run_checkbox.setChecked(app_settings.get("run_at_startup", "off") == "on")
-        run_checkbox.stateChanged.connect(
-            lambda state, box=run_checkbox: self._on_checkbox_changed("run_at_startup", box.isChecked())
-        )
-        container = QtWidgets.QWidget()
-        container_layout = QtWidgets.QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setAlignment(QtCore.Qt.AlignCenter)
-        container_layout.addWidget(run_checkbox)
-        container.setFixedWidth(VALUE_COLUMN_WIDTH)
-        table.setCellWidget(row, 1, container)
-        self._settings_widgets["run_at_startup"] = run_checkbox
-
-
-        # Advanced User Mode row (checkbox)
-        row = table.rowCount()
-        table.insertRow(row)
-        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Advanced User Mode"))
-        advanced_checkbox = QtWidgets.QCheckBox()
-        advanced_checkbox.setChecked(app_settings.get("advanced_user_mode", "off") == "on")
-        advanced_checkbox.stateChanged.connect(
-            lambda state, box=advanced_checkbox: self._on_checkbox_changed("advanced_user_mode", box.isChecked())
-        )
-        container = QtWidgets.QWidget()
-        container_layout = QtWidgets.QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setAlignment(QtCore.Qt.AlignCenter)
-        container_layout.addWidget(advanced_checkbox)
-        container.setFixedWidth(VALUE_COLUMN_WIDTH)
-        table.setCellWidget(row, 1, container)
-        self._settings_widgets["advanced_user_mode"] = advanced_checkbox
-
         # Debug logging row (toggle button)
         row = table.rowCount()
         table.insertRow(row)
@@ -228,63 +169,6 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         table.setCellWidget(row, 1, container)
         self._settings_widgets["debug_logging"] = debug_button
 
-
-        # Always on Top row (checkbox)
-        row = table.rowCount()
-        table.insertRow(row)
-        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Tiny Mode Always on Top"))
-        top_checkbox = QtWidgets.QCheckBox()
-        top_checkbox.setChecked(app_settings.get("always_on_top", "off") == "on")
-        top_checkbox.stateChanged.connect(
-            lambda state, box=top_checkbox: self._on_checkbox_changed("always_on_top", box.isChecked())
-        )
-        container = QtWidgets.QWidget()
-        container_layout = QtWidgets.QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setAlignment(QtCore.Qt.AlignCenter)
-        container_layout.addWidget(top_checkbox)
-        container.setFixedWidth(VALUE_COLUMN_WIDTH)
-        table.setCellWidget(row, 1, container)
-        self._settings_widgets["always_on_top"] = top_checkbox
-
-        # Tiny Mode Window Offset row (dual spin boxes + capture button)
-        row = table.rowCount()
-        table.insertRow(row)
-        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Tiny Mode Window Offset"))
-
-        offset_container = QtWidgets.QWidget()
-        outer_layout = QtWidgets.QVBoxLayout(offset_container)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(4)
-
-        coord_widget = QtWidgets.QWidget()
-        coord_layout = QtWidgets.QHBoxLayout(coord_widget)
-        coord_layout.setContentsMargins(0, 0, 0, 0)
-        coord_layout.setSpacing(6)
-        coord_layout.setAlignment(QtCore.Qt.AlignCenter)
-
-        x_label = QtWidgets.QLabel("X")
-        x_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        coord_layout.addWidget(x_label)
-        coord_layout.addWidget(_create_offset_spin("tiny_offset_x"))
-
-        coord_layout.addSpacing(8)
-
-        y_label = QtWidgets.QLabel("Y")
-        y_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        coord_layout.addWidget(y_label)
-        coord_layout.addWidget(_create_offset_spin("tiny_offset_y"))
-
-        outer_layout.addWidget(coord_widget, alignment=QtCore.Qt.AlignCenter)
-
-        set_button = QtWidgets.QPushButton("Set Current")
-        set_button.setFixedHeight(22)
-        set_button.clicked.connect(self._set_offset_from_current)
-        outer_layout.addWidget(set_button, alignment=QtCore.Qt.AlignCenter)
-
-        offset_container.setFixedWidth(VALUE_COLUMN_WIDTH)
-        table.setCellWidget(row, 1, offset_container)
-        table.setRowHeight(row, 70)
 
     def _load_app_settings(self):
         """Refresh widgets with current values."""
@@ -601,10 +485,8 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         # Action display names
         action_names = {
             'quick_search': 'Quick Search',
-            'run_script': 'Run Script',
             'refresh': 'Refresh',
             'open_folder': 'Open Folder',
-            'settings': 'Open Settings',
             'tiny_mode': 'Tiny Mode'
         }
         
@@ -819,10 +701,8 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             # Action display names
             action_names = {
                 'quick_search': 'Quick Search',
-                'run_script': 'Run Script',
                 'refresh': 'Refresh',
                 'open_folder': 'Open Folder',
-                'settings': 'Open Settings',
                 'tiny_mode': 'Tiny Mode'
             }
             
@@ -939,38 +819,28 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             
             if new_key in local_by_key:
                 local_action = local_by_key[new_key]
-                
-                # Allow overwriting Charon keybind
                 action_names = {
                     'quick_search': 'Quick Search',
-                    'run_script': 'Run Script',
                     'refresh': 'Refresh',
                     'open_folder': 'Open Folder',
-                    'settings': 'Open Settings',
                     'tiny_mode': 'Tiny Mode'
                 }
-                
                 current_name = action_names.get(local_action, local_action)
                 new_name = os.path.basename(script_path)
-                
-                # Use unified dialog
+
                 from .conflict_resolver import KeybindConflictDialog
                 dialog = KeybindConflictDialog(self, new_key, current_name, new_name)
-                
                 if dialog.exec_() != QtWidgets.QDialog.Accepted:
                     return  # User cancelled
-                
-                # Find and clear the local keybind
+
                 for i in range(self.local_table.rowCount()):
                     item = self.local_table.item(i, 0)
                     if item and item.data(QtCore.Qt.UserRole) == local_action:
-                        # Clear the keybind
                         hotkey_item = self.local_table.item(i, 1)
                         if hotkey_item:
                             hotkey_item.setText("")
                             hotkey_item.setData(QtCore.Qt.UserRole, "")
-                        
-                        # Disable remove button
+
                         remove_widget = self.local_table.cellWidget(i, 3)
                         if remove_widget:
                             remove_button = remove_widget.findChild(QtWidgets.QPushButton)

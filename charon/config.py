@@ -283,7 +283,7 @@ DEFAULT_LOCAL_KEYBINDS = {
     'refresh': {'key_sequence': 'Ctrl+R', 'enabled': True},
     'open_folder': {'key_sequence': 'Ctrl+O', 'enabled': True},
     'settings': {'key_sequence': 'Ctrl+,', 'enabled': True},
-    'tiny_mode': {'key_sequence': 'F2', 'enabled': True}
+    'tiny_mode': {'key_sequence': 'F3', 'enabled': True}
 }
 
 # =============================================================================
