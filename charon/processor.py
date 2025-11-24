@@ -765,12 +765,12 @@ def _batch_nav_command(step: int) -> str:
         "    node['file'].setValue(path)\n"
         "except Exception:\n"
         "    pass\n"
-        "label_knob = node.knob('charon_batch_label')\n"
-        "if label_knob is not None:\n"
-        "    try:\n"
-        "        label_knob.setValue('Batch %d/%d' % (idx + 1, len(outputs)))\n"
-        "    except Exception:\n"
-        "        pass\n"
+"label_knob = node.knob('charon_batch_label')\n"
+"if label_knob is not None:\n"
+"    try:\n"
+"        label_knob.setValue('')\n"
+"    except Exception:\n"
+"        pass\n"
     ).format(step=step)
 
 
@@ -1687,7 +1687,7 @@ def process_charonop_node():
                 label_knob = None
             if label_knob is not None:
                 try:
-                    label_knob.setValue('No batch outputs yet')
+                    label_knob.setValue('')
                 except Exception:
                     pass
             ensure_read_node_info(read_node, "", current_node_state)
@@ -3013,12 +3013,6 @@ def process_charonop_node():
                                             read_node['file'].setValue(group_paths[default_index])
                                         except Exception as assign_error:
                                             log_debug(f'Could not assign output path to CharonRead2D ({label}): {assign_error}', 'ERROR')
-                                        try:
-                                            label_knob = read_node['label']
-                                            label_knob.setValue(f"Output Node: {label}\\nFile: {os.path.basename(group_paths[default_index])}")
-                                        except Exception:
-                                            pass
-
                                         if outputs_knob is not None:
                                             try:
                                                 outputs_knob.setValue(navigation_json)
@@ -3029,12 +3023,6 @@ def process_charonop_node():
                                                 index_knob.setValue(default_index)
                                             except Exception:
                                                 pass
-                                        if label_knob is not None:
-                                            try:
-                                                label_knob.setValue(f'Batch {default_index + 1}/{len(group_paths)}')
-                                            except Exception:
-                                                pass
-
                                         try:
                                             read_node.setMetaData('charon/batch_outputs', all_outputs_json)
                                         except Exception:
