@@ -2946,6 +2946,8 @@ def process_charonop_node():
                                         grouped_images.setdefault(label, []).append(entry)
 
                                     x_offset_step = 140
+                                    layout_index = 0
+                                    y_base = node_y + 60
 
                                     for group_index, (label, group_entries) in enumerate(grouped_images.items()):
                                         group_paths = [e.get('output_path') for e in group_entries if e.get('output_path')]
@@ -2956,8 +2958,8 @@ def process_charonop_node():
                                         if read_node is None:
                                             try:
                                                 read_node = nuke.createNode(required_class)
-                                                read_node.setXpos(node_x + (group_index * x_offset_step))
-                                                read_node.setYpos(node_y + 60)
+                                                read_node.setXpos(node_x + (layout_index * x_offset_step))
+                                                read_node.setYpos(y_base)
                                                 try:
                                                     read_node.setInput(0, None)
                                                 except Exception:
@@ -2979,6 +2981,11 @@ def process_charonop_node():
                                         else:
                                             try:
                                                 read_node.setSelected(True)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                read_node.setXpos(node_x + (layout_index * x_offset_step))
+                                                read_node.setYpos(y_base)
                                             except Exception:
                                                 pass
 
@@ -3043,11 +3050,15 @@ def process_charonop_node():
                                             apply_status_color(current_node_state, read_node)
                                         except Exception:
                                             pass
+                                        layout_index += 1
 
                                     grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in mesh_entries:
                                         label = _output_label(entry, "Output3D")
                                         grouped_meshes.setdefault(label, []).append(entry)
+
+                                    # Align 3D and camera nodes horizontally with the same step
+                                    mesh_x_offset_step = 140
 
                                     for group_index, (label, group_entries) in enumerate(grouped_meshes.items()):
                                         group_paths = [e.get('output_path') for e in group_entries if e.get('output_path')]
@@ -3058,8 +3069,8 @@ def process_charonop_node():
                                         if read_node is None:
                                             try:
                                                 read_node = nuke.createNode(required_class)
-                                                read_node.setXpos(node_x + 220 + (group_index * x_offset_step))
-                                                read_node.setYpos(node_y + 120)
+                                                read_node.setXpos(node_x + (layout_index * mesh_x_offset_step))
+                                                read_node.setYpos(y_base)
                                                 try:
                                                     read_node.setInput(0, None)
                                                 except Exception:
@@ -3067,6 +3078,12 @@ def process_charonop_node():
                                             except Exception as mesh_error:
                                                 log_debug(f'Failed to create mesh Read node ({label}): {mesh_error}', 'ERROR')
                                                 continue
+                                        else:
+                                            try:
+                                                read_node.setXpos(node_x + (layout_index * mesh_x_offset_step))
+                                                read_node.setYpos(y_base)
+                                            except Exception:
+                                                pass
                                         try:
                                             navigation_json = json.dumps(group_entries)
                                         except Exception as serialize_error:
@@ -3179,6 +3196,7 @@ def process_charonop_node():
                                             apply_status_color(current_node_state, read_node)
                                         except Exception:
                                             pass
+                                        layout_index += 1
                                         _ensure_output_label_metadata(read_node, label)
                                         try:
                                             read_node.setMetaData('charon/batch_outputs', navigation_json)
@@ -3244,7 +3262,7 @@ def process_charonop_node():
                                                 log_debug('No new nodes detected after camera paste.', 'WARNING')
                                                 continue
 
-                                            for cam_node in new_nodes:
+                                            for cam_index, cam_node in enumerate(new_nodes):
                                                 try:
                                                     cam_node.setMetaData('charon/camera_path', camera_path_norm.replace('\\', '/'))
                                                 except Exception:
@@ -3275,6 +3293,63 @@ def process_charonop_node():
                                                     except Exception:
                                                         pass
                                                 try:
+                                                    anchor_knob = cam_node.knob('charon_link_anchor')
+                                                except Exception:
+                                                    anchor_knob = None
+                                                if anchor_knob is None:
+                                                    try:
+                                                        anchor_knob = nuke.Double_Knob('charon_link_anchor', 'Charon Link Anchor')
+                                                        anchor_knob.setFlag(nuke.NO_ANIMATION)
+                                                        anchor_knob.setFlag(nuke.INVISIBLE)
+                                                        cam_node.addKnob(anchor_knob)
+                                                    except Exception:
+                                                        anchor_knob = None
+                                                if anchor_knob is not None:
+                                                    try:
+                                                        anchor_knob.setExpression(f"{node.fullName()}.charon_link_anchor")
+                                                    except Exception:
+                                                        try:
+                                                            anchor_knob.clearAnimated()
+                                                        except Exception:
+                                                            pass
+                                                        try:
+                                                            anchor_knob.setValue(link_anchor_value)
+                                                        except Exception:
+                                                            pass
+                                                try:
+                                                    cam_node.setMetaData('charon/link_anchor', link_anchor_value)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    info_tab = cam_node.knob('charon_info_tab')
+                                                except Exception:
+                                                    info_tab = None
+                                                if info_tab is None:
+                                                    try:
+                                                        info_tab = nuke.Tab_Knob('charon_info_tab', 'Charon Info')
+                                                        cam_node.addKnob(info_tab)
+                                                    except Exception:
+                                                        info_tab = None
+                                                try:
+                                                    info_text = cam_node.knob('charon_info_text')
+                                                except Exception:
+                                                    info_text = None
+                                                if info_text is None and info_tab is not None:
+                                                    try:
+                                                        info_text = nuke.Text_Knob('charon_info_text', 'Metadata', '')
+                                                        cam_node.addKnob(info_text)
+                                                    except Exception:
+                                                        info_text = None
+                                                if info_text is not None:
+                                                    summary_lines = [
+                                                        f"Parent ID: {parent_norm_local or 'N/A'}",
+                                                        f"Camera Path: {camera_path_norm}",
+                                                    ]
+                                                    try:
+                                                        info_text.setValue("\n".join(summary_lines))
+                                                    except Exception:
+                                                        pass
+                                                try:
                                                     node_name_base = _sanitize_name(CAMERA_OUTPUT_LABEL, 'CharonCamera')
                                                     cam_node.setName(f'{node_name_base}_{_sanitize_name(parent_norm_local, "cam")}')
                                                 except Exception:
@@ -3286,6 +3361,12 @@ def process_charonop_node():
                                                     cam_node['label'].setValue(f'{CAMERA_OUTPUT_LABEL}\\nFile: {os.path.basename(camera_path_norm)}')
                                                 except Exception:
                                                     pass
+                                                try:
+                                                    cam_node.setXpos(int(node.xpos()) + (layout_index * 140))
+                                                    cam_node.setYpos(y_base)
+                                                except Exception:
+                                                    pass
+                                                layout_index += 1
 
                                     cleanup_files()
 

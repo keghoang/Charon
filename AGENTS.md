@@ -55,6 +55,7 @@
 
 ## Commit & Pull Request Guidelines
 - **Critical Guardrail**: Never amend an existing commit, and never create a new commit unless the user explicitly instructs you to do so.
+- Do not run `git commit` (or `git push`) unless the user explicitly asks for a commit at that moment; default stance is to avoid committing.
 - Write imperative, scoped commits (e.g., "Consolidate workflow runtime helpers").
 - Pull requests must summarize changes, list manual tests (panel run, conversion script), attach relevant screenshots or debug snippets, and call out migration steps or environment prerequisites.
 - Update this document whenever you add commands, directories, or operational caveats future contributors should know.
