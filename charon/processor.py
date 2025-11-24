@@ -1322,9 +1322,12 @@ def process_charonop_node():
         def apply_status_color(state: str, read_node_override=None):
             tile_color = status_to_tile_color(state)
             gl_color = status_to_gl_color(state)
-            debug_line = f"Status={state or 'Unknown'} | tile=0x{tile_color:08X}"
-            if gl_color is not None:
-                debug_line += " | gl=" + ",".join(f"{channel:.3f}" for channel in gl_color)
+
+            def _is_read_node(target) -> bool:
+                try:
+                    return target.Class() in {"Read", "ReadGeo2"}
+                except Exception:
+                    return False
 
             def _apply_to_target(target):
                 if target is None:
@@ -1360,32 +1363,14 @@ def process_charonop_node():
                             gl_knob.setValue(list(gl_color))
                         except Exception:
                             pass
-                try:
-                    ensure_read_node_info(target, read_node_unique_id(target), state)
-                except Exception:
-                    pass
-
-            def _update_debug(target_node):
-                try:
-                    debug_knob = target_node.knob("charon_color_debug")
-                except Exception:
-                    debug_knob = None
-                if debug_knob is None:
+                if _is_read_node(target):
                     try:
-                        debug_knob = nuke.Text_Knob("charon_color_debug", "Color Debug", "")
-                        debug_knob.setFlag(nuke.NO_ANIMATION)
-                        target_node.addKnob(debug_knob)
-                    except Exception:
-                        debug_knob = None
-                if debug_knob is not None:
-                    try:
-                        debug_knob.setValue(debug_line)
+                        ensure_read_node_info(target, read_node_unique_id(target), state)
                     except Exception:
                         pass
 
             def _apply_all():
                 _apply_to_target(node)
-                _update_debug(node)
 
             try:
                 nuke.executeInMainThread(_apply_all)
