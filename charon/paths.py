@@ -31,7 +31,22 @@ def get_default_comfy_launch_path():
     return DEFAULT_COMFYUI_LAUNCH_PATH
 
 
+def _normalize_charon_root(base_dir: Optional[str]) -> str:
+    """
+    Normalize the Charon root directory and correct common typos.
+
+    In particular, fix paths like ``D:\\Nukecharon`` where the separator between
+    ``Nuke`` and ``charon`` is missing.
+    """
+    normalized = os.path.normpath(base_dir or DEFAULT_CHARON_DIR)
+    basename = os.path.basename(normalized).lower()
+    if basename == "nukecharon":
+        normalized = os.path.join(os.path.dirname(normalized), "Nuke", "charon")
+    return os.path.normpath(normalized)
+
+
 def get_charon_temp_dir(base_dir=DEFAULT_CHARON_DIR):
+    base_dir = _normalize_charon_root(base_dir)
     subdirs = ["temp", "exports", "results", "debug"]
     for subdir in subdirs:
         path = os.path.join(base_dir, subdir)
