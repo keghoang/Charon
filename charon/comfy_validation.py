@@ -268,6 +268,192 @@ with open(output_path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2)
 """
 
+BROWSER_VALIDATOR_SCRIPT = r"""import asyncio
+import json
+import sys
+
+WORKFLOW_PATH = sys.argv[1]
+MODE = sys.argv[2] if len(sys.argv) > 2 else "cache"
+
+async def main():
+    try:
+        from pathlib import Path
+        from playwright.async_api import async_playwright
+    except Exception as exc:
+        print(json.dumps({"error": f"Playwright import failed: {exc}"}))
+        return
+
+    try:
+        workflow = json.loads(Path(WORKFLOW_PATH).read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(json.dumps({"error": f"Workflow read failed: {exc}"}))
+        return
+
+    result = {
+        "missing": [],
+        "registered_count": 0,
+        "nodepack_count": 0,
+    }
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        try:
+            await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
+            await page.wait_for_function(
+                "window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app && window.comfyAPI.app.app.graph",
+                timeout=120000,
+            )
+            await page.wait_for_function(
+                "window.LiteGraph && window.LiteGraph.registered_node_types && Object.keys(window.LiteGraph.registered_node_types).length > 0",
+                timeout=240000,
+            )
+            # Allow extensions to finish wiring up.
+            await page.wait_for_timeout(1000)
+
+            payload = await page.evaluate(
+                '''async ({ workflow, mode }) => {
+                    const app = window.comfyAPI.app.app;
+                    await app.loadGraphData(workflow, true);
+
+                    const registry = window.LiteGraph?.registered_node_types || {};
+                    const registered = new Set(Object.keys(registry));
+
+                    const nodesArray = Array.isArray(workflow?.nodes)
+                        ? workflow.nodes
+                        : Array.isArray(workflow)
+                            ? workflow
+                            : Object.values(workflow?.nodes || workflow || {});
+
+                    let nodePacks = {};
+                    try {
+                        const res = await fetch(`/customnode/getlist?mode=${mode}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data && data.node_packs) nodePacks = data.node_packs;
+                        }
+                    } catch (err) {}
+
+                    let packMeta = {};
+                    for (const packId in nodePacks) {
+                        const pack = nodePacks[packId];
+                        packMeta[packId] = {
+                            title: pack?.title || pack?.name || packId,
+                            author: pack?.author || "",
+                            last_update: pack?.last_update || "",
+                        };
+                    }
+
+                    let mappings = {};
+                    try {
+                        const res = await fetch(`/customnode/getmappings?mode=${mode}`);
+                        if (res.ok) {
+                            mappings = await res.json();
+                        }
+                    } catch (err) {}
+
+                    // Build name -> packIds from mappings
+                    const nameToPacks = {};
+                    for (const url in mappings) {
+                        const names = mappings[url];
+                        if (Array.isArray(names) && names.length > 0) {
+                            const arr = names[0];
+                            if (Array.isArray(arr)) {
+                                for (const n of arr) {
+                                    if (typeof n === "string") {
+                                        if (!nameToPacks[n]) nameToPacks[n] = [];
+                                        nameToPacks[n].push(url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Build regex -> pack from nodename_pattern
+                    const regexToPack = [];
+                    for (const packId in nodePacks) {
+                        const pack = nodePacks[packId];
+                        if (pack?.nodename_pattern) {
+                            try {
+                                regexToPack.push({
+                                    regex: new RegExp(pack.nodename_pattern),
+                                    url: pack.files?.[0] || pack.repository || packId,
+                                });
+                            } catch (err) {}
+                        }
+                    }
+
+                    const packToRepo = {};
+                    const auxToRepo = {};
+                    for (const packId in nodePacks) {
+                        const pack = nodePacks[packId];
+                        const repo = pack?.repository || pack?.files?.[0];
+                        if (repo) {
+                            packToRepo[packId] = repo;
+                            if (repo.startsWith("https://github.com/")) {
+                                const parts = repo.split("/").filter(Boolean);
+                                const org = parts[parts.length - 2];
+                                const name = parts[parts.length - 1];
+                                if (org && name) auxToRepo[`${org}/${name}`] = repo;
+                            }
+                        }
+                    }
+
+                    const missing = [];
+                    for (const node of nodesArray) {
+                        if (!node || typeof node !== "object") continue;
+                        const cls = node.type || node.class_type;
+                        if (!cls) continue;
+                        if (!registered.has(cls)) {
+                            const aux = node.properties?.aux_id || node.properties?.cnr_id || null;
+                            let packIds = nameToPacks[cls] || [];
+                            if (packIds.length === 0) {
+                                for (const entry of regexToPack) {
+                                    try {
+                                        if (entry.regex.test(cls)) {
+                                            packIds.push(entry.url);
+                                        }
+                                    } catch (err) {}
+                                }
+                            }
+                            const repos = [];
+                            for (const pid of packIds) {
+                                const repo = packToRepo[pid] || pid;
+                                if (repo) repos.push(repo);
+                            }
+                            let repo = aux ? auxToRepo[aux] || null : null;
+                            if (!repo && repos.length) repo = repos[0];
+                            missing.push({
+                                id: node.id ?? null,
+                                class_type: cls,
+                                aux_id: aux,
+                                repo,
+                                pack_ids: packIds,
+                                pack_meta: packIds.map(pid => packMeta[pid] || {}),
+                            });
+                        }
+                    }
+
+                    return {
+                        missing,
+                        registered_count: registered.size,
+                        nodepack_count: Object.keys(nodePacks).length,
+                        pack_meta: packMeta,
+                    };
+                }''',
+                {"workflow": workflow, "mode": MODE},
+            )
+            result.update(payload or {})
+        except Exception as exc:
+            result["error"] = str(exc)
+        finally:
+            await browser.close()
+
+    print(json.dumps(result, indent=2))
+
+asyncio.run(main())
+"""
+
 
 @dataclass
 class ValidationIssue:
@@ -367,13 +553,6 @@ def validate_comfy_environment(
     started = time.time()
     cache_key = _cache_key_for_path(comfy_path)
 
-    if use_cache and not force and comfy_path:
-        cached = get_cached_result(comfy_path)
-        if cached and not cached.is_stale():
-            system_debug("Using cached Comfy validation result.")
-            cached.used_cache = True
-            return cached
-
     workflow_info = _extract_workflow_context(workflow_bundle)
     issues: List[ValidationIssue] = []
 
@@ -403,8 +582,8 @@ def validate_comfy_environment(
         return result
 
     env_info = resolve_comfy_environment(comfy_path)
-    issues.append(_validate_models(env_info, workflow_bundle))
-    issues.append(_validate_custom_nodes(env_info, workflow_bundle))
+    issues.append(_validate_environment(comfy_path, env_info))
+    issues.append(_validate_custom_nodes_browser(env_info, workflow_bundle))
 
     finished = time.time()
     result = ValidationResult(
@@ -532,6 +711,203 @@ def _validate_runtime(ping_url: str, env_info: Dict[str, Any]) -> ValidationIssu
         summary=summary,
         details=details,
     )
+
+
+def _validate_custom_nodes_browser(
+    env_info: Dict[str, Any],
+    workflow_bundle: Optional[Dict[str, Any]],
+    *,
+    mode: str = "cache",
+) -> ValidationIssue:
+    python_exe = env_info.get("python_exe")
+    comfy_dir = env_info.get("comfy_dir")
+    if not python_exe or not os.path.exists(python_exe):
+        return ValidationIssue(
+            key="custom_nodes",
+            label="Custom nodes loaded",
+            ok=False,
+            summary="Embedded python not found; cannot validate custom nodes.",
+            details=["Repair the embedded python environment and retry."],
+        )
+    if not comfy_dir or not os.path.isdir(comfy_dir):
+        return ValidationIssue(
+            key="custom_nodes",
+            label="Custom nodes loaded",
+            ok=False,
+            summary="ComfyUI directory missing; cannot validate custom nodes.",
+            details=["Fix the ComfyUI path first."],
+        )
+
+    workflow = workflow_bundle.get("workflow") if isinstance(workflow_bundle, dict) else None
+    if not isinstance(workflow, dict):
+        return ValidationIssue(
+            key="custom_nodes",
+            label="Custom nodes loaded",
+            ok=True,
+            summary="No workflow selected; skipping custom node validation.",
+            details=[],
+        )
+
+    temp_dir = tempfile.mkdtemp(prefix="charon_browser_validate_")
+    try:
+        workflow_path = os.path.join(temp_dir, "workflow.json")
+        script_path = os.path.join(temp_dir, "browser_validate.py")
+
+        with open(workflow_path, "w", encoding="utf-8") as handle:
+            json.dump(workflow, handle)
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(BROWSER_VALIDATOR_SCRIPT)
+
+        command = [python_exe, script_path, workflow_path, mode]
+        system_debug(f"Running browser validator: {command}")
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=comfy_dir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            return ValidationIssue(
+                key="custom_nodes",
+                label="Custom nodes loaded",
+                ok=False,
+                summary="Playwright validation timed out.",
+                details=["Ensure ComfyUI is running and reachable on 127.0.0.1:8188."],
+            )
+
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        if completed.returncode != 0:
+            detail = stderr or stdout or f"Exited with code {completed.returncode}"
+            system_warning(f"Browser validator failed: {detail}")
+            return ValidationIssue(
+                key="custom_nodes",
+                label="Custom nodes loaded",
+                ok=False,
+                summary="Playwright validation failed.",
+                details=[detail],
+            )
+
+        try:
+            payload = json.loads(stdout or "{}")
+        except json.JSONDecodeError:
+            system_warning("Browser validator returned non-JSON output.")
+            return ValidationIssue(
+                key="custom_nodes",
+                label="Custom nodes loaded",
+                ok=False,
+                summary="Playwright validation returned invalid JSON.",
+                details=[stdout[:500]],
+            )
+
+        if payload.get("error"):
+            return ValidationIssue(
+                key="custom_nodes",
+                label="Custom nodes loaded",
+                ok=False,
+                summary="Playwright validation errored.",
+                details=[str(payload.get("error"))],
+                data=payload,
+            )
+
+        missing = payload.get("missing") or []
+        registered = payload.get("registered_count")
+        nodepack_count = payload.get("nodepack_count")
+        pack_meta = payload.get("pack_meta") or {}
+        # Normalize data for UI expectations.
+        missing_nodes: List[str] = []
+        node_repos: Dict[str, str] = {}
+        node_packages: Dict[str, str] = {}
+        missing_repos: List[str] = []
+        node_meta: Dict[str, Dict[str, Any]] = {}
+        for entry in missing:
+            cls = str(entry.get("class_type") or "").strip()
+            if not cls:
+                continue
+            missing_nodes.append(cls)
+            repo = entry.get("repo")
+            pack_ids = entry.get("pack_ids") or []
+            pack_metas = entry.get("pack_meta") or []
+            meta_entry: Dict[str, Any] = {}
+            if pack_ids:
+                meta_entry["pack_ids"] = list(pack_ids)
+            # Prefer meta passed per-entry, fallback to pack_meta mapping.
+            candidate_meta = None
+            for meta in pack_metas:
+                if isinstance(meta, dict):
+                    candidate_meta = meta
+                    break
+            if not candidate_meta:
+                for pid in pack_ids:
+                    meta = pack_meta.get(pid) if isinstance(pack_meta, dict) else None
+                    if isinstance(meta, dict):
+                        candidate_meta = meta
+                        break
+            if isinstance(candidate_meta, dict):
+                meta_entry["package_display"] = candidate_meta.get("title") or ""
+                meta_entry["author"] = candidate_meta.get("author") or ""
+                meta_entry["last_update"] = candidate_meta.get("last_update") or ""
+            if repo:
+                lower = cls.lower()
+                node_repos[lower] = repo
+                node_packages[lower] = meta_entry.get("package_display") or _display_name_for_repo(repo)
+                if repo not in missing_repos:
+                    missing_repos.append(repo)
+            if meta_entry:
+                node_meta[cls.lower()] = meta_entry
+
+        data = {
+            "missing": missing_nodes,
+            "required": list(missing_nodes),
+            "node_repos": node_repos,
+            "node_packages": node_packages,
+            "missing_repos": missing_repos,
+            "disabled_repos": [],
+            "registered_count": registered,
+            "nodepack_count": nodepack_count,
+            "raw_missing": missing,
+            "node_meta": node_meta,
+        }
+
+        if missing_nodes:
+            detail_lines = []
+            for entry in missing:
+                cls = entry.get("class_type") or "Unknown node"
+                repo = entry.get("repo")
+                pack_ids = entry.get("pack_ids") or []
+                aux_id = entry.get("aux_id")
+                detail = f"{cls}"
+                if repo:
+                    detail += f" -> {repo}"
+                elif pack_ids:
+                    detail += f" -> {', '.join(pack_ids)}"
+                if aux_id:
+                    detail += f" (aux_id: {aux_id})"
+                detail_lines.append(detail)
+            return ValidationIssue(
+                key="custom_nodes",
+                label="Custom nodes loaded",
+                ok=False,
+                summary=f"Missing {len(missing_nodes)} custom node(s).",
+                details=detail_lines,
+                data=data,
+            )
+
+        summary = "All custom nodes registered in the active ComfyUI session."
+        if registered:
+            summary += f" ({registered} node types loaded.)"
+        return ValidationIssue(
+            key="custom_nodes",
+            label="Custom nodes loaded",
+            ok=True,
+            summary=summary,
+            details=[],
+            data=data,
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def _validate_models(
