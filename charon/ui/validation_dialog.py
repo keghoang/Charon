@@ -15,7 +15,7 @@ from ..validation_resolver import (
     find_local_model_matches,
     find_shared_model_matches,
     format_model_reference_for_workflow,
-    install_custom_nodes_via_manager,
+    install_custom_nodes_via_playwright,
     resolve_missing_custom_nodes,
     resolve_missing_models,
 )
@@ -819,12 +819,19 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._auto_resolve_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._auto_resolve_button.clicked.connect(self._auto_resolve_all)
 
+        self._restart_button = QtWidgets.QPushButton("Restart ComfyUI to complete installs")
+        self._restart_button.setObjectName("FooterBtn")
+        self._restart_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._restart_button.hide()
+        self._restart_button.clicked.connect(lambda: self.comfy_restart_requested.emit())
+
         btn_close = QtWidgets.QPushButton("Close")
         btn_close.setObjectName("FooterBtn")
         btn_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        btn_close.clicked.connect(self.accept)
+        btn_close.clicked.connect(self.close)
 
         footer.addWidget(self._auto_resolve_button)
+        footer.addWidget(self._restart_button)
         footer.addWidget(btn_close)
         layout.addLayout(footer)
 
@@ -2267,12 +2274,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if not ok or not repo_url.strip():
             return False
 
-        from ..validation_resolver import install_custom_nodes_via_manager
+        from ..validation_resolver import install_custom_nodes_via_playwright
 
-        install_result = install_custom_nodes_via_manager(
+        install_result = install_custom_nodes_via_playwright(
             self._comfy_path,
             [repo_url.strip()],
-            mode="local",
         )
         resolved = bool(install_result.resolved)
         note = "; ".join(install_result.resolved or install_result.failed or install_result.notes or [])
@@ -2578,7 +2584,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         dependency = row_info.get("dependency")
 
         if manager_repo:
-            return self._install_custom_node_via_manager(row_info, manager_repo)
+            return self._install_custom_node_via_playwright(row_info, manager_repo)
 
         if dependency and isinstance(dependency, dict):
             normalized_dep = self._normalize_dependency_entry(dependency)
@@ -2616,7 +2622,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return True
         return False
 
-    def _install_custom_node_via_manager(self, row_info: Dict[str, Any], repo_url: str) -> bool:
+    def _install_custom_node_via_playwright(self, row_info: Dict[str, Any], repo_url: str) -> bool:
         if not self._comfy_path:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -2631,28 +2637,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             or row_info.get("node_name")
             or repo_url
         )
-        prompt = (
-            f"Install <b>{display_name}</b> via ComfyUI Manager?<br>"
-            f"<span style='color:#228B22;'>{repo_url}</span>"
-        )
-        dialog = QtWidgets.QMessageBox(self)
-        dialog.setIcon(QtWidgets.QMessageBox.Icon.Question)
-        dialog.setWindowTitle("Install Custom Node")
-        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        dialog.setText(prompt)
-        dialog.setStandardButtons(
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
-        )
-        dialog.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
-        if dialog.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
-            return False
 
-        result = install_custom_nodes_via_manager(self._comfy_path, [repo_url])
+        result = install_custom_nodes_via_playwright(self._comfy_path, [repo_url])
         if result.failed and not result.resolved and not result.skipped:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Installation Failed",
-                result.failed[0] if result.failed else "ComfyUI Manager could not install the custom node.",
+                result.failed[0] if result.failed else "The running ComfyUI session could not install the custom node.",
             )
             return False
 
@@ -2666,19 +2657,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         note_lines.append("Restart ComfyUI to load the new node.")
         note = "\n".join(note_lines)
 
-        self._mark_custom_node_resolved(row_info, note)
-        QtWidgets.QMessageBox.information(
-            self,
-            "Installation Complete",
-            (
-                f"{display_name} has been installed via ComfyUI Manager.\n"
-                "Restart ComfyUI to load the new node before running this workflow."
-            ),
-        )
-        self._prompt_restart_after_install(display_name)
+        self._mark_custom_node_resolved(row_info, note, prompt_restart=False)
+        self._show_restart_cta(display_name)
         return True
-
-    def _mark_custom_node_resolved(self, row_info: Dict[str, Any], note: Optional[str] = None) -> None:
+    def _mark_custom_node_resolved(
+        self,
+        row_info: Dict[str, Any],
+        note: Optional[str] = None,
+        *,
+        prompt_restart: bool = True,
+    ) -> None:
         status_item = row_info.get("status_item")
         if isinstance(status_item, QtWidgets.QTableWidgetItem):
             self._apply_status_style(status_item, "Resolved")
@@ -2755,7 +2743,22 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         self._refresh_custom_nodes_issue_status()
         self._update_overall_state()
+        if prompt_restart:
+            display_name = row_info.get("package_name") or row_info.get("node_name") or "Custom node"
+            self._show_restart_cta(display_name)
         return False
+
+    def _show_restart_cta(self, package_display: str) -> None:
+        btn = getattr(self, "_restart_button", None)
+        if btn is not None:
+            btn.setText("Restart ComfyUI to complete installs")
+            btn.setToolTip(f"Restart to load {package_display}")
+            btn.show()
+            btn.setEnabled(True)
+        self._append_issue_note(
+            "custom_nodes",
+            f"Restart ComfyUI to finish installing {package_display}.",
+        )
 
     def _report_resolution(self, issue_key: str, result: ResolutionResult) -> None:
         widget_info = self._issue_widgets.get(issue_key)
@@ -2934,32 +2937,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if not note:
             note = f"{dep_display} installed. Restart ComfyUI to load the new node."
 
-        self._mark_custom_node_resolved(row_info, note)
+        self._mark_custom_node_resolved(row_info, note, prompt_restart=False)
         row_info["dependency"] = normalized
-        QtWidgets.QMessageBox.information(
-            self,
-            "Installation Complete",
-            (
-                f"{dep_display} has been cloned into your ComfyUI custom_nodes directory.\n"
-                "Restart ComfyUI to load the new node."
-            ),
-        )
-        self._prompt_restart_after_install(dep_display)
+        self._show_restart_cta(dep_display)
         return True
 
     def _prompt_restart_after_install(self, package_display: str) -> None:
-        message = (
-            f"Please restart ComfyUI to finish installing <b>{package_display}</b>.\n"
-            "Restart now?"
-        )
-        dialog = QtWidgets.QMessageBox(self)
-        dialog.setIcon(QtWidgets.QMessageBox.Icon.Question)
-        dialog.setWindowTitle("Restart ComfyUI?")
-        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        dialog.setText(message)
-        proceed_button = dialog.addButton("Proceed", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-        later_button = dialog.addButton("Restart Later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
-        dialog.setDefaultButton(proceed_button)
-        dialog.exec()
-        if dialog.clickedButton() is proceed_button:
-            self.comfy_restart_requested.emit()
+        # Deprecated modal prompt; use inline restart button instead.
+        self._show_restart_cta(package_display)

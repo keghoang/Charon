@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
@@ -319,12 +321,9 @@ def locate_manager_cli(comfy_dir: Optional[str]) -> Optional[Tuple[str, str]]:
     return None
 
 
-def install_custom_nodes_via_manager(
+def install_custom_nodes_via_playwright(
     comfy_path: str,
     repos: Sequence[str],
-    *,
-    channel: Optional[str] = None,
-    mode: Optional[str] = "local",
 ) -> ResolutionResult:
     result = ResolutionResult()
     if not repos:
@@ -340,17 +339,11 @@ def install_custom_nodes_via_manager(
     python_exe = _safe_str(env_info.get("python_exe"))
     comfy_dir = _safe_str(env_info.get("comfy_dir"))
     if not python_exe or not os.path.exists(python_exe):
-        result.failed.append("Embedded Python runtime not found; cannot run ComfyUI Manager.")
+        result.failed.append("Embedded Python runtime not found; cannot run Playwright install.")
         return result
     if not comfy_dir or not os.path.isdir(comfy_dir):
-        result.failed.append("ComfyUI directory missing; cannot run ComfyUI Manager.")
+        result.failed.append("ComfyUI directory missing; cannot run Playwright install.")
         return result
-
-    located = locate_manager_cli(comfy_dir)
-    if not located:
-        result.failed.append("ComfyUI Manager is not installed under custom_nodes.")
-        return result
-    manager_cli, _manager_root = located
 
     unique_repos: List[str] = []
     seen: set[str] = set()
@@ -365,35 +358,116 @@ def install_custom_nodes_via_manager(
         result.skipped.append("No unique repository URLs to install.")
         return result
 
-    command = [python_exe, manager_cli, "install", *unique_repos]
-    if channel:
-        command.extend(["--channel", channel])
-    if mode:
-        command.extend(["--mode", mode])
+    temp_dir = tempfile.mkdtemp(prefix="charon_playwright_install_")
+    script_path = os.path.join(temp_dir, "install_custom_nodes.py")
+    payload = json.dumps(unique_repos)
+    install_script = r'''import asyncio
+import json
+import sys
 
-    env = os.environ.copy()
-    env.setdefault("COMFYUI_PATH", comfy_dir)
-    env.setdefault("COMFYUI_FOLDERS_BASE_PATH", comfy_dir)
+REPOS = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
 
-    system_debug(f"[Validation] Running ComfyUI Manager install: {command}")
-    completed = subprocess.run(
-        command,
-        cwd=comfy_dir,
-        capture_output=True,
-        timeout=120,
-        text=True,
-        env=env,
-    )
+async def main():
+    result = {"installed": [], "skipped": [], "failed": [], "error": ""}
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as exc:
+        result["error"] = f"Playwright import failed: {exc}"
+        print(json.dumps(result))
+        return
 
-    display_targets = ", ".join(_repo_display_name(repo) for repo in unique_repos)
-    if completed.returncode == 0:
-        result.resolved.append(f"Installed via ComfyUI Manager: {display_targets}.")
-        log_output = completed.stdout.strip()
-        if log_output:
-            result.notes.append(log_output)
-    else:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "ComfyUI Manager install command failed."
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        try:
+            await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
+        except Exception as exc:
+            result["error"] = f"Cannot reach ComfyUI at 127.0.0.1:8188: {exc}"
+            print(json.dumps(result))
+            await browser.close()
+            return
+
+        for repo in REPOS:
+            if not repo:
+                result["skipped"].append("Skipped empty repository entry.")
+                continue
+            try:
+                response = await page.evaluate(
+                    """async (repo) => {
+                        const res = await fetch('/customnode/install/git_url', {
+                            method: 'POST',
+                            body: repo,
+                        });
+                        let text = '';
+                        try { text = await res.text(); } catch (err) {}
+                        return { status: res.status, ok: res.ok, text };
+                    }""",
+                    repo,
+                )
+                if response.get("ok"):
+                    result["installed"].append(repo)
+                else:
+                    detail = response.get("text") or f"status={response.get('status')}"
+                    result["failed"].append(f"{repo}: {detail}")
+            except Exception as exc:
+                result["failed"].append(f"{repo}: {exc}")
+
+        await browser.close()
+        print(json.dumps(result))
+
+asyncio.run(main())
+'''
+
+    completed = None
+    try:
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(install_script)
+
+        command = [python_exe, script_path, payload]
+        env = os.environ.copy()
+        env.setdefault("COMFYUI_PATH", comfy_dir)
+        env.setdefault("COMFYUI_FOLDERS_BASE_PATH", comfy_dir)
+
+        system_debug(f"[Validation] Running Playwright install: {command}")
+        completed = subprocess.run(
+            command,
+            cwd=comfy_dir,
+            capture_output=True,
+            timeout=240,
+            text=True,
+            env=env,
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if completed is None or completed.returncode != 0:
+        if completed is None:
+            detail = "Playwright install command did not run."
+        else:
+            detail = completed.stderr.strip() or completed.stdout.strip() or "Playwright install command failed."
         result.failed.append(detail)
+        return result
+
+    try:
+        payload = json.loads(completed.stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        detail = completed.stdout.strip() or "Playwright install returned non-JSON output."
+        result.failed.append(detail)
+        return result
+
+    if payload.get("error"):
+        result.failed.append(str(payload["error"]))
+
+    for entry in payload.get("installed") or []:
+        result.resolved.append(f"Installed via Playwright: {_repo_display_name(entry)}.")
+    for entry in payload.get("skipped") or []:
+        result.skipped.append(entry)
+    for entry in payload.get("failed") or []:
+        result.failed.append(entry)
+
+    if not result.resolved and not result.failed and not result.skipped:
+        result.notes.append("No installation actions were performed.")
+
     return result
 
 
