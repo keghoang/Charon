@@ -62,6 +62,8 @@ COLORS = {
     "text_sub": "#a1a1aa",
     "danger": "#ef4444",
     "success": "#22c55e",
+    "restart": "#f97316",
+    "restart_hover": "#fb923c",
     "border": "#3f3f46",
     "btn_bg": "#27272a",
 }
@@ -124,6 +126,19 @@ STYLESHEET = f"""
     QPushButton#FooterBtn:hover {{
         background-color: {COLORS['bg_hover']};
         border-color: {COLORS['text_sub']};
+    }}
+    QPushButton#RestartNotice {{
+        background-color: {COLORS['restart']};
+        border: 1px solid {COLORS['restart_hover']};
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #ffffff;
+    }}
+    QPushButton#RestartNotice:hover {{
+        background-color: {COLORS['restart_hover']};
+        border-color: {COLORS['restart_hover']};
     }}
 """
 
@@ -723,6 +738,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._success_subtitle: Optional[QtWidgets.QLabel] = None
         self._dependencies_cache: Optional[List[Dict[str, Any]]] = None
         self._workflow_folder: Optional[str] = None
+        self._restart_required = False
+        self._restart_in_progress = False
+        self._restart_anim_state = 0
+        self._restart_anim_timer = QtCore.QTimer(self)
+        self._restart_anim_timer.setInterval(400)
+        self._restart_anim_timer.timeout.connect(self._tick_restart_animation)
+        self._connection_widget: Optional[QtWidgets.QWidget] = None
         self._comfy_info = {}
         if self._comfy_path:
             try:
@@ -811,6 +833,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         layout.addWidget(issue_group)
         layout.addSpacing(20)
 
+        self._restart_button = QtWidgets.QPushButton("Press to Restart ComfyUI to finish resolving")
+        self._restart_button.setObjectName("RestartNotice")
+        self._restart_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._restart_button.hide()
+        self._restart_button.clicked.connect(self._on_restart_clicked)
+        layout.addWidget(self._restart_button)
+        layout.addSpacing(10)
+
         footer = QtWidgets.QHBoxLayout()
         footer.setSpacing(15)
 
@@ -819,19 +849,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._auto_resolve_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._auto_resolve_button.clicked.connect(self._auto_resolve_all)
 
-        self._restart_button = QtWidgets.QPushButton("Restart ComfyUI to complete installs")
-        self._restart_button.setObjectName("FooterBtn")
-        self._restart_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self._restart_button.hide()
-        self._restart_button.clicked.connect(lambda: self.comfy_restart_requested.emit())
-
         btn_close = QtWidgets.QPushButton("Close")
         btn_close.setObjectName("FooterBtn")
         btn_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(self.close)
 
         footer.addWidget(self._auto_resolve_button)
-        footer.addWidget(self._restart_button)
         footer.addWidget(btn_close)
         layout.addLayout(footer)
 
@@ -855,7 +878,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         self._success_title = QtWidgets.QLabel("Validation Successful!")
         self._success_title.setObjectName("Heading")
-        self._success_subtitle = QtWidgets.QLabel("All systems operational")
+        self._success_subtitle = QtWidgets.QLabel("All requirements found")
         self._success_subtitle.setObjectName("SubHeading")
 
         text_stack.addWidget(self._success_title)
@@ -905,32 +928,31 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._clear_layout(self._success_checks_layout)
 
         self._populate_issue_section(issues)
-        self._populate_check_section(issues)
+        self._refresh_check_rows()
 
-    def _populate_check_section(self, issues: List[Dict[str, Any]]) -> None:
-        def _remaining_rows(key: str) -> int:
-            widget_info = self._issue_widgets.get(key) or {}
-            rows = widget_info.get("rows") or {}
-            remaining = 0
-            for row_info in rows.values():
-                if row_info.get("resolved"):
-                    continue
-                remaining += 1
-            return remaining
+    def _remaining_rows(self, key: str) -> int:
+        widget_info = self._issue_widgets.get(key) or {}
+        rows = widget_info.get("rows") or {}
+        remaining = 0
+        for row_info in rows.values():
+            if row_info.get("resolved"):
+                continue
+            remaining += 1
+        return remaining
 
+    def _refresh_check_rows(self) -> None:
         checks = [
-            ("All models found", _remaining_rows("models") == 0, "Models need attention"),
-            ("Custom nodes validated", _remaining_rows("custom_nodes") == 0, "Custom nodes need attention"),
+            ("All models found", self._remaining_rows("models") == 0, "Models need attention"),
+            ("All custom nodes found", self._remaining_rows("custom_nodes") == 0, "Custom nodes need attention"),
         ]
 
-        if self._checks_layout:
+        for layout in (self._checks_layout, self._success_checks_layout):
+            if not layout:
+                continue
+            self._clear_layout(layout)
             for passed_text, ok, pending_text in checks:
                 text = passed_text if ok else pending_text
-                self._checks_layout.addWidget(CheckRow(text, ok=ok))
-        if self._success_checks_layout:
-            for passed_text, ok, pending_text in checks:
-                text = passed_text if ok else pending_text
-                self._success_checks_layout.addWidget(CheckRow(text, ok=ok))
+                layout.addWidget(CheckRow(text, ok=ok))
 
     def _populate_issue_section(self, issues: List[Dict[str, Any]]) -> None:
         if not self._issues_layout:
@@ -1044,8 +1066,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     continue
                 total_missing += 1
 
+        restart_required = bool(self._restart_required)
+
         if self._header_subtitle:
             subtitle_text = "All issues resolved" if total_missing == 0 else f"{total_missing} issue(s) need attention"
+            if restart_required and total_missing == 0:
+                subtitle_text = "Restart ComfyUI to finish resolving"
             self._header_subtitle.setText(subtitle_text)
         if self._header_title:
             self._header_title.setText("Validation Successful" if total_missing == 0 else "Validation Failed")
@@ -1054,11 +1080,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._header_icon.setPixmap(_build_icon(icon_name).pixmap(40, 40))
 
         if self._success_subtitle:
-            self._success_subtitle.setText("All systems operational")
+            self._success_subtitle.setText("All requirements found")
 
         if self._stack:
-            target = 1 if total_missing == 0 else 0
+            target = 1 if (total_missing == 0 and not restart_required) else 0
             self._stack.setCurrentIndex(target)
+        self._refresh_check_rows()
 
     def _auto_resolve_all(self) -> None:
         if not self._auto_resolve_button:
@@ -1548,7 +1575,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if isinstance(status_label, QtWidgets.QLabel):
                 status_label.setText("\u2713 Passed")
                 status_label.setStyleSheet("font-weight: bold; color: #228B22;")
-            summary_text = "All required custom nodes installed."
+            summary_text = "All custom nodes found."
 
         if isinstance(summary_label, QtWidgets.QLabel):
             summary_label.setText(summary_text)
@@ -2647,19 +2674,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             )
             return False
 
-        note_lines: List[str] = []
-        if result.resolved:
-            note_lines.extend(result.resolved)
-        elif result.skipped:
-            note_lines.extend(result.skipped)
-        elif result.notes:
-            note_lines.extend(result.notes)
-        note_lines.append("Restart ComfyUI to load the new node.")
-        note = "\n".join(note_lines)
-
-        self._mark_custom_node_resolved(row_info, note, prompt_restart=False)
+        self._mark_custom_node_resolved(row_info, None, prompt_restart=False)
         self._show_restart_cta(display_name)
         return True
+
     def _mark_custom_node_resolved(
         self,
         row_info: Dict[str, Any],
@@ -2738,7 +2756,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     entry for entry in current_disabled if self._normalize_repo_identifier(entry) != repo_key
                 ]
 
-        if note:
+        if note and "Restart ComfyUI" not in note:
             self._append_issue_note("custom_nodes", note)
 
         self._refresh_custom_nodes_issue_status()
@@ -2749,16 +2767,68 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         return False
 
     def _show_restart_cta(self, package_display: str) -> None:
+        self._restart_required = True
+        self._restart_in_progress = False
         btn = getattr(self, "_restart_button", None)
         if btn is not None:
-            btn.setText("Restart ComfyUI to complete installs")
+            btn.setText("Press to Restart ComfyUI to finish resolving")
             btn.setToolTip(f"Restart to load {package_display}")
             btn.show()
             btn.setEnabled(True)
-        self._append_issue_note(
-            "custom_nodes",
-            f"Restart ComfyUI to finish installing {package_display}.",
-        )
+        self._update_overall_state()
+
+    def _on_restart_clicked(self) -> None:
+        self._restart_in_progress = True
+        btn = getattr(self, "_restart_button", None)
+        if btn is not None:
+            btn.setText("Restarting")
+            btn.setEnabled(False)
+        self._start_restart_animation()
+        self.comfy_restart_requested.emit()
+        self._update_overall_state()
+
+    def attach_connection_widget(self, widget: QtWidgets.QWidget) -> None:
+        self._connection_widget = widget
+        if hasattr(widget, "connection_status_changed"):
+            try:
+                widget.connection_status_changed.connect(self._handle_connection_status_changed)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    def _handle_connection_status_changed(self, connected: bool) -> None:
+        if connected and self._restart_required:
+            self._on_restart_completed()
+
+    def _on_restart_completed(self) -> None:
+        self._restart_required = False
+        self._restart_in_progress = False
+        self._stop_restart_animation()
+        btn = getattr(self, "_restart_button", None)
+        if btn is not None:
+            btn.hide()
+            btn.setEnabled(True)
+            btn.setText("Press to Restart ComfyUI to finish resolving")
+        self._update_overall_state()
+
+    def _start_restart_animation(self) -> None:
+        self._restart_anim_state = 0
+        if not self._restart_anim_timer.isActive():
+            self._restart_anim_timer.start()
+
+    def _stop_restart_animation(self) -> None:
+        self._restart_anim_timer.stop()
+        self._restart_anim_state = 0
+        btn = getattr(self, "_restart_button", None)
+        if btn is not None:
+            btn.setText("Press to Restart ComfyUI to finish resolving")
+
+    def _tick_restart_animation(self) -> None:
+        btn = getattr(self, "_restart_button", None)
+        if btn is None:
+            return
+        self._restart_anim_state = (self._restart_anim_state + 1) % 4
+        dots = "." * self._restart_anim_state
+        btn.setText(f"Restarting{dots}")
 
     def _report_resolution(self, issue_key: str, result: ResolutionResult) -> None:
         widget_info = self._issue_widgets.get(issue_key)
@@ -2929,13 +2999,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             )
             return False
 
-        note = ""
+        note = None
         if result.resolved:
             note = result.resolved[0]
         elif result.skipped:
             note = result.skipped[0]
-        if not note:
-            note = f"{dep_display} installed. Restart ComfyUI to load the new node."
 
         self._mark_custom_node_resolved(row_info, note, prompt_restart=False)
         row_info["dependency"] = normalized
