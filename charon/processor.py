@@ -20,6 +20,7 @@ from .paths import (
     allocate_charon_output_path,
     get_default_comfy_launch_path,
     get_placeholder_image_path,
+    _normalize_charon_root,
     resolve_comfy_environment,
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
@@ -1864,6 +1865,13 @@ def process_charonop_node():
         workflow_data_str = node.knob('workflow_data').value()
         input_mapping_str = node.knob('input_mapping').value()
         temp_root = node.knob('charon_temp_dir').value()
+        normalized_root = _normalize_charon_root(temp_root)
+        if normalized_root != temp_root:
+            temp_root = normalized_root
+            try:
+                node.knob('charon_temp_dir').setValue(temp_root)
+            except Exception:
+                pass
         try:
             workflow_path = node.knob('workflow_path').value()
         except Exception:
