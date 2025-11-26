@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from . import preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
-from .paths import resolve_comfy_environment
+from .paths import get_charon_temp_dir, resolve_comfy_environment
 from .validation_resolver import locate_manager_cli
 from .validation_cache import load_validation_log
 
@@ -579,6 +579,7 @@ def validate_comfy_environment(
             workflow_folder=workflow_info.get("folder"),
             workflow_name=workflow_info.get("name"),
         )
+        _write_validation_debug_payload(result)
         return result
 
     env_info = resolve_comfy_environment(comfy_path)
@@ -598,6 +599,7 @@ def validate_comfy_environment(
 
     if comfy_path:
         store_validation_result(result)
+    _write_validation_debug_payload(result)
     return result
 
 
@@ -622,6 +624,22 @@ def store_validation_result(result: ValidationResult) -> None:
     payload = result.to_dict()
     cache[result.cache_key] = payload
     _write_cache(cache)
+
+
+def _write_validation_debug_payload(result: ValidationResult) -> None:
+    """Persist the full validation payload for troubleshooting."""
+    try:
+        base_dir = get_charon_temp_dir()
+        debug_dir = os.path.join(base_dir, "debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        timestamp = int(time.time())
+        slug = result.cache_key[:12] or "no_path"
+        path = os.path.join(debug_dir, f"validation_payload_{timestamp}_{slug}.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(result.to_dict(), handle, indent=2)
+        system_debug(f"Wrote validation payload to {path}")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        system_warning(f"Failed to write validation payload: {exc}")
 
 
 def is_banner_dismissed() -> bool:
