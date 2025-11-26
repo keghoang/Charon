@@ -8,10 +8,15 @@ viewing conflicts, and customizing keybind behavior.
 from typing import Dict, Optional
 from ...qt_compat import QtWidgets, QtCore, QtGui, WindowContextHelpButtonHint, WindowCloseButtonHint
 from ...settings import user_settings_db
+from ...charon_logger import system_info
 from ... import config, workflow_local_store
 from .keybind_manager import KeybindManager
 from .local_handler import LocalKeybindHandler
 from ..dialogs import HotkeyDialog
+from ...first_time_setup import (
+    is_force_first_time_setup_enabled,
+    set_force_first_time_setup,
+)
 import os
 
 VALUE_COLUMN_WIDTH = 140  # Fixed width for Settings tab value column
@@ -169,6 +174,27 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         table.setCellWidget(row, 1, container)
         self._settings_widgets["debug_logging"] = debug_button
 
+        # Force first-time setup row (preference-driven)
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Force First Time Setup (next launch)"))
+        force_button = QtWidgets.QPushButton()
+        force_button.setCheckable(True)
+        force_on = is_force_first_time_setup_enabled()
+        force_button.setChecked(force_on)
+        self._apply_debug_button_style(force_button, force_on)
+        force_button.toggled.connect(
+            lambda checked, button=force_button: self._on_force_first_time_toggle(button, checked)
+        )
+        container_force = QtWidgets.QWidget()
+        container_force_layout = QtWidgets.QHBoxLayout(container_force)
+        container_force_layout.setContentsMargins(0, 0, 0, 0)
+        container_force_layout.setAlignment(QtCore.Qt.AlignCenter)
+        container_force_layout.addWidget(force_button)
+        container_force.setFixedWidth(VALUE_COLUMN_WIDTH)
+        table.setCellWidget(row, 1, container_force)
+        self._settings_widgets["force_first_time_setup"] = force_button
+
 
     def _load_app_settings(self):
         """Refresh widgets with current values."""
@@ -191,8 +217,11 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                 desired = values.get(key, meta.get("default", "off"))
                 widget.setChecked(desired == "on")
             elif isinstance(widget, QtWidgets.QPushButton) and widget.isCheckable():
-                desired = values.get(key, meta.get("default", "off"))
-                checked = str(desired).lower() == "on"
+                if key == "force_first_time_setup":
+                    checked = is_force_first_time_setup_enabled()
+                else:
+                    desired = values.get(key, meta.get("default", "off"))
+                    checked = str(desired).lower() == "on"
                 widget.setChecked(checked)
                 self._apply_debug_button_style(widget, checked)
             elif isinstance(widget, QtWidgets.QSpinBox):
@@ -203,6 +232,13 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                     widget.setValue(0)
             widget.blockSignals(False)
         self.keybind_manager.apply_debug_logging_setting()
+        # Force-first-time checkbox is handled above to stay in sync with preference
+        force_widget = self._settings_widgets.get("force_first_time_setup")
+        if isinstance(force_widget, QtWidgets.QPushButton):
+            force_widget.blockSignals(True)
+            force_widget.setChecked(is_force_first_time_setup_enabled())
+            self._apply_debug_button_style(force_widget, force_widget.isChecked())
+            force_widget.blockSignals(False)
 
     def _on_combo_changed(self, key: str, value: Optional[str]) -> None:
         """Persist combo-box setting changes."""
@@ -239,6 +275,29 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
 
         if key == "always_on_top":
             self._refresh_tiny_mode_if_needed()
+
+    def _on_force_first_time_toggle(self, button: QtWidgets.QPushButton, enabled: bool) -> None:
+        """Persist the force-first-time-setup toggle in preferences."""
+        try:
+            set_force_first_time_setup(enabled)
+            # Mirror into host app settings cache so the checkbox stays sticky this session
+            self.keybind_manager.set_app_setting("force_first_time_setup", "on" if enabled else "off")
+            self._apply_debug_button_style(button, enabled)
+            host_label = self.keybind_manager.host or "Standalone"
+            state = "enabled" if enabled else "disabled"
+            system_info(f"Force first-time setup {state} for host '{host_label}'.")
+            if enabled:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "First Time Setup",
+                    "The first-time setup screen will appear on the next launch.",
+                )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "First Time Setup",
+                f"Could not update first-time setup preference: {exc}",
+            )
 
     def _on_debug_toggle(self, button: QtWidgets.QPushButton, checked: bool) -> None:
         """Toggle debug logging preference."""

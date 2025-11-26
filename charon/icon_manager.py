@@ -9,7 +9,6 @@ import os
 from typing import Dict, Optional
 from .qt_compat import QtGui, QtCore, KeepAspectRatio, SmoothTransformation
 from . import config
-from .charon_logger import system_info, system_debug
 
 
 class IconManager:
@@ -37,7 +36,6 @@ class IconManager:
     
     def _load_all_icons(self):
         """Pre-load all software icons defined in config."""
-        system_debug("Loading software icons...")
         
         # Get the charon module directory
         import charon
@@ -47,7 +45,6 @@ class IconManager:
         for software_key, software_config in config.SOFTWARE.items():
             logo_path = software_config.get("logo")
             if not logo_path:
-                system_debug(f"No logo path for {software_key}")
                 self.icon_cache[software_key] = None
                 continue
             
@@ -55,14 +52,12 @@ class IconManager:
             full_path = os.path.join(charon_dir, logo_path)
             
             if not os.path.exists(full_path):
-                system_debug(f"Logo file not found: {full_path}")
                 self.icon_cache[software_key] = None
                 continue
             
             # Load the pixmap
             pixmap = QtGui.QPixmap(full_path)
             if pixmap.isNull():
-                system_debug(f"Failed to load pixmap: {full_path}")
                 self.icon_cache[software_key] = None
                 continue
             
@@ -77,9 +72,7 @@ class IconManager:
             self.icon_cache[software_key] = scaled_pixmap
             self.icon_cache[software_key.capitalize()] = scaled_pixmap
             
-            system_debug(f"Loaded icon for {software_key}: {self.icon_size.width()}x{self.icon_size.height()}")
         
-        system_debug(f"Loaded {len([v for v in self.icon_cache.values() if v is not None])} software icons")
     
     def get_icon(self, software: str) -> Optional[QtGui.QPixmap]:
         """

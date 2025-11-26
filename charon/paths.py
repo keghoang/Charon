@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CHARON_DIR = r"D:\Nuke\charon"
 DEFAULT_COMFYUI_LAUNCH_PATH = (
-    r"D:\latest\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat"
+    r"D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat"
 )
 RESOURCE_DIR = os.path.join(os.path.dirname(__file__), "resources")
 

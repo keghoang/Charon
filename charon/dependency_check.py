@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import os
 import subprocess
 import time
@@ -133,6 +134,62 @@ def _run_command_with_progress(cmd: List[str], label: str, parent_widget=None) -
                 dialog.close()
             except Exception:
                 pass
+
+
+def ensure_manager_security_level(
+    desired_level: str = "weak",
+    comfy_path_override: str | None = None,
+) -> None:
+    """
+    Ensure ComfyUI-Manager runs with the configured security level.
+    Creates/updates config.ini if the manager is present; no-op on failure.
+    """
+    try:
+        prefs = preferences.load_preferences()
+        comfy_path = (
+            comfy_path_override
+            or prefs.get("comfyui_launch_path")
+            or get_default_comfy_launch_path()
+        )
+        comfy_path = (comfy_path or "").strip()
+        if not comfy_path:
+            system_debug("Manager security enforcement skipped: no ComfyUI path configured.")
+            return
+
+        env = resolve_comfy_environment(comfy_path)
+        comfy_dir = env.get("comfy_dir")
+        if not comfy_dir or not os.path.isdir(comfy_dir):
+            system_debug(
+                f"Manager security enforcement skipped: ComfyUI directory not found for {comfy_path}."
+            )
+            return
+
+        manager_dir = os.path.join(comfy_dir, "user", "default", "ComfyUI-Manager")
+        manager_config = os.path.join(manager_dir, "config.ini")
+        parser = configparser.ConfigParser()
+        if os.path.exists(manager_config):
+            parser.read(manager_config, encoding="utf-8")
+
+        if not parser.has_section("default"):
+            parser.add_section("default")
+
+        current = parser.get("default", "security_level", fallback="")
+        if current.lower() == desired_level.lower():
+            system_debug(
+                f"Manager security already set to {desired_level} at {manager_config}."
+            )
+            return
+
+        parser.set("default", "security_level", desired_level)
+        os.makedirs(manager_dir, exist_ok=True)
+        with open(manager_config, "w", encoding="utf-8") as handle:
+            parser.write(handle)
+
+        system_info(
+            f"Enforced ComfyUI-Manager security_level={desired_level} in {manager_config}"
+        )
+    except Exception as exc:
+        system_error(f"Failed to enforce manager security level: {exc}")
 
 
 def check_and_prompt(parent=None) -> None:
