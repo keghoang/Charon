@@ -35,7 +35,7 @@
   ```
 - Conversion smoke test (requires ComfyUI's embedded Python):
   ```powershell
-  python -c "from charon.workflow_runtime import load_workflow_bundle, convert_workflow;  bundle = load_workflow_bundle(r'workflows\rgb2x_albedo_GET');  convert_workflow(bundle['workflow'], comfy_path=r'D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat')"
+  python -c "from charon.workflow_runtime import load_workflow_bundle, convert_workflow;  bundle = load_workflow_bundle(r'workflows\rgb2x_albedo_GET');  convert_workflow(bundle['workflow'], comfy_path=r'<path-to-your-ComfyUI-launcher>')"
   ```
 - Inspect prompt dumps: `python -m json.tool debug\workflow_debug.json`
 

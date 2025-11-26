@@ -47,7 +47,7 @@ Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay unde
 - Reload the panel in-place by clearing cached `charon.*` modules and re-running `main.py`.
 - Run the conversion smoke test:
   ```powershell
-  python -c "from charon.workflow_runtime import load_workflow_bundle, convert_workflow;  bundle = load_workflow_bundle(r'workflows\rgb2x_albedo_GET');  convert_workflow(bundle['workflow'], comfy_path=r'D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat')"
+  python -c "from charon.workflow_runtime import load_workflow_bundle, convert_workflow;  bundle = load_workflow_bundle(r'workflows\rgb2x_albedo_GET');  convert_workflow(bundle['workflow'], comfy_path=r'<path-to-your-ComfyUI-launcher>')"
   ```
 - Manual QA checklist:
   1. Launch panel from Nuke.
