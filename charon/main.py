@@ -6,6 +6,7 @@ from . import config, utilities
 from .ui.window_manager import WindowManager
 from .charon_logger import system_info, system_debug, system_error
 from .first_time_setup import run_first_time_setup_if_needed
+from .dependency_check import ensure_manager_security_level
 
 def launch(host_override=None, user_override=None, global_path=None, local_path=None, script_paths=None, dock=False, debug=False, xoffset=0, yoffset=0):
     """
@@ -75,6 +76,12 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
             return None
     except Exception as exc:
         system_error(f"First-time setup failed: {exc}")
+
+    # Always enforce ComfyUI-Manager security level on launch (no-op if Manager missing).
+    try:
+        ensure_manager_security_level(desired_level="weak")
+    except Exception as exc:
+        system_error(f"Failed to apply ComfyUI-Manager security level: {exc}")
 
     # Scripts now use dual execution model based on run_on_main metadata
 
