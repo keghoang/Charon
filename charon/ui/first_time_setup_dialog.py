@@ -790,7 +790,6 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
 
         self.install_desc.setText(summary or "Installation finished.")
         self.pbar.setValue(100)
-        self.install_ready_label.setVisible(True)
         self.setup_completed = True
         if self.comfy_running_preinstall:
             self.install_ready_label.clear()
@@ -798,7 +797,8 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
             self.btn_next.setEnabled(True)
             self.btn_next.setText("Restart ComfyUI")
             return
-        self.install_ready_label.setText("Dependencies installed. Click Next to continue.")
+        self.install_ready_label.clear()
+        self.install_ready_label.setVisible(False)
         self.btn_next.setEnabled(True)
         self.btn_next.setText("Next")
 
