@@ -691,15 +691,15 @@ class CharonWindow(QtWidgets.QWidget):
                 margin: 0px;
                 border: 1px solid #2c323c;
                 border-radius: 4px;
-                background-color: #262c35;
+                background-color: #37383D;
                 color: #e8eaef;
                 font-weight: normal;
             }
             QPushButton:hover {
-                background-color: #2f3642;
+                background-color: #404248;
             }
             QPushButton:pressed {
-                background-color: #242a32;
+                background-color: #2f3034;
             }
         """
 
