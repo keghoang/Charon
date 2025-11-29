@@ -51,6 +51,9 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._managed_launch = False
         self._restart_pending = False
         self._managed_process: Optional[subprocess.Popen] = None
+        self._launch_button_width: Optional[int] = None
+        self._launch_button_height: Optional[int] = None
+        self._launch_button_width: Optional[int] = None
 
         self._connection_check_finished.connect(self._apply_connection_result)
 
@@ -79,18 +82,25 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.status_caption.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         self.status_caption.setStyleSheet("color: #ffffff;")
         self.status_caption.setTextFormat(QtCore.Qt.RichText)
+        self.status_caption.setContentsMargins(0, 0, 0, 5)
         layout.addWidget(self.status_caption)
+        layout.setAlignment(self.status_caption, QtCore.Qt.AlignVCenter)
+        layout.addSpacing(10)
 
         self._apply_caption_text()
 
-        self.launch_button = QtWidgets.QPushButton("Launch")
+        self.launch_button = QtWidgets.QPushButton("Start Server")
         self.launch_button.setCursor(QtCore.Qt.PointingHandCursor)
-        self.launch_button.clicked.connect(self._launch_comfyui)
-        self.launch_button.setMinimumWidth(64)
+        self.launch_button.clicked.connect(self._handle_launch_or_stop)
+        self.launch_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred
+        )
+        self._ensure_launch_button_size()
         self.launch_button.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.launch_button.customContextMenuRequested.connect(self._show_launch_context_menu)
         self.launch_button.installEventFilter(self)
         layout.addWidget(self.launch_button)
+        layout.setAlignment(self.launch_button, QtCore.Qt.AlignVCenter)
 
         self.separator_label = QtWidgets.QLabel("|")
         self.separator_label.setStyleSheet("color: #666666;")
@@ -292,13 +302,14 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         button = getattr(self, "launch_button", None)
         if button is None:
             return
+        self._ensure_launch_button_size()
 
         if connected:
             self._stop_button_blink()
-            button.setEnabled(False)
-            button.setCursor(QtCore.Qt.ArrowCursor)
-            button.setText("Running")
-            self._apply_button_style(button, "#37b24d", "#2f9e44", disabled=True)
+            button.setEnabled(True)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.setText("Stop Server")
+            self._apply_outline_button_style(button, "#ff6b6b", hover="#ff8787", text_color="#ff6b6b")
         elif self._launch_in_progress or state in {"launching", "restarting"}:
             self._stop_button_blink()
             button.setEnabled(False)
@@ -313,8 +324,9 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 self._stop_button_blink()
                 self._apply_button_style(button, "#f08c00", "#d9480f", hover="#f59f00")
             else:
-                button.setText("Launch" if self._compact_mode else "Press to Launch")
-                self._start_button_blink()
+                button.setText("Start Server")
+                self._stop_button_blink()
+                self._apply_button_style(button, "#37b24d", "#2f9e44", hover="#40c057")
 
     def _apply_button_style(
         self,
@@ -322,7 +334,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         background: str,
         border: str,
         *,
-        text_color: str = "#ffffff; font-weight: bold",
+        text_color: str = "#ffffff",
         hover: Optional[str] = None,
         disabled: bool = False,
     ) -> None:
@@ -350,6 +362,67 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             )
         button.setStyleSheet(style)
 
+    def _apply_outline_button_style(
+        self,
+        button: QtWidgets.QPushButton,
+        border: str,
+        *,
+        text_color: Optional[str] = "#ffffff",
+        hover: Optional[str] = None,
+    ) -> None:
+        text_color = text_color or "#ffffff"
+        style = (
+            "QPushButton {"
+            " background-color: transparent;"
+            f" color: {text_color};"
+            f" border: 1px solid {border};"
+            " padding: 2px 10px;"
+            " border-radius: 3px;"
+            "}"
+            " QPushButton:disabled {"
+            " background-color: transparent;"
+            f" color: {text_color};"
+            f" border: 1px solid {border};"
+            "}"
+        )
+        if hover and button.isEnabled():
+            style += (
+                " QPushButton:hover {"
+                f" color: {text_color};"
+                f" border-color: {hover};"
+                "}"
+            )
+        button.setStyleSheet(style)
+
+    def _compute_launch_button_min_width(self) -> int:
+        button = getattr(self, "launch_button", None)
+        if button is None:
+            return 120
+        metrics = button.fontMetrics()
+        labels = [
+            "Start Server",
+            "Stop Server",
+            "Restarting...",
+            "Launching...",
+            "Checking...",
+        ]
+        padding = 24
+        return max(metrics.horizontalAdvance(text) + padding for text in labels)
+
+    def _ensure_launch_button_size(self) -> None:
+        button = getattr(self, "launch_button", None)
+        if button is None:
+            return
+        width = self._compute_launch_button_min_width()
+        self._launch_button_width = width
+        button.setFixedWidth(width)
+        base_height = button.sizeHint().height()
+        if base_height <= 0:
+            base_height = button.fontMetrics().height() + 8
+        height = int(base_height * 1.2)
+        self._launch_button_height = height
+        button.setFixedHeight(height)
+
     def set_compact_mode(self, compact: bool) -> None:
         compact = bool(compact)
         if self._compact_mode == compact:
@@ -357,6 +430,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._compact_mode = compact
         self._apply_caption_text()
         self._apply_settings_visibility(not compact)
+        self._ensure_launch_button_size()
         # Re-emit the current status to update label/button text.
         self._set_status(self._last_status_state, self._connected)
 
@@ -376,7 +450,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             f"<span style='color: {color}; font-size: {dot_size}px; line-height: 1; "
             "vertical-align: middle;'>&#9679;</span>"
         )
-        text = f"{dot} {caption if online else offline_caption}"
+        text_body = f"{dot} {caption if online else offline_caption}"
+        text = f"<span style='line-height: 1; vertical-align: middle;'>{text_body}</span>"
         self.status_caption.setText(text)
         self.status_caption.setStyleSheet(f"color: {color}; font-weight: normal;")
 
@@ -427,6 +502,12 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._popover = None
 
     # -------------------------------------------------------------- Actions
+    def _handle_launch_or_stop(self) -> None:
+        if self._connected:
+            self._terminate_comfyui(confirm=False)
+        else:
+            self._launch_comfyui()
+
     def _launch_comfyui(self) -> None:
         if not self._comfy_path:
             QtWidgets.QMessageBox.warning(self, "Launch ComfyUI", "Please set the ComfyUI launch path first.")
@@ -511,23 +592,24 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         terminate_action.setEnabled(self._connected or self._launch_in_progress)
         restart_action = menu.addAction("Restart ComfyUI")
         restart_action.setEnabled(bool(self._comfy_path))
-        terminate_action.triggered.connect(self._terminate_comfyui)
+        terminate_action.triggered.connect(lambda: self._terminate_comfyui(confirm=True))
         restart_action.triggered.connect(self.handle_external_restart_request)
         menu.exec_(button.mapToGlobal(pos))
 
-    def _terminate_comfyui(self) -> None:
+    def _terminate_comfyui(self, *, confirm: bool = True) -> None:
         if not (self._connected or self._launch_in_progress):
             return
 
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            "Terminate ComfyUI",
-            "Force terminate ComfyUI now?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
+        if confirm:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Terminate ComfyUI",
+                "Force terminate ComfyUI now?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
 
         if self._terminate_managed_process():
             self._launch_in_progress = False

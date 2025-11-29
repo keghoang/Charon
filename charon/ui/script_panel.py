@@ -149,7 +149,7 @@ class ScriptPanel(QtWidgets.QWidget):
         title_layout.addWidget(self.folders_indicator)
         
         # Add New Workflow button - size it to fit within header
-        self.new_script_button = QtWidgets.QPushButton("New Workflow +")
+        self.new_script_button = QtWidgets.QPushButton("New Workflow")
         self.new_script_button.setToolTip("Create New Workflow")
         self.new_script_button.setCursor(Qt.CursorShape.PointingHandCursor)
         
@@ -166,18 +166,25 @@ class ScriptPanel(QtWidgets.QWidget):
                 border: 1px solid palette(mid);
                 border-radius: 4px;
                 background-color: palette(button);
+                color: #ffffff;
                 font-weight: normal;
                 text-shadow: none;
                 box-shadow: none;
             }
             QPushButton:hover {
                 background-color: palette(button).lighter(115);
+                color: #ffffff;
             }
             QPushButton:pressed {
                 background-color: palette(midlight);
+                color: #ffffff;
             }
             """
         )
+        palette = self.new_script_button.palette()
+        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor("#ffffff"))
+        self.new_script_button.setPalette(palette)
+        self._set_new_workflow_icon()
         self.new_script_button.clicked.connect(self._on_create_script_clicked)
         self.new_script_button.setVisible(True)
         
@@ -1384,6 +1391,52 @@ class ScriptPanel(QtWidgets.QWidget):
             return
         show = self.history_indicator.isVisible() or self.folders_indicator.isVisible()
         container.setVisible(show)
+
+    def _set_new_workflow_icon(self) -> None:
+        """Attach a white plus icon that's 50% larger than the base text height."""
+        button = getattr(self, "new_script_button", None)
+        if button is None:
+            return
+        metrics = QtGui.QFontMetrics(button.font())
+        base_size = max(metrics.height(), metrics.horizontalAdvance("+"))
+        plus_size = int(base_size * 0.825)
+        canvas = max(plus_size + 6, base_size + 6)
+        canvas_w = canvas + 4  # modest extra space between text and icon
+        canvas_h = canvas
+        pixmap = QtGui.QPixmap(canvas_w, canvas_h)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        pen = QtGui.QPen(QtGui.QColor("#12253C"))
+        pen.setWidth(max(1, plus_size // 6))
+        painter.setPen(pen)
+        center_x = canvas_w // 2
+        center_y = canvas_h // 2
+        offset = plus_size // 2
+        painter.drawLine(center_x - offset, center_y + 1, center_x + offset, center_y + 1)
+        painter.drawLine(center_x, center_y - offset + 1, center_x, center_y + offset + 1)
+        painter.end()
+
+        icon = QtGui.QIcon()
+        for mode in (
+            QtGui.QIcon.Mode.Normal,
+            QtGui.QIcon.Mode.Active,
+            QtGui.QIcon.Mode.Disabled,
+            QtGui.QIcon.Mode.Selected,
+        ):
+            icon.addPixmap(pixmap, mode, QtGui.QIcon.State.Off)
+        button.setIcon(icon)
+        button.setIconSize(QtCore.QSize(canvas_w, canvas_h))
+        button.setLayoutDirection(QtCore.Qt.RightToLeft)
+        base_style = button.styleSheet() or ""
+        spacing_css = (
+            " QPushButton { padding-right: 8px; padding-left: 10px; }"
+            " QPushButton::icon { margin-left: 8px; }"
+        )
+        button.setStyleSheet(base_style + spacing_css)
+        hint_width = button.sizeHint().width()
+        button.setFixedWidth(max(60, hint_width + 4))
     
     def _on_folders_indicator_clicked(self):
         """Handle click on folders collapse indicator."""
