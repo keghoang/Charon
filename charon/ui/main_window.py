@@ -25,6 +25,7 @@ except ImportError:
         WINDOW_WIDTH = 800
         UI_WINDOW_MARGINS = 4
         UI_ELEMENT_SPACING = 2
+        UI_FOLDER_WORKFLOW_GAP = 14
         UI_BUTTON_WIDTH = 80
         UI_FOLDER_PANEL_RATIO = 0.25
         UI_CENTER_PANEL_RATIO = 0.50
@@ -448,6 +449,7 @@ class CharonWindow(QtWidgets.QWidget):
         main_layout.setSpacing(config.UI_ELEMENT_SPACING + 4)
 
         base_margin = 10
+        folder_workflow_gap = getattr(config, "UI_FOLDER_WORKFLOW_GAP", 70)
 
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
@@ -459,7 +461,9 @@ class CharonWindow(QtWidgets.QWidget):
         self.actions_layout = QtWidgets.QHBoxLayout(self.actions_container)
         self.actions_layout.setContentsMargins(0, 0, 0, 0)
         self.actions_layout.setSpacing(8)
+        content_layout.addSpacing(10)
         content_layout.addWidget(self.actions_container)
+        content_layout.addSpacing(10)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
         self.main_splitter = QtWidgets.QSplitter(Qt.Horizontal)
@@ -487,7 +491,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         self.workflows_splitter = QtWidgets.QSplitter(Qt.Horizontal, workflows_container)
         self.workflows_splitter.setChildrenCollapsible(False)
-        self.workflows_splitter.setHandleWidth(0)
+        self.workflows_splitter.setHandleWidth(folder_workflow_gap)
         self.workflows_splitter.setStyleSheet("QSplitter::handle { background: #171a1f; }")
         workflows_layout.addWidget(self.workflows_splitter)
 
@@ -606,7 +610,10 @@ class CharonWindow(QtWidgets.QWidget):
         handle = self.workflows_splitter.handle(1)
         if handle is not None:
             handle.setEnabled(False)
-            handle.setStyleSheet("background: #171a1f; width: 0px; margin: 0px; padding: 0px; border: none;")
+            handle.setStyleSheet(
+                f"background: #171a1f; width: {folder_workflow_gap}px; "
+                "margin: 0px; padding: 0px; border: none;"
+            )
         
         # Connect to splitter movement to detect when panels are collapsed
         self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
@@ -684,7 +691,7 @@ class CharonWindow(QtWidgets.QWidget):
                 border: 1px solid palette(mid);
                 border-radius: 4px;
                 background-color: palette(button);
-                font-weight: bold;
+                font-weight: normal;
             }
             QPushButton:hover {
                 background-color: palette(button).lighter(115);
@@ -694,15 +701,47 @@ class CharonWindow(QtWidgets.QWidget):
             }
         """
 
+        def _make_symbol_icon(symbol: str, scale: float = 1.1):
+            base_size = self.font().pointSizeF()
+            if base_size <= 0:
+                base_size = float(self.font().pointSize() or 10)
+            icon_px = max(12, int(round(base_size * scale)))
+            font = QtGui.QFont(self.font())
+            font.setPointSize(icon_px)
+            metrics = QtGui.QFontMetrics(font)
+            canvas_size = max(icon_px + 2, int(icon_px * 1.05))
+            pixmap = QtGui.QPixmap(canvas_size, canvas_size)
+            pixmap.fill(QtCore.Qt.transparent)
+            painter = QtGui.QPainter(pixmap)
+            painter.setFont(font)
+            palette = self.palette()
+            role = getattr(QtGui.QPalette, "ButtonText", QtGui.QPalette.ColorRole.ButtonText)
+            try:
+                color = palette.color(role)
+            except Exception:
+                try:
+                    color = palette.color(QtGui.QPalette.ColorRole.ButtonText)
+                except Exception:
+                    color = QtGui.QColor("white")
+            painter.setPen(color)
+            painter.drawText(pixmap.rect(), Qt.AlignCenter, symbol)
+            painter.end()
+            return QtGui.QIcon(pixmap), canvas_size
+
         # Reparent the shared New Workflow button so it sits under the header
         new_workflow_btn = self.script_panel.new_script_button
         new_workflow_btn.setParent(self.actions_container)
         new_workflow_btn.setFixedHeight(button_height)
+        new_workflow_btn.setObjectName("NewWorkflowButton")
         self.actions_layout.addWidget(new_workflow_btn)
 
         self.actions_layout.addStretch()
 
+        refresh_icon, refresh_box = _make_symbol_icon("↻")
         self.header_refresh_button = QtWidgets.QPushButton("Refresh", self.actions_container)
+        self.header_refresh_button.setIcon(refresh_icon)
+        refresh_icon_px = max(12, int(button_height * 0.6))
+        self.header_refresh_button.setIconSize(QtCore.QSize(refresh_icon_px, refresh_icon_px))
         self.header_refresh_button.setFixedHeight(button_height)
         self.header_refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.header_refresh_button.setStyleSheet(action_style)
@@ -710,16 +749,44 @@ class CharonWindow(QtWidgets.QWidget):
         self.header_refresh_button.clicked.connect(self.on_refresh_clicked)
         self.actions_layout.addWidget(self.header_refresh_button)
 
+        settings_icon, settings_box = _make_symbol_icon("⏣")
         self.header_settings_button = QtWidgets.QPushButton("Settings", self.actions_container)
+        self.header_settings_button.setIcon(settings_icon)
+        settings_icon_px = max(12, int(button_height * 0.6))
+        self.header_settings_button.setIconSize(QtCore.QSize(settings_icon_px, settings_icon_px))
         self.header_settings_button.setFixedHeight(button_height)
         self.header_settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.header_settings_button.setStyleSheet(action_style)
         self.header_settings_button.setToolTip("Configure keybinds and preferences")
         self.header_settings_button.clicked.connect(self.open_settings)
+        width_refresh = self.header_refresh_button.sizeHint().width()
+        width_settings = self.header_settings_button.sizeHint().width()
+        target_width = max(width_refresh, width_settings, refresh_icon_px + 20, settings_icon_px + 20)
+        self.header_refresh_button.setFixedWidth(target_width)
+        self.header_settings_button.setFixedWidth(target_width)
         self.actions_layout.addWidget(self.header_settings_button)
 
         # Apply consistent styling to the reused button
-        new_workflow_btn.setStyleSheet(action_style)
+        new_workflow_style = """
+QPushButton#NewWorkflowButton {
+    background-color: #84a8de;
+    color: #3c5e78;
+    padding: 0px 16px;
+    margin: 0px;
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    font-weight: normal;
+    text-shadow: none;
+    box-shadow: none;
+}
+QPushButton#NewWorkflowButton:hover {
+    background-color: #94b6e7;
+}
+QPushButton#NewWorkflowButton:pressed {
+    background-color: #7393bf;
+}
+"""
+        new_workflow_btn.setStyleSheet(new_workflow_style)
         new_workflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._realign_actions_to_tabs()
