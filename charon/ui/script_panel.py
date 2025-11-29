@@ -123,6 +123,7 @@ class ScriptPanel(QtWidgets.QWidget):
         # Create title layout with New Workflow button and collapse indicators
         title_container = QtWidgets.QWidget()
         title_container.setFixedHeight(config.UI_PANEL_HEADER_HEIGHT)
+        self.indicator_container = title_container
         title_layout = QtWidgets.QHBoxLayout(title_container)
         title_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -176,24 +177,8 @@ class ScriptPanel(QtWidgets.QWidget):
         )
         self.new_script_button.clicked.connect(self._on_create_script_clicked)
         self.new_script_button.setVisible(True)
-        title_layout.addWidget(self.new_script_button)
-
-        # Inline Refresh and Settings buttons
-        self.refresh_btn = QtWidgets.QPushButton("Refresh")
-        self.refresh_btn.setFixedHeight(button_height)
-        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.refresh_btn.clicked.connect(self._on_refresh_clicked)
-        self.refresh_btn.setToolTip("Refresh metadata and re-index quick search (Ctrl+R)")
-        title_layout.addWidget(self.refresh_btn)
-
-        self.settings_btn = QtWidgets.QPushButton("Settings")
-        self.settings_btn.setFixedHeight(button_height)
-        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_btn.clicked.connect(self._on_settings_clicked)
-        self.settings_btn.setToolTip("Configure keybinds and preferences")
-        title_layout.addWidget(self.settings_btn)
         
-        title_layout.addStretch()  # Push indicator to the right
+        title_layout.addStretch()  # Push control buttons to the right
         
         # Add << indicator for collapsed history panel
         self.history_indicator = QtWidgets.QPushButton("<<")
@@ -214,8 +199,9 @@ class ScriptPanel(QtWidgets.QWidget):
         self.history_indicator.setVisible(False)  # Hidden by default
         self.history_indicator.clicked.connect(self._on_history_indicator_clicked)
         title_layout.addWidget(self.history_indicator)
-        
+
         self.layout.addWidget(title_container)
+        self._update_indicator_container_visibility()
         
         # Create the script table model
         self.script_model = ScriptTableModel()
@@ -1342,6 +1328,10 @@ class ScriptPanel(QtWidgets.QWidget):
             return
 
         self._import_workflow_json(workflow_path, main_window, user_folder)
+
+    def trigger_new_workflow(self):
+        """Public helper to start new workflow creation from external buttons."""
+        self._on_create_script_clicked()
     
     def _on_open_current_folder(self):
         """Handle open folder request from context menu."""
@@ -1360,10 +1350,20 @@ class ScriptPanel(QtWidgets.QWidget):
     def set_history_collapsed_indicator(self, collapsed):
         """Show/hide the >> indicator based on history panel collapsed state."""
         self.history_indicator.setVisible(collapsed)
+        self._update_indicator_container_visibility()
     
     def set_folders_collapsed_indicator(self, collapsed):
         """Show/hide the << indicator based on folders panel collapsed state."""
         self.folders_indicator.setVisible(collapsed)
+        self._update_indicator_container_visibility()
+
+    def _update_indicator_container_visibility(self):
+        """Only show the indicator row when at least one toggle is visible."""
+        container = getattr(self, "indicator_container", None)
+        if container is None:
+            return
+        show = self.history_indicator.isVisible() or self.folders_indicator.isVisible()
+        container.setVisible(show)
     
     def _on_folders_indicator_clicked(self):
         """Handle click on folders collapse indicator."""

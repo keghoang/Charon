@@ -446,30 +446,18 @@ class CharonWindow(QtWidgets.QWidget):
         main_layout.setSpacing(config.UI_ELEMENT_SPACING + 4)
 
         base_margin = 10
-        header_margin = base_margin + 10
-
-        # Text-only header (replaces legacy banner)
-        header_layout = QtWidgets.QVBoxLayout()
-        header_layout.setContentsMargins(header_margin, 0, base_margin, 0)
-        header_layout.setSpacing(0)
-        title_label = QtWidgets.QLabel("Charon")
-        title_label.setObjectName("CharonTitle")
-        title_label.setStyleSheet("font-size: 34px; font-weight: 600; color: #ffffff;")
-        subtitle_label = QtWidgets.QLabel("Nuke/ComfyUI Integration")
-        subtitle_label.setObjectName("CharonSubtitle")
-        subtitle_label.setStyleSheet("font-size: 13px; color: #d0d0d0; font-weight: 500;")
-        title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        subtitle_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        header_layout.addWidget(title_label)
-        header_layout.addWidget(subtitle_label)
-        header_layout.setAlignment(QtCore.Qt.AlignVCenter)
-        main_layout.addLayout(header_layout)
-        main_layout.addSpacing(config.UI_ELEMENT_SPACING + 2)
 
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
-        content_layout.setContentsMargins(base_margin, 10, base_margin, 10)
-        content_layout.setSpacing(8)
+        content_layout.setContentsMargins(base_margin, 4, base_margin, 10)
+        content_layout.setSpacing(6)
+
+        # Primary actions row (New Workflow, Refresh, Settings) beneath header
+        self.actions_container = QtWidgets.QWidget()
+        self.actions_layout = QtWidgets.QHBoxLayout(self.actions_container)
+        self.actions_layout.setContentsMargins(0, 0, 0, 0)
+        self.actions_layout.setSpacing(8)
+        content_layout.addWidget(self.actions_container)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
         self.main_splitter = QtWidgets.QSplitter(Qt.Horizontal)
@@ -483,7 +471,9 @@ class CharonWindow(QtWidgets.QWidget):
         center_layout.setSpacing(2)
 
         self.center_tab_widget = QtWidgets.QTabWidget(center_widget)
+        self.center_tab_widget.setObjectName("CenterTabWidget")
         self.center_tab_widget.setDocumentMode(True)
+        self.center_tab_widget.setTabPosition(QtWidgets.QTabWidget.West)
         self._install_tab_corner_controls()
         center_layout.addWidget(self.center_tab_widget)
 
@@ -564,6 +554,9 @@ class CharonWindow(QtWidgets.QWidget):
         # Set script panel to expand
         self.script_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         workflow_area_layout.addWidget(self.script_panel, 1)  # Add stretch factor
+
+        # Attach shared header actions to the row beneath the title
+        self._populate_actions_row()
 
         self.center_tab_widget.addTab(workflows_container, "Workflows")
 
@@ -678,6 +671,63 @@ class CharonWindow(QtWidgets.QWidget):
     def _install_tab_corner_controls(self):
         """Attach Refresh and Settings buttons to the tab bar corner."""
         self.center_tab_widget.setCornerWidget(None, Qt.TopRightCorner)
+
+    def _populate_actions_row(self):
+        """Place shared actions under the header to match reference layout."""
+        if getattr(self, "_actions_populated", False):
+            return
+        if not hasattr(self, "actions_layout") or not hasattr(self, "actions_container"):
+            return
+        if not hasattr(self, "script_panel"):
+            return
+
+        button_height = max(24, getattr(config, "UI_PANEL_HEADER_HEIGHT", 32) - 6)
+        action_style = """
+            QPushButton {
+                padding: 0px 16px;
+                margin: 0px;
+                border: 1px solid palette(mid);
+                border-radius: 4px;
+                background-color: palette(button);
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: palette(button).lighter(115);
+            }
+            QPushButton:pressed {
+                background-color: palette(midlight);
+            }
+        """
+
+        # Reparent the shared New Workflow button so it sits under the header
+        new_workflow_btn = self.script_panel.new_script_button
+        new_workflow_btn.setParent(self.actions_container)
+        new_workflow_btn.setFixedHeight(button_height)
+        self.actions_layout.addWidget(new_workflow_btn)
+
+        self.actions_layout.addStretch()
+
+        self.header_refresh_button = QtWidgets.QPushButton("Refresh", self.actions_container)
+        self.header_refresh_button.setFixedHeight(button_height)
+        self.header_refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_refresh_button.setStyleSheet(action_style)
+        self.header_refresh_button.setToolTip("Refresh metadata and re-index quick search (Ctrl+R)")
+        self.header_refresh_button.clicked.connect(self.on_refresh_clicked)
+        self.actions_layout.addWidget(self.header_refresh_button)
+
+        self.header_settings_button = QtWidgets.QPushButton("Settings", self.actions_container)
+        self.header_settings_button.setFixedHeight(button_height)
+        self.header_settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_settings_button.setStyleSheet(action_style)
+        self.header_settings_button.setToolTip("Configure keybinds and preferences")
+        self.header_settings_button.clicked.connect(self.open_settings)
+        self.actions_layout.addWidget(self.header_settings_button)
+
+        # Apply consistent styling to the reused button
+        new_workflow_btn.setStyleSheet(action_style)
+        new_workflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._actions_populated = True
 
     def _setup_shared_components(self):
         """Setup components shared between normal and command mode."""
