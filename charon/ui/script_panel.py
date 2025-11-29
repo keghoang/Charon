@@ -118,7 +118,8 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Setup the UI
         self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(4, 4, 4, 4)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(4)
         
         # Create title layout with New Workflow button and collapse indicators
         title_container = QtWidgets.QWidget()
@@ -208,6 +209,7 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Create the script table view with deselection behavior
         self.script_view = ScriptTableView()
+        self.script_view.setFrameShape(QtWidgets.QFrame.NoFrame)
         
         # Connect view to model
         self.script_view.setModel(self.script_model)
@@ -253,8 +255,24 @@ class ScriptPanel(QtWidgets.QWidget):
         # Store reference for parent folder updates
         self.parent_folder = None
         
+        # Wrap script view in rounded container
+        script_container = QtWidgets.QFrame()
+        script_container.setObjectName("ScriptFrame")
+        script_container.setStyleSheet("""
+            QFrame#ScriptFrame {
+                border: 1px solid #171a1f;
+                border-radius: 8px;
+                background: #262a2e;
+            }
+        """)
+        script_container.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        script_container_layout = QtWidgets.QVBoxLayout(script_container)
+        script_container_layout.setContentsMargins(0, 0, 0, 0)
+        script_container_layout.setSpacing(0)
+        script_container_layout.addWidget(self.script_view)
+        
         # Add script view directly to layout
-        self.layout.addWidget(self.script_view, 1)  # Give script view stretch priority
+        self.layout.addWidget(script_container, 1)  # Give script view stretch priority
         
         # Add metadata panel directly without extra container
         self.layout.addWidget(self.metadata_panel, 0)  # No stretch for metadata panel

@@ -115,6 +115,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         # Setup UI
         self.setup_ui()
+        self._apply_main_background()
 
         # Clean up missing scripts
         self._cleanup_missing_script_hotkeys(show_dialog=True)
@@ -389,6 +390,7 @@ class CharonWindow(QtWidgets.QWidget):
         # Main layout just contains the stacked widget
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         main_layout.addWidget(self.stacked_widget)
         
         # Start in normal mode
@@ -462,6 +464,7 @@ class CharonWindow(QtWidgets.QWidget):
         # Main horizontal splitter: folder panel, center panel, and history panel
         self.main_splitter = QtWidgets.QSplitter(Qt.Horizontal)
         self.main_splitter.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.main_splitter.setHandleWidth(0)
         
         # Center panel - horizontal layout for tag bar and script panel
         center_widget = QtWidgets.QWidget()
@@ -479,12 +482,13 @@ class CharonWindow(QtWidgets.QWidget):
 
         workflows_container = QtWidgets.QWidget()
         workflows_layout = QtWidgets.QHBoxLayout(workflows_container)
-        workflows_layout.setContentsMargins(0, 5, 0, 0)
-        workflows_layout.setSpacing(0)
+        workflows_layout.setContentsMargins(0, 0, 0, 0)
+        workflows_layout.setSpacing(10)
 
         self.workflows_splitter = QtWidgets.QSplitter(Qt.Horizontal, workflows_container)
         self.workflows_splitter.setChildrenCollapsible(False)
-        self.workflows_splitter.setHandleWidth(6)
+        self.workflows_splitter.setHandleWidth(0)
+        self.workflows_splitter.setStyleSheet("QSplitter::handle { background: #171a1f; }")
         workflows_layout.addWidget(self.workflows_splitter)
 
         # Folder panel
@@ -504,11 +508,13 @@ class CharonWindow(QtWidgets.QWidget):
         workflow_area = QtWidgets.QWidget()
         workflow_area_layout = QtWidgets.QHBoxLayout(workflow_area)
         workflow_area_layout.setContentsMargins(0, 0, 0, 0)
-        workflow_area_layout.setSpacing(2)
+        workflow_area_layout.setSpacing(10)
         self.workflows_splitter.addWidget(workflow_area)
 
         # Create tag bar
         self.tag_bar = TagBar()
+        self.tag_bar.setVisible(False)
+        self.tag_bar.setFixedWidth(0)
         self.tag_bar.tags_changed.connect(self.on_tags_changed)
         workflow_area_layout.addWidget(self.tag_bar)
 
@@ -567,44 +573,29 @@ class CharonWindow(QtWidgets.QWidget):
         center_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.main_splitter.addWidget(center_widget)
         
-        # Execution history panel (right)
+        # Execution history panel (right) - keep hidden to match requested layout
         self.execution_history_panel = ExecutionHistoryPanel()
-        # Set history panel to expand vertically
-        self.execution_history_panel.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
-        self.execution_history_panel.collapse_requested.connect(self._collapse_history_panel)
+        self.execution_history_panel.setVisible(False)
+        self.execution_history_panel.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
         self.main_splitter.addWidget(self.execution_history_panel)
 
-        # Enable horizontal collapsible panels
+        # Disable history resizing
         self.main_splitter.setCollapsible(0, False)  # Center panel - always visible
-        self.main_splitter.setCollapsible(1, True)   # History panel (right) - collapsible
+        self.main_splitter.setCollapsible(1, True)   # History panel - hidden/collapsible
         
         # Remove minimum sizes to allow full flexibility
         self.folder_panel.setMinimumWidth(0)
         self.execution_history_panel.setMinimumWidth(0)
         
-        # Make splitter handles more tactile (thicker and easier to grab)
-        self.main_splitter.setHandleWidth(8)  # Default is usually 3-4px
-        
-        # Style the splitter handles - blend with theme, subtle press feedback
-        # Get theme-appropriate colors from the current palette
+        # Hide the history splitter handle to remove resize affordance
         window_color = self.palette().color(self.palette().Window)
-        selection_color = self.palette().color(self.palette().Highlight)
+        self.main_splitter.setHandleWidth(0)
+        self.main_splitter.setStyleSheet(f"QSplitter::handle {{ background-color: {window_color.name()}; border: none; width: 0px; padding: 0px; margin: 0px; }}")
         
-        # Create theme-aware stylesheet with press feedback
-        self.main_splitter.setStyleSheet(f"""
-            QSplitter::handle {{
-                background-color: {window_color.name()};
-                border: none;
-            }}
-            QSplitter::handle:pressed {{
-                background-color: {selection_color.name()};
-            }}
-        """)
-        
-        # Set the width ratio for center/history (history collapsed by default)
+        # Set the width ratio for center/history (history hidden by default)
         total_width = config.WINDOW_WIDTH - 50  # Subtract some padding
         center_width = int(total_width * (config.UI_FOLDER_PANEL_RATIO + config.UI_CENTER_PANEL_RATIO))
-        history_width = 0  # Start with history panel collapsed
+        history_width = 0  # History panel removed from view
         self.main_splitter.setSizes([center_width, history_width])
 
         # Configure splitter inside Workflows tab (folders + workflows)
@@ -612,6 +603,10 @@ class CharonWindow(QtWidgets.QWidget):
         folder_width = int(workflow_total * config.UI_FOLDER_PANEL_RATIO)
         workflow_content_width = max(workflow_total - folder_width, 400)
         self.workflows_splitter.setSizes([folder_width, workflow_content_width])
+        handle = self.workflows_splitter.handle(1)
+        if handle is not None:
+            handle.setEnabled(False)
+            handle.setStyleSheet("background: #171a1f; width: 0px; margin: 0px; padding: 0px; border: none;")
         
         # Connect to splitter movement to detect when panels are collapsed
         self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
@@ -727,7 +722,35 @@ class CharonWindow(QtWidgets.QWidget):
         new_workflow_btn.setStyleSheet(action_style)
         new_workflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
+        self._realign_actions_to_tabs()
         self._actions_populated = True
+
+    def _realign_actions_to_tabs(self):
+        """Align the actions row with the start of the content (after vertical tabs)."""
+        try:
+            tab_bar = self.center_tab_widget.tabBar()
+            tab_width = tab_bar.sizeHint().width() if tab_bar is not None else 0
+        except Exception:
+            tab_width = 0
+        left_margin = max(0, tab_width)
+        if hasattr(self, "actions_layout"):
+            self.actions_layout.setContentsMargins(left_margin, 0, 0, 0)
+
+    def _apply_main_background(self):
+        """Apply the primary background color across the window surfaces."""
+        bg_color = QtGui.QColor("#171a1f")
+        palette = self.palette()
+        palette.setColor(QtGui.QPalette.Window, bg_color)
+        palette.setColor(QtGui.QPalette.Base, bg_color)
+        self.setAutoFillBackground(True)
+        self.setPalette(palette)
+        # Ensure main containers inherit the background
+        if hasattr(self, "normal_widget"):
+            self.normal_widget.setAutoFillBackground(True)
+            self.normal_widget.setPalette(palette)
+        if hasattr(self, "stacked_widget"):
+            self.stacked_widget.setAutoFillBackground(True)
+            self.stacked_widget.setPalette(palette)
 
     def _setup_shared_components(self):
         """Setup components shared between normal and command mode."""
@@ -2378,24 +2401,12 @@ Cache Stats:
             self._on_workflows_splitter_moved(0, 0)
     
     def _open_history_panel(self):
-        """Open the history panel if it's collapsed."""
-        sizes = self.main_splitter.sizes()
-        if len(sizes) < 2 or sizes[1] == 0:  # History panel is collapsed
-            total_width = sum(sizes) if sum(sizes) > 0 else self.main_splitter.width()
-            if total_width <= 0:
-                total_width = 800
-            history_width = int(total_width * config.UI_HISTORY_PANEL_RATIO)
-            center_width = max(total_width - history_width, 400)
-            self.main_splitter.setSizes([center_width, history_width])
-            self._on_main_splitter_moved(0, 0)
+        """History panel disabled in current layout."""
+        return
             
     def _collapse_history_panel(self):
-        """Collapse the history panel."""
-        sizes = self.main_splitter.sizes()
-        if len(sizes) > 1 and sizes[1] > 0:  # History panel is open
-            center_width = sizes[0] + sizes[1]
-            self.main_splitter.setSizes([center_width, 0])
-            self._on_main_splitter_moved(0, 0)
+        """History panel disabled in current layout."""
+        return
     
     def _show_error_dialog(self):
         """Show the error dialog after execution history has been updated"""
