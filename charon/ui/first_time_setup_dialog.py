@@ -828,8 +828,8 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
             system_error(f"ComfyUI restart request crashed: {exc}")
             _debug_log(f"restart request crashed: {exc}")
         if sent:
-            self.install_ready_label.setText("Restart request sent. Waiting for ComfyUI to shut down...")
-            self.install_ready_label.setVisible(True)
+            self.install_ready_label.clear()
+            self.install_ready_label.setVisible(False)
         else:
             self.install_ready_label.setText(
                 "Could not send shutdown to ComfyUI. Please restart it manually, then click Restart ComfyUI again."
@@ -856,16 +856,16 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         running = self._is_comfy_running()
         if not self.restart_seen_down and not running:
             self.restart_seen_down = True
-            self.install_ready_label.setText("Waiting for ComfyUI to come back online...")
-            self.install_ready_label.setVisible(True)
+            self.install_ready_label.clear()
+            self.install_ready_label.setVisible(False)
             return
         if self.restart_seen_down and running:
             self.restart_ready = True
             self._stop_restart_timer()
             self.btn_next.setEnabled(True)
             self.btn_next.setText("Next")
-            self.install_ready_label.setText("ComfyUI restarted. Click Next to continue.")
-            self.install_ready_label.setVisible(True)
+            self.install_ready_label.clear()
+            self.install_ready_label.setVisible(False)
 
     def _stop_restart_timer(self) -> None:
         if self.restart_timer is not None:
