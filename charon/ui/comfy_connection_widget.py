@@ -78,6 +78,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.status_caption = QtWidgets.QLabel("ComfyUI Status:")
         self.status_caption.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         self.status_caption.setStyleSheet("color: #ffffff;")
+        self.status_caption.setTextFormat(QtCore.Qt.RichText)
         layout.addWidget(self.status_caption)
 
         self._apply_caption_text()
@@ -273,6 +274,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.launch_button.setText(label_text)
         self.launch_button.setStyleSheet(button_style)
         self._connected = connected
+        self._apply_caption_text()
 
         if connected != previous_connection:
             self.connection_status_changed.emit(connected)
@@ -361,8 +363,22 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
     def _apply_caption_text(self) -> None:
         if not hasattr(self, "status_caption"):
             return
-        caption = "ComfyUI" if self._compact_mode else "ComfyUI Status:"
-        self.status_caption.setText(caption)
+        online = bool(getattr(self, "_connected", False))
+        caption = "Online" if self._compact_mode else "ComfyUI Online"
+        offline_caption = "Offline" if self._compact_mode else "ComfyUI Offline"
+        color = "#51cf66" if online else "#ff6b6b"
+        label_font = self.status_caption.font()
+        base_size = label_font.pointSizeF() if label_font.pointSizeF() > 0 else label_font.pixelSize()
+        if base_size <= 0:
+            base_size = 12
+        dot_size = int(base_size * 1.6)
+        dot = (
+            f"<span style='color: {color}; font-size: {dot_size}px; line-height: 1; "
+            "vertical-align: middle;'>&#9679;</span>"
+        )
+        text = f"{dot} {caption if online else offline_caption}"
+        self.status_caption.setText(text)
+        self.status_caption.setStyleSheet(f"color: {color}; font-weight: normal;")
 
     def _apply_settings_visibility(self, visible: bool) -> None:
         """Show or hide the settings affordance based on the active mode."""
