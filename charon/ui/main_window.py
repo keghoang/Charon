@@ -683,21 +683,23 @@ class CharonWindow(QtWidgets.QWidget):
         if not hasattr(self, "script_panel"):
             return
 
-        button_height = max(24, getattr(config, "UI_PANEL_HEADER_HEIGHT", 32) - 6)
+        # Add extra height so padded labels stay centered and un-clipped
+        button_height = max(28, getattr(config, "UI_PANEL_HEADER_HEIGHT", 32) + 4)
         action_style = """
             QPushButton {
                 padding: 0px 16px;
                 margin: 0px;
-                border: 1px solid palette(mid);
+                border: 1px solid #2c323c;
                 border-radius: 4px;
-                background-color: palette(button);
+                background-color: #262c35;
+                color: #e8eaef;
                 font-weight: normal;
             }
             QPushButton:hover {
-                background-color: palette(button).lighter(115);
+                background-color: #2f3642;
             }
             QPushButton:pressed {
-                background-color: palette(midlight);
+                background-color: #242a32;
             }
         """
 
@@ -771,7 +773,7 @@ class CharonWindow(QtWidgets.QWidget):
 QPushButton#NewWorkflowButton {
     background-color: #84a8de;
     color: #3c5e78;
-    padding: 0px 16px;
+    padding: 8px 16px;
     margin: 0px;
     border: 1px solid palette(mid);
     border-radius: 4px;
