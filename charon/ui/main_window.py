@@ -43,6 +43,19 @@ from ..icon_manager import get_icon_manager
 from ..paths import get_charon_temp_dir
 
 
+# Centralized UI palette for quick tweaks
+COLOR_MAIN_BG = "#212529"
+COLOR_ACTION_BORDER = "#2c323c"
+COLOR_ACTION_BG = "#37383D"
+COLOR_ACTION_TEXT = "#e8eaef"
+COLOR_ACTION_HOVER = "#404248"
+COLOR_ACTION_PRESSED = "#2f3034"
+COLOR_NEW_WORKFLOW_BG = "#84a8de"
+COLOR_NEW_WORKFLOW_TEXT = "#3c5e78"
+COLOR_NEW_WORKFLOW_HOVER = "#94b6e7"
+COLOR_NEW_WORKFLOW_PRESSED = "#7393bf"
+
+
 class CharonWindow(QtWidgets.QWidget):
     def __init__(self, global_path=None, local_path=None, host="None", parent=None, startup_mode="normal"):
         super(CharonWindow, self).__init__(parent)
@@ -492,7 +505,9 @@ class CharonWindow(QtWidgets.QWidget):
         self.workflows_splitter = QtWidgets.QSplitter(Qt.Horizontal, workflows_container)
         self.workflows_splitter.setChildrenCollapsible(False)
         self.workflows_splitter.setHandleWidth(folder_workflow_gap)
-        self.workflows_splitter.setStyleSheet("QSplitter::handle { background: #171a1f; }")
+        self.workflows_splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {COLOR_MAIN_BG}; }}"
+        )
         workflows_layout.addWidget(self.workflows_splitter)
 
         # Folder panel
@@ -611,7 +626,7 @@ class CharonWindow(QtWidgets.QWidget):
         if handle is not None:
             handle.setEnabled(False)
             handle.setStyleSheet(
-                f"background: #171a1f; width: {folder_workflow_gap}px; "
+                f"background: {COLOR_MAIN_BG}; width: {folder_workflow_gap}px; "
                 "margin: 0px; padding: 0px; border: none;"
             )
         
@@ -685,22 +700,22 @@ class CharonWindow(QtWidgets.QWidget):
 
         # Add extra height so padded labels stay centered and un-clipped
         button_height = max(28, getattr(config, "UI_PANEL_HEADER_HEIGHT", 32) + 4)
-        action_style = """
-            QPushButton {
+        action_style = f"""
+            QPushButton {{
                 padding: 0px 16px;
                 margin: 0px;
-                border: 1px solid #2c323c;
+                border: 1px solid {COLOR_ACTION_BORDER};
                 border-radius: 4px;
-                background-color: #37383D;
-                color: #e8eaef;
+                background-color: {COLOR_ACTION_BG};
+                color: {COLOR_ACTION_TEXT};
                 font-weight: normal;
-            }
-            QPushButton:hover {
-                background-color: #404248;
-            }
-            QPushButton:pressed {
-                background-color: #2f3034;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_ACTION_HOVER};
+            }}
+            QPushButton:pressed {{
+                background-color: {COLOR_ACTION_PRESSED};
+            }}
         """
 
         def _make_symbol_icon(symbol: str, scale: float = 1.1):
@@ -769,10 +784,10 @@ class CharonWindow(QtWidgets.QWidget):
         self.actions_layout.addWidget(self.header_settings_button)
 
         # Apply consistent styling to the reused button
-        new_workflow_style = """
-QPushButton#NewWorkflowButton {
-    background-color: #84a8de;
-    color: #3c5e78;
+        new_workflow_style = f"""
+QPushButton#NewWorkflowButton {{
+    background-color: {COLOR_NEW_WORKFLOW_BG};
+    color: {COLOR_NEW_WORKFLOW_TEXT};
     padding: 8px 16px;
     margin: 0px;
     border: 1px solid palette(mid);
@@ -780,13 +795,13 @@ QPushButton#NewWorkflowButton {
     font-weight: normal;
     text-shadow: none;
     box-shadow: none;
-}
-QPushButton#NewWorkflowButton:hover {
-    background-color: #94b6e7;
-}
-QPushButton#NewWorkflowButton:pressed {
-    background-color: #7393bf;
-}
+}}
+QPushButton#NewWorkflowButton:hover {{
+    background-color: {COLOR_NEW_WORKFLOW_HOVER};
+}}
+QPushButton#NewWorkflowButton:pressed {{
+    background-color: {COLOR_NEW_WORKFLOW_PRESSED};
+}}
 """
         new_workflow_btn.setStyleSheet(new_workflow_style)
         new_workflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -807,7 +822,7 @@ QPushButton#NewWorkflowButton:pressed {
 
     def _apply_main_background(self):
         """Apply the primary background color across the window surfaces."""
-        bg_color = QtGui.QColor("#171a1f")
+        bg_color = QtGui.QColor(COLOR_MAIN_BG)
         palette = self.palette()
         palette.setColor(QtGui.QPalette.Window, bg_color)
         palette.setColor(QtGui.QPalette.Base, bg_color)
