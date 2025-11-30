@@ -409,12 +409,18 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._success_subtitle: Optional[QtWidgets.QLabel] = None
         self._dependencies_cache: Optional[List[Dict[str, Any]]] = None
         self._workflow_folder: Optional[str] = None
-        self._restart_required = False
+        restart_flag = False
+        if isinstance(self._payload, dict):
+            restart_flag = bool(
+                self._payload.get("restart_required") or self._payload.get("requires_restart")
+            )
+        self._restart_required = restart_flag
         self._restart_in_progress = False
         self._restart_anim_state = 0
         self._restart_anim_timer = QtCore.QTimer(self)
         self._restart_anim_timer.setInterval(400)
         self._restart_anim_timer.timeout.connect(self._tick_restart_animation)
+        self._connection_online = False
         self._connection_widget: Optional[QtWidgets.QWidget] = None
         self._comfy_info = {}
         if self._comfy_path:
@@ -434,7 +440,81 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._load_cached_resolutions()
         self._custom_node_package_map: Optional[Dict[str, str]] = None
 
+        self._sanitize_custom_node_issue()
         self._build_ui()
+        if self._restart_required:
+            self._show_restart_cta("ComfyUI")
+
+    def restart_required(self) -> bool:
+        """Return whether a ComfyUI restart is still needed to finish resolving."""
+        return bool(getattr(self, "_restart_required", False))
+
+    def _sanitize_custom_node_issue(self) -> None:
+        """Deduplicate missing custom nodes when loading cached payloads."""
+        issues = self._payload.get("issues") if isinstance(self._payload, dict) else None
+        if not isinstance(issues, list):
+            return
+        for issue in issues:
+            if not isinstance(issue, dict) or issue.get("key") != "custom_nodes":
+                continue
+            data = issue.get("data")
+            if not isinstance(data, dict):
+                continue
+
+            def _dedupe_str_list(values: list) -> list:
+                seen = set()
+                deduped = []
+                for value in values or []:
+                    normalized = str(value).strip()
+                    if not normalized:
+                        continue
+                    key = normalized.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(value)
+                return deduped
+
+            # Dedupe by class_type (case-insensitive)
+            raw_missing = data.get("raw_missing") or []
+            unique_raw: list = []
+            seen_classes: set[str] = set()
+            for entry in raw_missing:
+                if not isinstance(entry, dict):
+                    continue
+                cls = str(entry.get("class_type") or "").strip()
+                if not cls:
+                    continue
+                key = cls.lower()
+                if key in seen_classes:
+                    continue
+                seen_classes.add(key)
+                unique_raw.append(entry)
+
+            data["raw_missing"] = unique_raw
+            data["missing"] = _dedupe_str_list(data.get("missing") or [])
+            data["required"] = _dedupe_str_list(data.get("required") or [])
+            data["missing_repos"] = _dedupe_str_list(data.get("missing_repos") or [])
+
+            # Rebuild details and summary to reflect deduped entries
+            detail_lines: list[str] = []
+            for entry in unique_raw or []:
+                cls = entry.get("class_type") or "Unknown node"
+                repo = entry.get("repo")
+                pack_ids = entry.get("pack_ids") or []
+                aux_id = entry.get("aux_id")
+                detail = f"{cls}"
+                if repo:
+                    detail += f" -> {repo}"
+                elif pack_ids:
+                    detail += f" -> {', '.join(pack_ids)}"
+                if aux_id:
+                    detail += f" (aux_id: {aux_id})"
+                detail_lines.append(detail)
+
+            if detail_lines:
+                issue["details"] = detail_lines
+            issue["summary"] = f"Missing {len(data.get('missing') or unique_raw)} custom node(s)."
 
     # --------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
@@ -1110,16 +1190,21 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 or package_overrides.get(node_key_lower)
                 or self._repo_display_name(repo_url)
             )
+            display_name = package_name or repo_display or "Unknown package"
+            normalized_key = (display_name or "").strip().lower()
             pkg_entry = groups.setdefault(
-                package_name,
+                normalized_key,
                 {
-                    "nodes": [],
+                    "package_display": display_name,
                     "repo_url": repo_url,
                     "repo_display": repo_display,
                     "author": meta_info.get("author") or "",
                     "last_update": meta_info.get("last_update") or "",
+                    "nodes": [],
                 },
             )
+            if not pkg_entry.get("package_display"):
+                pkg_entry["package_display"] = display_name
             if repo_url and not pkg_entry.get("repo_url"):
                 pkg_entry["repo_url"] = repo_url
                 pkg_entry["repo_display"] = repo_display
@@ -1129,16 +1214,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 pkg_entry["last_update"] = meta_info["last_update"]
             pkg_entry["nodes"].append(node_type)
 
-        ordered_packages = sorted(groups.keys(), key=lambda x: x.lower())
+        ordered_packages = sorted(groups.values(), key=lambda x: (x.get("package_display") or "").lower())
         table.setRowCount(len(ordered_packages))
 
         row_mapping: Dict[int, Dict[str, Any]] = {}
         row = 0
-        for package_name in ordered_packages:
-            info = groups[package_name]
+        for info in ordered_packages:
             repo_url = info.get("repo_url") or ""
             repo_display = info.get("repo_display") or self._repo_display_name(repo_url)
-            package_display = repo_display or package_name or "Unknown package"
+            package_display = info.get("package_display") or repo_display or "Unknown package"
             missing_nodes = [n for n in info["nodes"] if n.lower() in missing_set]
             author_value = info.get("author") or ""
             last_update_value = info.get("last_update") or ""
@@ -2472,8 +2556,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 pass
 
     def _handle_connection_status_changed(self, connected: bool) -> None:
-        if connected and self._restart_required:
-            self._on_restart_completed()
+        self._connection_online = bool(connected)
 
     def _handle_restart_state_changed(self, restarting: bool) -> None:
         if restarting:
@@ -2486,8 +2569,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 btn.setText("Restarting")
             self._start_restart_animation()
         else:
+            was_restarting = self._restart_in_progress
             self._restart_in_progress = False
-            if self._restart_required:
+            if was_restarting:
+                self._on_restart_completed()
+            elif self._restart_required:
                 self._stop_restart_animation()
                 btn = getattr(self, "_restart_button", None)
                 if btn is not None:

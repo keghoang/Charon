@@ -840,7 +840,18 @@ def _validate_custom_nodes_browser(
         node_packages: Dict[str, str] = {}
         missing_repos: List[str] = []
         node_meta: Dict[str, Dict[str, Any]] = {}
+        unique_missing: List[Dict[str, Any]] = []
+        seen_classes: set[str] = set()
         for entry in missing:
+            cls = str(entry.get("class_type") or "").strip()
+            if not cls:
+                continue
+            lowered = cls.lower()
+            if lowered in seen_classes:
+                continue
+            seen_classes.add(lowered)
+            unique_missing.append(entry)
+        for entry in unique_missing:
             cls = str(entry.get("class_type") or "").strip()
             if not cls:
                 continue
@@ -885,13 +896,13 @@ def _validate_custom_nodes_browser(
             "disabled_repos": [],
             "registered_count": registered,
             "nodepack_count": nodepack_count,
-            "raw_missing": missing,
+            "raw_missing": unique_missing,
             "node_meta": node_meta,
         }
 
         if missing_nodes:
             detail_lines = []
-            for entry in missing:
+            for entry in unique_missing:
                 cls = entry.get("class_type") or "Unknown node"
                 repo = entry.get("repo")
                 pack_ids = entry.get("pack_ids") or []

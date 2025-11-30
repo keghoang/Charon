@@ -321,6 +321,10 @@ class ScriptPanel(QtWidgets.QWidget):
                 continue
             state = cached.get("state")
             payload = cached.get("payload")
+            if isinstance(payload, dict):
+                restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
+                if restart_required and state == "validated":
+                    state = "needs_resolve"
             if isinstance(state, str):
                 self.script_model.set_validation_state(script.path, state, payload)
                 normalized = self._normalize_script_path(script.path)
@@ -911,6 +915,9 @@ class ScriptPanel(QtWidgets.QWidget):
                 payload = cached.get("payload")
                 if isinstance(payload, dict):
                     state = cached.get("state") or self.script_model.get_validation_state(script_path)
+                    restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
+                    if restart_required and state == "validated":
+                        state = "needs_resolve"
                     self.script_model.set_validation_state(script_path, state or "idle", payload)
             if not isinstance(payload, dict):
                 QtWidgets.QMessageBox.information(
@@ -938,6 +945,15 @@ class ScriptPanel(QtWidgets.QWidget):
             dialog.comfy_restart_requested.connect(connection_widget.handle_external_restart_request)
         exec_dialog(dialog)
 
+        restart_required = False
+        if isinstance(payload, dict):
+            try:
+                restart_required = bool(dialog.restart_required())
+            except Exception:
+                restart_required = bool(getattr(dialog, "_restart_required", False))
+            payload["restart_required"] = restart_required or payload.get("restart_required", False)
+            payload.setdefault("requires_restart", payload.get("restart_required", False))
+
         new_state = "needs_resolve"
         if isinstance(payload, dict):
             issues = payload.get("issues") or []
@@ -954,7 +970,8 @@ class ScriptPanel(QtWidgets.QWidget):
                         issue["ok"] = True
                 if not issue.get("ok", False):
                     all_ok = False
-            new_state = "validated" if all_ok else "needs_resolve"
+            restart_required = restart_required or bool(payload.get("restart_required") or payload.get("requires_restart"))
+            new_state = "validated" if all_ok and not restart_required else "needs_resolve"
         self.script_model.set_validation_state(script_path, new_state, payload)
         self._write_validation_cache(script_path, new_state, payload)
 
