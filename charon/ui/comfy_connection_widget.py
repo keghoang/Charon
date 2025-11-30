@@ -6,7 +6,7 @@ import weakref
 from typing import Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui
-from ..charon_logger import system_info, system_warning, system_error
+from ..charon_logger import system_info, system_warning, system_error, system_debug
 from .. import preferences
 from ..comfy_client import ComfyUIClient
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
@@ -606,7 +606,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._restart_pending = False
             self._set_status("launching", self._connected)
             suffix = " (launcher script fallback)" if used_task_script else ""
-            system_info(
+            system_debug(
                 f"Launched ComfyUI via Task Scheduler ({task_name}) from {path}: "
                 f"{create_result.stdout} {run_result.stdout}{suffix}"
             )
