@@ -457,6 +457,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     def _apply_settings_visibility(self, visible: bool) -> None:
         """Show or hide the settings affordance based on the active mode."""
+        # The footer settings affordance is disabled; configuration lives in the main Settings dialog.
+        visible = False
         button = getattr(self, "settings_button", None)
         separator = getattr(self, "separator_label", None)
         for widget in (separator, button):
@@ -786,9 +788,9 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
     def eventFilter(self, obj, event):
         settings_btn = getattr(self, "settings_button", None)
         if settings_btn is not None and obj is settings_btn:
-            if event.type() == QtCore.QEvent.Enter:
-                self._show_settings_popover()
-            elif event.type() == QtCore.QEvent.MouseButtonPress:
+            if not settings_btn.isVisible() or not settings_btn.isEnabled():
+                return super().eventFilter(obj, event)
+            if event.type() == QtCore.QEvent.MouseButtonPress:
                 self._show_settings_popover(auto_focus=True)
                 return True
             elif event.type() == QtCore.QEvent.Leave:

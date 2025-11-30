@@ -239,23 +239,14 @@ class ScriptNameDelegate(QStyledItemDelegate):
             
             # Adjust color if selected
             if opt.state & QtWidgets.QStyle.State_Selected:
-                # Get the highlight color's lightness to determine contrast direction
-                highlight_color = opt.palette.color(QtGui.QPalette.Highlight)
-                highlight_lightness = highlight_color.lightness()
-                
-                # If highlight is dark, make text lighter; if highlight is light, make text darker
-                if highlight_lightness < 128:
-                    # Dark highlight - make text lighter
-                    color = color.lighter(200)  # 200% lighter
-                else:
-                    # Light highlight - make text darker
-                    color = color.darker(200)  # 200% darker
-            
-            painter.setPen(color)
+                # Match folder selection text color
+                painter.setPen(QtGui.QColor("#0f1114"))
+            else:
+                painter.setPen(color)
         else:
             # Use standard palette colors
             if opt.state & QtWidgets.QStyle.State_Selected:
-                painter.setPen(opt.palette.color(QtGui.QPalette.HighlightedText))
+                painter.setPen(QtGui.QColor("#0f1114"))
             else:
                 painter.setPen(opt.palette.color(QtGui.QPalette.Text))
             

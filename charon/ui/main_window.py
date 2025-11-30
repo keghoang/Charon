@@ -57,6 +57,8 @@ COLOR_NEW_WORKFLOW_PRESSED = "#7393bf"
 
 
 class CharonWindow(QtWidgets.QWidget):
+    WINDOW_TITLE_BASE = "Charon - Nuke/ComfyUI Integration"
+
     def __init__(self, global_path=None, local_path=None, host="None", parent=None, startup_mode="normal"):
         super(CharonWindow, self).__init__(parent)
         self._charon_is_charon_window = True
@@ -148,7 +150,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.register_hotkeys()
 
         # Set window properties
-        self.setWindowTitle("Charon")
+        self.setWindowTitle(self.WINDOW_TITLE_BASE)
         self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
 
         # Remove any minimum size constraints to allow full resizing
@@ -232,7 +234,7 @@ class CharonWindow(QtWidgets.QWidget):
     def refresh(self):
         """Refresh the UI completely - useful for panel instances"""
         # Update title to show current host
-        self.setWindowTitle(f"Charon ({self.host})")
+        self.setWindowTitle(self.WINDOW_TITLE_BASE)
         
         # Make sure folder panel is refreshed
         self.refresh_folder_panel()
@@ -993,7 +995,7 @@ QPushButton#NewWorkflowButton:pressed {{
             self.move(x + offset_x, y + offset_y)
         
         # Update window title
-        self.setWindowTitle("Charon - Tiny Mode")
+        self.setWindowTitle(f"{self.WINDOW_TITLE_BASE} (Tiny Mode)")
     
     def exit_tiny_mode(self):
         """Exit tiny mode and return to normal UI."""
@@ -1010,17 +1012,17 @@ QPushButton#NewWorkflowButton:pressed {{
         
         # Restore normal minimum size
         self.setMinimumSize(0, 0)
-        
+
         # Switch back to normal widget
         self.stacked_widget.setCurrentWidget(self.normal_widget)
         self._restore_comfy_footer_to_normal()
-        
+
         # Restore normal mode geometry
         if self.normal_mode_geometry:
             self.restoreGeometry(self.normal_mode_geometry)
         
         # Update window title
-        self.setWindowTitle("Charon")
+        self.setWindowTitle(self.WINDOW_TITLE_BASE)
         
         # Focus the window after exiting command mode
         self.raise_()

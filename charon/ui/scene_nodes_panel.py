@@ -68,6 +68,10 @@ class SceneNodesPanel(QtWidgets.QWidget):
     """Prototype Scene Nodes panel mirroring production behaviour."""
 
     REFRESH_INTERVAL_MS = 2000
+    WORKFLOW_TEXT_COLOR = QtGui.QColor("#f4f4f5")
+    WORKFLOW_SELECTED_TEXT_COLOR = QtGui.QColor("#0f1114")
+    CHARONOP_TEXT_COLOR = QtGui.QColor(config.SOFTWARE_COLORS.get("Nuke", "#f1c40f"))
+    CHARONOP_SELECTED_TEXT_COLOR = QtGui.QColor("#0f1114")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,6 +82,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self._last_snapshot: Dict[str, Dict[str, object]] = {}
         self._node_cache: Dict[str, runtime.SceneNodeInfo] = {}
         self._footer_text: Optional[str] = None
+        self._pending_selection_toggle: bool = False
 
         self._build_ui()
         self.refresh_nodes()
@@ -91,8 +96,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-        margin = getattr(config, "UI_WINDOW_MARGINS", 4)
-        layout.setContentsMargins(margin, margin, margin, margin)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(getattr(config, "UI_ELEMENT_SPACING", 6))
 
         self.table = QtWidgets.QTableWidget(self)
@@ -152,7 +156,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header.setHighlightSections(False)
         header.setFixedHeight(30)
-        header.resizeSection(0, 200)
+        header.resizeSection(0, 170)
         header.resizeSection(1, 180)
         header.resizeSection(2, 160)
 
@@ -166,6 +170,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.table.itemDoubleClicked.connect(self._on_double_click)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.table.viewport().installEventFilter(self)
 
         layout.addWidget(self.table)
 
@@ -207,6 +212,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self._apply_footer_text()
 
     def _populate_table(self, infos):
+        previous_selection = self._selected_node_name()
         self.table.setRowCount(len(infos))
         for row, info in enumerate(infos):
             display_name = info.name
@@ -248,6 +254,20 @@ class SceneNodesPanel(QtWidgets.QWidget):
             self.table.setCellWidget(row, 3, actions_widget)
 
         self.table.resizeRowsToContents()
+        if previous_selection:
+            restored = self.focus_node_by_name(previous_selection, ensure_visible=False)
+            if restored:
+                self._apply_row_text_colors()
+                return
+        else:
+            self.table.clearSelection()
+            self.table.setCurrentItem(None)
+            self._apply_row_text_colors()
+            return
+        # If the previous selection no longer exists, reset to no selection.
+        self.table.clearSelection()
+        self.table.setCurrentItem(None)
+        self._apply_row_text_colors()
 
     # ------------------------------------------------------------------ UI helpers
 
@@ -328,6 +348,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
             if label:
                 label.setText("")
                 label.setToolTip("")
+            self._apply_row_text_colors()
             return
 
         info = self._node_cache.get(node_name)
@@ -337,6 +358,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
             if label:
                 label.setText("")
                 label.setToolTip("")
+            self._apply_row_text_colors()
             return
 
         if info.workflow_path:
@@ -349,6 +371,54 @@ class SceneNodesPanel(QtWidgets.QWidget):
         label = getattr(self, "info_label", None)
         if label:
             label.setToolTip(info.workflow_path or "")
+        self._apply_row_text_colors()
+
+    def eventFilter(self, obj, event):
+        if obj is self.table.viewport():
+            if (
+                event.type() == QtCore.QEvent.MouseButtonPress
+                and event.button() == QtCore.Qt.LeftButton
+            ):
+                index = self.table.indexAt(event.pos())
+                selection_model = self.table.selectionModel()
+                self._pending_selection_toggle = bool(
+                    index.isValid() and selection_model and selection_model.isSelected(index)
+                )
+            elif event.type() == QtCore.QEvent.MouseButtonDblClick:
+                self._pending_selection_toggle = False
+            elif (
+                event.type() == QtCore.QEvent.MouseButtonRelease
+                and event.button() == QtCore.Qt.LeftButton
+            ):
+                if self._pending_selection_toggle:
+                    index = self.table.indexAt(event.pos())
+                    selection_model = self.table.selectionModel()
+                    if index.isValid() and selection_model and selection_model.isSelected(index):
+                        self.table.clearSelection()
+                        self.table.setCurrentItem(None)
+                        self._apply_row_text_colors()
+                        self._pending_selection_toggle = False
+                        return True
+                self._pending_selection_toggle = False
+        return super().eventFilter(obj, event)
+
+    def _apply_row_text_colors(self) -> None:
+        """Align CharonOp/workflow text colors with folder selection styling."""
+        selection_model = self.table.selectionModel()
+        selected_rows = set(index.row() for index in selection_model.selectedRows()) if selection_model else set()
+        for row in range(self.table.rowCount()):
+            op_color = (
+                self.CHARONOP_SELECTED_TEXT_COLOR if row in selected_rows else self.CHARONOP_TEXT_COLOR
+            )
+            wf_color = (
+                self.WORKFLOW_SELECTED_TEXT_COLOR if row in selected_rows else self.WORKFLOW_TEXT_COLOR
+            )
+            op_item = self.table.item(row, 0)
+            if op_item is not None:
+                op_item.setForeground(QtGui.QBrush(op_color))
+            wf_item = self.table.item(row, 2)
+            if wf_item is not None:
+                wf_item.setForeground(QtGui.QBrush(wf_color))
 
     def _show_context_menu(self, position):
         item = self.table.itemAt(position)
@@ -361,10 +431,6 @@ class SceneNodesPanel(QtWidgets.QWidget):
             return
 
         menu = QtWidgets.QMenu(self)
-        header = info.workflow_name or info.name
-        if header:
-            menu.addSection(header)
-
         process_action = menu.addAction("Execute Node...")
         process_action.triggered.connect(lambda: self._process_node(info.node, require_confirmation=False))
         if info.state.lower() == "processing":
@@ -385,9 +451,6 @@ class SceneNodesPanel(QtWidgets.QWidget):
 
         copy_info = misc_menu.addAction("Copy Info")
         copy_info.triggered.connect(lambda: self._copy_node_info(info))
-
-        override_action = menu.addAction("Override Validation (Force Passed)")
-        override_action.triggered.connect(lambda: self._override_validation(info))
 
         menu.exec_(self.table.viewport().mapToGlobal(position))
 
