@@ -263,7 +263,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             elif section == self.COL_VALIDATE:
                 return "Status"
             elif section == self.COL_RUN:
-                return ""
+                return "Actions"
         return None
     
     def _normalize_path(self, path: str) -> str:
