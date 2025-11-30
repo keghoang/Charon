@@ -382,7 +382,10 @@ async def main():
         try:
             await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
         except Exception as exc:
-            result["error"] = f"Cannot reach ComfyUI at 127.0.0.1:8188: {exc}"
+            result["error"] = (
+                "Please start ComfyUI server first. "
+                f"(Cannot reach ComfyUI at 127.0.0.1:8188: {exc})"
+            )
             print(json.dumps(result))
             await browser.close()
             return
