@@ -742,10 +742,35 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         for position, (idx, row_info) in enumerate(ordered_rows):
             reference = row_info.get("reference") or {}
             name_value = reference.get("name") or reference.get("path") or ""
-            display_name = os.path.basename(name_value) or "Model"
+            folder_path = row_info.get("folder_path") or reference.get("folder_path") or ""
+            url_value = (
+                row_info.get("url")
+                or reference.get("url")
+                or reference.get("raw", {}).get("url")
+            )
+            category_value = row_info.get("category") or reference.get("category") or ""
+            directory_invalid = bool(
+                row_info.get("directory_invalid") or reference.get("directory_invalid")
+            )
+            display_source = folder_path or name_value
+            display_name = (
+                os.path.basename(display_source) or os.path.basename(name_value) or "Model"
+            )
             models_root = row_info.get("models_root") or ""
-            expected_path = self._format_model_display_path(name_value, models_root) if name_value else models_root
-            subtitle = f"Expected: {expected_path or 'models/…'}"
+            target_hint = display_source or models_root
+            expected_path = (
+                self._format_model_display_path(target_hint, models_root) if target_hint else models_root
+            )
+            subtitle_parts = []
+            if expected_path:
+                subtitle_parts.append(f"Expected: {expected_path}")
+            if category_value:
+                subtitle_parts.append(f"Folder: {category_value}")
+            if directory_invalid:
+                subtitle_parts.append("Directory invalid")
+            if url_value:
+                subtitle_parts.append(f"URL: {url_value}")
+            subtitle = " | ".join(subtitle_parts) if subtitle_parts else "Model location"
             issue_row = IssueRow(
                 f"Missing model: {display_name}",
                 subtitle,
@@ -1054,7 +1079,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         for index, reference in enumerate(missing):
             name = str(reference.get("name") or "").strip()
-            display_name = os.path.basename(name) if name else "Unknown Model"
+            folder_path = str(reference.get("folder_path") or reference.get("path") or "").strip()
+            category_value = str(reference.get("category") or reference.get("directory") or "").strip()
+            display_source = folder_path or name
+            display_name = os.path.basename(display_source) or os.path.basename(name) or "Unknown Model"
             raw_data = reference.get("raw")
             if isinstance(raw_data, dict):
                 searched_dirs = raw_data.get("searched")
@@ -1074,14 +1102,25 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                             if isinstance(item, str)
                         ],
                     )
+            if folder_path and not reference.get("path"):
+                reference["path"] = folder_path
+            if folder_path and not reference.get("folder_path"):
+                reference["folder_path"] = folder_path
             table.setItem(row, 0, QtWidgets.QTableWidgetItem(display_name))
             status_item = QtWidgets.QTableWidgetItem("Missing")
             self._apply_status_style(status_item, "Missing")
             table.setItem(row, 1, status_item)
-            location_text = name or "Not provided"
+            location_text = display_source or name or "Not provided"
             location_item = QtWidgets.QTableWidgetItem(location_text)
-            location_item.setToolTip(location_text)
-            location_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
+            url_value = reference.get("url") or (raw_data.get("url") if isinstance(raw_data, dict) else "")
+            tooltip_parts = [location_text]
+            if url_value:
+                tooltip_parts.append(url_value)
+            location_item.setToolTip("\n".join([part for part in tooltip_parts if part]))
+            if reference.get("directory_invalid"):
+                location_item.setForeground(QtGui.QBrush(QtGui.QColor("#DAA520")))
+            else:
+                location_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
             table.setItem(row, 2, location_item)
             button = QtWidgets.QPushButton("Resolve")
             button.setFixedHeight(24)
@@ -1109,7 +1148,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "missing_entry": reference,
                 "reference_signature": (
                     reference.get("name"),
-                    reference.get("category"),
+                    category_value,
                     reference.get("node_type"),
                 ),
                 "button": button,
@@ -1119,6 +1158,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "row_index": row,
                 "reference_index": index,
                 "original_location": location_text,
+                "category": category_value,
+                "folder_path": folder_path,
+                "url": url_value,
+                "directory_invalid": bool(reference.get("directory_invalid")),
+                "model_paths": data.get("model_paths") or {},
             }
             row += 1
 
