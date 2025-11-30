@@ -54,6 +54,7 @@ class _ValidationWorker(QtCore.QObject):
                 workflow_bundle=self._workflow_bundle,
                 use_cache=False,
                 force=True,
+                include_environment=False,
             )
             if self._should_abort():
                 self.canceled.emit(self._script_path)
