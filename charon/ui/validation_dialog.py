@@ -1216,10 +1216,17 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 reference["path"] = folder_path
             if folder_path and not reference.get("folder_path"):
                 reference["folder_path"] = folder_path
-            table.setItem(row, 0, QtWidgets.QTableWidgetItem(display_name))
+            name_item = QtWidgets.QTableWidgetItem(display_name)
             resolve_status = str(reference.get("resolve_status") or "").strip().lower()
             resolve_method = str(reference.get("resolve_method") or "").strip()
             resolved_flag = resolve_status in {"success", "resolved", "copied"}
+            if resolved_flag and resolve_method:
+                name_item.setText(f"{display_name}\n{resolve_method}")
+                name_item.setTextAlignment(
+                    QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+                )
+                name_item.setToolTip(f"{display_name}\n{resolve_method}")
+            table.setItem(row, 0, name_item)
             status_text = "Resolved" if resolved_flag else "Missing"
             status_item = QtWidgets.QTableWidgetItem(status_text)
             self._apply_status_style(status_item, status_text)
