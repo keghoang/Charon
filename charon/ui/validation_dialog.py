@@ -991,6 +991,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 total_missing += 1
 
         restart_required = bool(self._restart_required)
+        has_resolved_history = False
+        for key in ("models", "custom_nodes"):
+            widget_info = self._issue_widgets.get(key) or {}
+            rows = widget_info.get("rows") or {}
+            for row_info in rows.values():
+                if row_info.get("resolved"):
+                    has_resolved_history = True
+                    break
+            if has_resolved_history:
+                break
 
         if self._header_subtitle:
             subtitle_text = "All issues resolved" if total_missing == 0 else f"{total_missing} issue(s) need attention"
@@ -1007,7 +1017,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._success_subtitle.setText("All requirements found")
 
         if self._stack:
-            target = 1 if (total_missing == 0 and not restart_required) else 0
+            target = 1 if (total_missing == 0 and not restart_required and not has_resolved_history) else 0
             self._stack.setCurrentIndex(target)
         self._refresh_check_rows()
 
@@ -1215,11 +1225,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._apply_status_style(status_item, status_text)
             table.setItem(row, 1, status_item)
             location_text = display_source or name or "Not provided"
+            if resolved_flag and resolve_method:
+                location_text = f"{location_text} — {resolve_method}"
             location_item = QtWidgets.QTableWidgetItem(location_text)
             url_value = reference.get("url") or (raw_data.get("url") if isinstance(raw_data, dict) else "")
             tooltip_parts = [location_text]
             if url_value:
                 tooltip_parts.append(url_value)
+            if resolve_method:
+                tooltip_parts.append(f"Resolved via: {resolve_method}")
             location_item.setToolTip("\n".join([part for part in tooltip_parts if part]))
             if reference.get("directory_invalid"):
                 location_item.setForeground(QtGui.QBrush(QtGui.QColor("#DAA520")))
@@ -2393,10 +2407,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     if not table:
                         continue
                     # Status column update
-                    status_item = table.item(r_idx, 1)
-                    if isinstance(status_item, QtWidgets.QTableWidgetItem):
-                        status_item.setText("Resolved")
-                        self._apply_status_style(status_item, "Resolved")
+                        status_item = table.item(r_idx, 1)
+                        if isinstance(status_item, QtWidgets.QTableWidgetItem):
+                            resolved_label = "Resolved"
+                            method_text = row_info.get("resolve_method") or ""
+                            if method_text:
+                                resolved_label = f"{resolved_label} — {method_text}"
+                                status_item.setToolTip(method_text)
+                            status_item.setText(resolved_label)
+                            self._apply_status_style(status_item, "Resolved")
                     # Package column update (header row only)
                     if r_idx == package_row:
                         pkg_item = table.item(r_idx, 2)
