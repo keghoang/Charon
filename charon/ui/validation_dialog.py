@@ -304,12 +304,16 @@ class IssueRow(QtWidgets.QWidget):
         self.btn_resolve.setFixedWidth(90)
         self.btn_resolve.setText("Resolve")
 
-    def mark_as_successful(self, message: Optional[str] = None) -> None:
+    def mark_as_successful(self, message: Optional[str] = None, detail: Optional[str] = None) -> None:
         self.anim_timer.stop()
         self._is_resolving = False
         self.icon_lbl.setPixmap(_build_icon("check").pixmap(24, 24))
         self.btn_resolve.hide()
-        self.lbl_sub.hide()
+        if detail and str(detail).strip():
+            self.lbl_sub.setText(str(detail).strip())
+            self.lbl_sub.show()
+        else:
+            self.lbl_sub.hide()
         self.lbl_title.setText(message or self._success_text)
 
     def _update_dots(self) -> None:
@@ -951,7 +955,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             row_info["button"] = issue_row.btn_resolve
             row_info["success_text"] = f"{package_display} installed"
             if row_info.get("resolved"):
-                issue_row.mark_as_successful(row_info.get("success_text"))
+                issue_row.mark_as_successful(
+                    row_info.get("success_text"),
+                    detail=row_info.get("resolve_method") or "",
+                )
             self._issue_rows.setdefault("custom_nodes", []).append(issue_row)
             self._issues_layout.addWidget(issue_row)
         return True
@@ -1308,6 +1315,20 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         data: Dict[str, Any],
     ) -> Dict[int, Dict[str, Any]]:
         packs = data.get("missing_packs") or []
+        pack_method_lookup: Dict[str, str] = {}
+        if isinstance(packs, list):
+            for pack in packs:
+                if not isinstance(pack, dict):
+                    continue
+                status_value = str(pack.get("resolve_status") or "").strip().lower()
+                method_value = str(pack.get("resolve_method") or "").strip()
+                repo_key = str(pack.get("repo") or "").strip().lower()
+                pack_key = (
+                    str(pack.get("pack") or pack.get("pack_name") or pack.get("pack_id") or "").strip().lower()
+                )
+                for key in (repo_key, pack_key):
+                    if key and status_value == "success" and method_value:
+                        pack_method_lookup.setdefault(key, method_value)
         required = data.get("required") or []
         if not required and isinstance(packs, list):
             for pack in packs:
@@ -1389,6 +1410,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "author": meta_info.get("author") or "",
                     "last_update": meta_info.get("last_update") or "",
                     "nodes": [],
+                    "resolve_method": "",
                 },
             )
             if not pkg_entry.get("package_display"):
@@ -1400,6 +1422,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 pkg_entry["author"] = meta_info["author"]
             if not pkg_entry.get("last_update") and meta_info.get("last_update"):
                 pkg_entry["last_update"] = meta_info["last_update"]
+            if not pkg_entry.get("resolve_method"):
+                lookup_keys = [
+                    repo_url.strip().lower(),
+                    (display_name or "").strip().lower(),
+                    (repo_display or "").strip().lower(),
+                ]
+                for key in lookup_keys:
+                    if key and key in pack_method_lookup:
+                        pkg_entry["resolve_method"] = pack_method_lookup[key]
+                        break
             pkg_entry["nodes"].append(node_type)
 
         ordered_packages = sorted(groups.values(), key=lambda x: (x.get("package_display") or "").lower())
@@ -1457,6 +1489,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "dependency": None,
                     "resolved": False,
                     "missing_nodes": missing_nodes,
+                    "resolve_method": info.get("resolve_method") or "",
                 }
             else:
                 placeholder_widget = QtWidgets.QWidget()
@@ -1472,6 +1505,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "dependency": None,
                     "resolved": True,
                     "missing_nodes": [],
+                    "resolve_method": info.get("resolve_method") or "",
                 }
             row += 1
 
@@ -2395,21 +2429,24 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         pkg_item = table.item(r_idx, 2)
                         if isinstance(pkg_item, QtWidgets.QTableWidgetItem):
                             pkg_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
-                    # Disable any buttons (header row)
+                        # Disable any buttons (header row)
                         cell_button = table.cellWidget(r_idx, 3)
                         if isinstance(cell_button, QtWidgets.QPushButton):
                             cell_button.setText("Resolved")
                             cell_button.setEnabled(False)
                             cell_button.setStyleSheet(
-                            "QPushButton {"
-                            " background-color: #228B22;"
-                            " color: white;"
-                            " border-radius: 4px;"
+                                "QPushButton {"
+                                " background-color: #228B22;"
+                                " color: white;"
+                                " border-radius: 4px;"
                                 " padding: 2px 8px;"
                                 " }"
                             )
                 if isinstance(issue_row, IssueRow):
-                    issue_row.mark_as_successful(row_info.get("success_text"))
+                    issue_row.mark_as_successful(
+                        row_info.get("success_text"),
+                        detail=row_info.get("resolve_method") or None,
+                    )
                 self._refresh_custom_nodes_issue_status()
             elif button:
                 button.setEnabled(True)
@@ -2671,7 +2708,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         issue_row = row_info.get("issue_row")
         if isinstance(issue_row, IssueRow):
-            issue_row.mark_as_successful(row_info.get("success_text") or "Installed")
+            issue_row.mark_as_successful(
+                row_info.get("success_text") or "Installed",
+                detail=row_info.get("resolve_method") or None,
+            )
         row_info["resolved"] = True
 
         node_name = row_info.get("node_name")
