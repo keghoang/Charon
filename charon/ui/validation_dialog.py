@@ -1837,6 +1837,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 row_info.get("success_text") or status_text,
                 detail=method_detail or None,
             )
+            if method_detail:
+                issue_row.lbl_sub.setText(method_detail)
+                issue_row.lbl_sub.show()
         row_info["resolved"] = True
         if isinstance(row_info, dict):
             if workflow_value:
