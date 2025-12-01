@@ -1442,9 +1442,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             missing_nodes = [n for n in info["nodes"] if n.lower() in missing_set]
             author_value = info.get("author") or ""
             last_update_value = info.get("last_update") or ""
+            resolve_method = info.get("resolve_method") or ""
 
-            name_item = QtWidgets.QTableWidgetItem(package_display)
-            name_item.setToolTip(repo_url or package_display)
+            name_text = package_display
+            if resolve_method:
+                name_text = f"{package_display} — {resolve_method}"
+            name_item = QtWidgets.QTableWidgetItem(name_text)
+            tooltip_parts = [repo_url or package_display]
+            if resolve_method:
+                tooltip_parts.append(f"Resolved via: {resolve_method}")
+            name_item.setToolTip("\n".join([part for part in tooltip_parts if part]))
             if missing_nodes:
                 name_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
             else:
@@ -1485,7 +1492,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "dependency": None,
                     "resolved": False,
                     "missing_nodes": missing_nodes,
-                    "resolve_method": info.get("resolve_method") or "",
+                    "resolve_method": resolve_method,
                 }
             else:
                 placeholder_widget = QtWidgets.QWidget()
@@ -1501,7 +1508,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "dependency": None,
                     "resolved": True,
                     "missing_nodes": [],
-                    "resolve_method": info.get("resolve_method") or "",
+                    "resolve_method": resolve_method,
                 }
             row += 1
 
