@@ -569,11 +569,8 @@ class ValidationResult:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "version": 1,
             "comfy_path": self.comfy_path,
             "issues": [issue.to_dict() for issue in self.issues],
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
             "cache_key": self.cache_key,
             "workflow": {
                 "folder": self.workflow_folder,
@@ -591,8 +588,8 @@ class ValidationResult:
         return cls(
             comfy_path=str(payload.get("comfy_path") or ""),
             issues=issues,
-            started_at=float(payload.get("started_at") or 0.0),
-            finished_at=float(payload.get("finished_at") or 0.0),
+            started_at=0.0,
+            finished_at=0.0,
             cache_key=str(payload.get("cache_key") or ""),
             workflow_folder=workflow.get("folder"),
             workflow_name=workflow.get("name"),
@@ -641,12 +638,11 @@ def validate_comfy_environment(
                 ],
             )
         )
-        finished = time.time()
         result = ValidationResult(
             comfy_path=result_comfy_path,
             issues=issues,
-            started_at=started,
-            finished_at=finished,
+            started_at=0.0,
+            finished_at=0.0,
             cache_key=cache_key,
             workflow_folder=workflow_info.get("folder"),
             workflow_name=workflow_info.get("name"),
@@ -656,17 +652,18 @@ def validate_comfy_environment(
 
     env_info = resolve_comfy_environment(comfy_path)
     if include_environment:
+        result_comfy_path = env_info.get("comfy_dir") or result_comfy_path
+    if include_environment:
         issues.append(_validate_environment(comfy_path, env_info))
     custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(env_info, workflow_bundle)
     issues.append(custom_nodes_issue)
     issues.append(_validate_models_browser(env_info, workflow_bundle, browser_payload))
 
-    finished = time.time()
     result = ValidationResult(
         comfy_path=result_comfy_path,
         issues=issues,
-        started_at=started,
-        finished_at=finished,
+        started_at=0.0,
+        finished_at=0.0,
         cache_key=cache_key,
         workflow_folder=workflow_info.get("folder"),
         workflow_name=workflow_info.get("name"),
@@ -917,6 +914,7 @@ def _validate_custom_nodes_browser(
         missing_repos: List[str] = []
         node_meta: Dict[str, Dict[str, Any]] = {}
         unique_missing: List[Dict[str, Any]] = []
+        pack_blocks: Dict[str, Dict[str, Any]] = {}
         seen_classes: set[str] = set()
         for entry in missing:
             cls = str(entry.get("class_type") or "").strip()
@@ -963,17 +961,31 @@ def _validate_custom_nodes_browser(
             if meta_entry:
                 node_meta[cls.lower()] = meta_entry
 
+            pack_id = pack_ids[0] if pack_ids else ""
+            pack_key = pack_id or repo or cls
+            pack_block = pack_blocks.get(pack_key)
+            if not pack_block:
+                pack_block = {
+                    "pack": pack_id,
+                    "repo": repo,
+                    "pack_meta": candidate_meta if isinstance(candidate_meta, dict) else {},
+                    "resolve_status": "",
+                    "resolve_method": "",
+                    "resolve_failed": "",
+                    "nodes": [],
+                }
+                pack_blocks[pack_key] = pack_block
+            pack_block["nodes"].append(
+                {
+                    "class_type": cls,
+                    "id": entry.get("id"),
+                }
+            )
+
         data = {
-            "missing": missing_nodes,
-            "required": list(missing_nodes),
-            "node_repos": node_repos,
-            "node_packages": node_packages,
-            "missing_repos": missing_repos,
-            "disabled_repos": [],
+            "missing": list(pack_blocks.values()),
             "registered_count": registered,
             "nodepack_count": nodepack_count,
-            "raw_missing": unique_missing,
-            "node_meta": node_meta,
         }
 
         if missing_nodes:
@@ -1020,6 +1032,68 @@ def _validate_models_browser(
     workflow_bundle: Optional[Dict[str, Any]],
     browser_payload: Optional[Dict[str, Any]],
 ) -> ValidationIssue:
+    def _normalize_model_paths(raw_paths: Dict[str, Any], models_root: str, comfy_dir: Optional[str]) -> Dict[str, List[str]]:
+        expected = {
+            "audio_encoders",
+            "checkpoints",
+            "classifiers",
+            "clip_vision",
+            "configs",
+            "controlnet",
+            "custom_nodes",
+            "diffusers",
+            "diffusion_models",
+            "embeddings",
+            "gligen",
+            "hypernetworks",
+            "latent_upscale_models",
+            "loras",
+            "model_patches",
+            "photomaker",
+            "style_models",
+            "text_encoders",
+            "upscale_models",
+            "vae",
+            "vae_approx",
+        }
+        comfy_dir = comfy_dir or ""
+        models_root_abs = os.path.abspath(models_root) if models_root else ""
+        normalized: Dict[str, List[str]] = {}
+        for key, value in (raw_paths or {}).items():
+            if not isinstance(key, str) or key not in expected:
+                continue
+            if isinstance(value, (list, tuple, set)):
+                paths: List[str] = []
+                for item in value:
+                    if not isinstance(item, str):
+                        continue
+                    abs_item = os.path.abspath(item if os.path.isabs(item) else os.path.join(models_root_abs, item))
+                    try:
+                        rel = os.path.relpath(abs_item, models_root_abs)
+                        if models_root_abs and rel and not rel.startswith(".."):
+                            paths.append(rel.replace("\\", "/"))
+                            continue
+                    except ValueError:
+                        pass
+                    paths.append(abs_item)
+                if paths:
+                    normalized[key] = paths
+        # Fallback: scan models_root for subdirectories when browser payload is sparse.
+        if models_root_abs and os.path.isdir(models_root_abs):
+            try:
+                for entry in os.scandir(models_root_abs):
+                    if entry.is_dir():
+                        rel = os.path.relpath(entry.path, models_root_abs).replace("\\", "/")
+                        normalized.setdefault(entry.name, [rel])
+            except Exception:
+                pass
+
+        # Ensure custom_nodes root is present if it exists
+        custom_nodes_root = os.path.join(comfy_dir, "custom_nodes")
+        if os.path.isdir(custom_nodes_root):
+            normalized.setdefault("custom_nodes", [os.path.abspath(custom_nodes_root)])
+        return normalized
+
     comfy_dir = env_info.get("comfy_dir")
     python_exe = env_info.get("python_exe")
     models_root = os.path.join(comfy_dir, "models") if comfy_dir else ""
@@ -1112,26 +1186,8 @@ def _validate_models_browser(
     if missing_models is None and not capture_invoked:
         return _validate_models(env_info, workflow_bundle)
 
-    model_paths = browser_payload.get("model_paths") if isinstance(browser_payload, dict) else {}
-    if not isinstance(model_paths, dict):
-        model_paths = {}
-    normalized_paths: Dict[str, List[str]] = {}
-    for key, value in model_paths.items():
-        if not isinstance(key, str):
-            continue
-        if isinstance(value, (list, tuple, set)):
-            paths: List[str] = []
-            for item in value:
-                if not isinstance(item, str):
-                    continue
-                abs_item = os.path.abspath(item)
-                if _is_ignored_dir(abs_item):
-                    continue
-                paths.append(abs_item)
-            if not paths:
-                continue
-            normalized_paths[key] = paths
-    data["paths"] = normalized_paths
+    raw_model_paths = browser_payload.get("model_paths") if isinstance(browser_payload, dict) else {}
+    normalized_paths = _normalize_model_paths(raw_model_paths if isinstance(raw_model_paths, dict) else {}, models_root, comfy_dir)
     data["model_paths"] = normalized_paths
     data["model_capture"] = capture_info if isinstance(capture_info, dict) else {}
 
@@ -1156,7 +1212,6 @@ def _validate_models_browser(
             "name": name_value,
             "category": directory_value or None,
             "node_type": raw_entry.get("node_type") or raw_entry.get("node"),
-            "raw": raw_entry,
         }
         url_value = raw_entry.get("url")
         if isinstance(url_value, str) and url_value:
@@ -1164,19 +1219,16 @@ def _validate_models_browser(
 
         attempted_dirs: List[str] = []
         if isinstance(folder_path, str) and folder_path:
-            entry["folder_path"] = folder_path
-            entry["path"] = folder_path
             attempted_dirs.append(folder_path)
         if directory_value:
             entry["category"] = directory_value
             attempted_dirs.extend(normalized_paths.get(directory_value, []))
-            entry["attempted_categories"] = [directory_value]
         if attempted_dirs:
-            filtered_dirs = [
-                os.path.abspath(path)
-                for path in attempted_dirs
-                if _is_within_roots(path, allowed_roots) and not _is_ignored_dir(path)
-            ]
+            filtered_dirs = []
+            for path in attempted_dirs:
+                abs_path = os.path.abspath(path if os.path.isabs(path) else os.path.join(models_root, path))
+                if _is_within_roots(abs_path, allowed_roots) and not _is_ignored_dir(abs_path):
+                    filtered_dirs.append(abs_path)
             if filtered_dirs:
                 entry["attempted_directories"] = filtered_dirs
         if raw_entry.get("directory_invalid") is True:
@@ -1218,7 +1270,7 @@ def _validate_models_browser(
             name_value = entry.get("name") or entry.get("folder_path") or "Model file"
             directory_value = entry.get("category") or ""
             folder_hint = entry.get("folder_path")
-            url_value = entry.get("url") or entry.get("raw", {}).get("url")
+            url_value = entry.get("url")
             parts = [str(name_value)]
             if directory_value:
                 parts.append(f"folder: {directory_value}")
