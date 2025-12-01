@@ -1832,30 +1832,69 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         method_detail = row_info.get("resolve_method") or note or display_text
         row_info["resolve_method"] = method_detail
         issue_row = row_info.get("issue_row")
+        models_widget = self._issue_widgets.get("models") or {}
+        rows_mapping: Dict[Any, Dict[str, Any]] = models_widget.get("rows") or {}
+        target_idx = row_info.get("reference_index")
+        system_debug(
+            "[Validation] Model resolve UI sync | "
+            f"row={row} target_idx={target_idx} method='{method_detail}' "
+            f"has_issue_row={isinstance(issue_row, IssueRow)} rows={len(rows_mapping)}"
+        )
         if issue_row is None:
-            models_widget = self._issue_widgets.get("models") or {}
-            rows_mapping = models_widget.get("rows") or {}
-            target_idx = row_info.get("reference_index")
             for row_data in rows_mapping.values():
                 if not isinstance(row_data, dict):
                     continue
-                if row_data.get("issue_row"):
-                    if target_idx is None or row_data.get("reference_index") == target_idx:
-                        issue_row = row_data.get("issue_row")
-                        row_data.setdefault("issue_row", issue_row)
-                        row_info["issue_row"] = issue_row
-                        break
+                candidate = row_data.get("issue_row")
+                if not isinstance(candidate, IssueRow):
+                    continue
+                if target_idx is None or row_data.get("reference_index") == target_idx:
+                    issue_row = candidate
+                    row_info["issue_row"] = candidate
+                    system_debug("[Validation] Model resolve UI sync | issue_row backfilled from rows mapping")
+                    break
         if isinstance(issue_row, IssueRow):
-            # Force subtitle to update immediately so resolve_method shows without reopening.
             issue_row.mark_as_successful(
                 row_info.get("success_text") or status_text,
                 detail=method_detail or None,
             )
-            if method_detail:
+            if method_detail and hasattr(issue_row, "lbl_sub"):
                 issue_row.lbl_sub.setText(method_detail)
                 issue_row.lbl_sub.show()
-                issue_row.lbl_sub.update()
-            issue_row.update()
+                issue_row.lbl_sub.adjustSize()
+                issue_row.lbl_sub.repaint()
+            issue_row.adjustSize()
+            issue_row.updateGeometry()
+            issue_row.repaint()
+            try:
+                QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.AllEvents)
+            except Exception:
+                pass
+        # Also update any other IssueRow entries that share this reference index.
+        if target_idx is not None:
+            for row_data in rows_mapping.values():
+                if not isinstance(row_data, dict):
+                    continue
+                if row_data.get("reference_index") != target_idx:
+                    continue
+                row_data["resolve_method"] = method_detail
+                candidate = row_data.get("issue_row")
+                if isinstance(candidate, IssueRow):
+                    candidate.mark_as_successful(
+                        row_data.get("success_text") or status_text,
+                        detail=method_detail or None,
+                    )
+                    if method_detail and hasattr(candidate, "lbl_sub"):
+                        candidate.lbl_sub.setText(method_detail)
+                        candidate.lbl_sub.show()
+                        candidate.lbl_sub.adjustSize()
+                        candidate.lbl_sub.repaint()
+                    candidate.adjustSize()
+                    candidate.updateGeometry()
+                    candidate.repaint()
+                    try:
+                        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.AllEvents)
+                    except Exception:
+                        pass
         row_info["resolved"] = True
         if isinstance(row_info, dict):
             if workflow_value:
