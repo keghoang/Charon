@@ -19,9 +19,8 @@ from ..validation_resolver import (
     resolve_missing_custom_nodes,
     resolve_missing_models,
 )
-from ..validation_cache import load_validation_log, save_validation_log
 from ..workflow_overrides import replace_workflow_model_paths, save_workflow_override
-from ..workflow_local_store import append_validation_resolve_entry, write_validation_resolve_status
+from ..workflow_local_store import write_validation_resolve_status
 
 
 SUCCESS_COLOR = "#228B22"
@@ -441,7 +440,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if isinstance(self._workflow_bundle, dict):
             self._workflow_folder = self._workflow_bundle.get("folder") or None
 
-        self._load_cached_resolutions()
         self._custom_node_package_map: Optional[Dict[str, str]] = None
 
         self._sanitize_custom_node_issue()
@@ -1022,54 +1020,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._update_overall_state()
 
 
-    def _load_cached_resolutions(self) -> None:
-        if not self._workflow_folder:
-            return
-        cached = load_validation_log(self._workflow_folder)
-        models_cache = cached.get("models") if isinstance(cached, dict) else {}
-        if not isinstance(models_cache, dict):
-            models_cache = {}
-        resolved_entries = models_cache.get("resolved_entries") or []
-        if not resolved_entries:
-            return
-        issues = self._payload.get("issues") or []
-        for issue in issues:
-            if issue.get("key") != "models":
-                continue
-            data = issue.setdefault("data", {})
-            existing = data.get("resolved_entries") or []
-            if not existing:
-                data["resolved_entries"] = copy.deepcopy(resolved_entries)
-            else:
-                existing_paths = {
-                    str(entry.get("path") or "").replace("\\", "/").lower()
-                    for entry in existing
-                    if isinstance(entry, dict)
-                }
-                for entry in resolved_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    path_value = str(entry.get("path") or "")
-                    if not path_value:
-                        continue
-                    normalized = path_value.replace("\\", "/").lower()
-                    if normalized not in existing_paths:
-                        existing.append(copy.deepcopy(entry))
-                        existing_paths.add(normalized)
-
-            resolved_list = data.get("resolved_entries") or []
-            found = data.setdefault("found", [])
-            for entry in resolved_list:
-                if not isinstance(entry, dict):
-                    continue
-                path_value = entry.get("path")
-                if path_value and path_value not in found:
-                    found.append(path_value)
-
-            missing = data.get("missing") or []
-            data["missing"] = self._filter_missing_with_resolved(missing, resolved_list)
-            break
-
     def _filter_missing_with_resolved(
         self,
         missing: Iterable[Dict[str, Any]],
@@ -1603,25 +1553,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._update_overall_state()
 
 
-    def _persist_resolved_cache(self) -> None:
-        if not self._workflow_folder:
-            return
-        issue = self._issue_lookup.get("models")
-        if not issue:
-            return
-        data = issue.get("data") or {}
-        resolved_entries = data.get("resolved_entries")
-        if not isinstance(resolved_entries, list):
-            return
-        save_validation_log(
-            self._workflow_folder,
-            {"models": {"resolved_entries": resolved_entries}},
-        )
-        system_debug(
-            f"[Validation] Persisted resolved cache for '{self._workflow_folder}': "
-            + json.dumps(resolved_entries, indent=2)
-        )
-
     def _format_model_display_path(self, path: str, models_root: str) -> str:
         path = str(path or "").strip()
         if not path:
@@ -1894,18 +1825,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         entry["resolve_failed"] = ""
                 break
         if self._workflow_folder:
-            entry = {
-                "event": "model_resolved",
-                "status": status_text,
-                "display_path": display_text,
-                "workflow_value": workflow_value,
-                "note": note,
-                "reference": reference,
-                "reference_signature": row_info.get("reference_signature"),
-                "resolved_path": resolved_path or display_text,
-                "resolve_method": method_detail,
-            }
-            append_validation_resolve_entry(self._workflow_folder, entry)
             try:
                 write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
             except Exception:
@@ -2556,7 +2475,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         resolved_path=selected,
                     )
                     self._record_resolved_model(selected, "Resolved", row_info, workflow_value)
-                    self._persist_resolved_cache()
                     self._refresh_models_issue_status()
                     return True
                 if message:
@@ -2617,7 +2535,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                             resolved_path=expected_path,
                         )
                         self._record_resolved_model(expected_path, "Copied", row_info, workflow_value)
-                        self._persist_resolved_cache()
                         self._refresh_models_issue_status()
                         return True
                     if message:
@@ -2648,7 +2565,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     resolved_path=expected_path,
                 )
                 self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value)
-                self._persist_resolved_cache()
                 self._refresh_models_issue_status()
                 return True
             self._notify_manual_download(file_name, models_root, expected_path)
@@ -2940,18 +2856,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         QtWidgets.QMessageBox.information(self, "Auto Resolve", text)
         self._append_issue_note(issue_key, text)
         if self._workflow_folder:
-            try:
-                entry_payload = result.to_dict()
-            except Exception:
-                entry_payload = result.__dict__
-            append_validation_resolve_entry(
-                self._workflow_folder,
-                {
-                    "event": f"issue_auto_resolve:{issue_key}",
-                    "message": text,
-                    "result": entry_payload,
-                },
-            )
             self._update_resolve_status_payload(issue_key, result)
 
     # ---------------------------------------------------------------- Helpers

@@ -217,7 +217,7 @@ Every validation run writes per-user artifacts beside the validated workflow (st
 - validation_resolve_status.json mirrors validation_result_raw.json but adds per-missing-item resolution state:
   - Each missing custom node entry gets `resolve_status` (`not_started`|`failed`|`success`), `resolve_method` (empty until success, then e.g., `Installed from repo URL https://...`), and `resolve_failed` (empty unless failed, then a short reason).
   - Each missing model entry gets the same trio, with resolve_method examples such as `Searched subfolders and found model under <full path>`, `Searched global repo, found and copied model to <full path>`, or `Downloaded model from repo URL <url>`.
-- validation_resolve_log.json remains the ordered list of resolution events (button clicks, auto-resolve copies, etc.) so support can review what changed post-validation.
+Only two artifacts live in the validation cache now: `validation_result_raw.json` (raw payload) and `validation_resolve_status.json` (normalized payload with resolve fields).
 
 All artifacts live inside the local mirror introduced during validation/override consolidation and survive workflow overrides or subsequent validation runs.
 

@@ -49,10 +49,10 @@ class PersistentCacheManager:
 4. **Validation Cache**
    - Stores script validation results: `{script_path: validation_data}`
    - Includes entry file validation, icon presence checks, and the live state for the Validation Result dialog
-   - Persists raw validation payloads and resolution events under %LOCALAPPDATA%/Charon/plugins/charon/Charon_repo_local/workflow/<user>/<workflow>/.charon_cache/validation/ (per artist)
+   - Persists raw validation payloads and resolve state under %LOCALAPPDATA%/Charon/plugins/charon/Charon_repo_local/workflow/<user>/<workflow>/.charon_cache/validation/ (per artist)
      - `validation_result_raw.json` preserves the first ComfyUI payload and is never removed automatically
-     - `validation_resolve_log.json` appends one entry per resolve action for auditability
-   - Reduces repeated filesystem checks for script validity while keeping a canonical paper trail
+     - `validation_resolve_status.json` mirrors the payload with per-item resolve status/method fields
+   - Reduces repeated filesystem checks for script validity while keeping the per-item resolve status handy on reopen
 
 5. **Workflow Input Cache**
    - Stores per-workflow parameter discovery results
