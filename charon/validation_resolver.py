@@ -66,8 +66,16 @@ def find_local_model_matches(
             search_roots.append(normalized)
 
     if not search_roots:
+        system_debug(
+            "[Validation] Local match scan skipped | "
+            f"name='{file_name}' reason='no search roots' models_root='{models_root}'"
+        )
         return []
 
+    system_debug(
+        "[Validation] Local match scan starting | "
+        f"name='{file_name}' roots={search_roots}"
+    )
     matches: List[str] = []
     seen: set[str] = set()
     for root in search_roots:
@@ -76,6 +84,10 @@ def find_local_model_matches(
                 continue
             seen.add(candidate)
             matches.append(candidate)
+    system_debug(
+        "[Validation] Local match scan finished | "
+        f"name='{file_name}' matches={matches}"
+    )
     return matches
 
 
@@ -83,10 +95,18 @@ def find_shared_model_matches(file_name: str) -> List[str]:
     """Search the global shared models repository for matching files."""
     file_name = os.path.basename(_safe_str(file_name))
     if not file_name or not os.path.isdir(SHARED_MODELS_ROOT):
+        system_debug(
+            "[Validation] Shared repo scan skipped | "
+            f"name='{file_name}' root_exists={os.path.isdir(SHARED_MODELS_ROOT)}"
+        )
         return []
     matches: List[str] = []
     for candidate in _iter_matching_files(SHARED_MODELS_ROOT, file_name):
         matches.append(candidate)
+    system_debug(
+        "[Validation] Shared repo scan finished | "
+        f"name='{file_name}' matches={matches}"
+    )
     return matches
 
 

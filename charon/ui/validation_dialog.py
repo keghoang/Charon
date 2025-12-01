@@ -440,6 +440,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         )
         if isinstance(self._workflow_bundle, dict):
             self._workflow_folder = self._workflow_bundle.get("folder") or None
+        if not self._workflow_folder:
+            workflow_info = self._payload.get("workflow") if isinstance(self._payload, dict) else {}
+            if isinstance(workflow_info, dict):
+                self._workflow_folder = workflow_info.get("folder") or None
 
         self._custom_node_package_map: Optional[Dict[str, str]] = None
 
@@ -1497,13 +1501,22 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return
         data = issue.get("data") or {}
         missing = data.get("missing_models") or []
+        unresolved: List[Dict[str, Any]] = []
+        for entry in missing:
+            if not isinstance(entry, dict):
+                continue
+            status_value = str(entry.get("resolve_status") or "").strip().lower()
+            if status_value in {"success", "resolved", "copied"}:
+                continue
+            unresolved.append(entry)
+        missing_count = len(unresolved)
         status_label = widget_info.get("status_label")
-        if missing:
+        if missing_count:
             issue["ok"] = False
             if isinstance(status_label, QtWidgets.QLabel):
                 status_label.setText("\u2717 Failed")
                 status_label.setStyleSheet("font-weight: bold; color: #B22222;")
-            issue["summary"] = f"Missing {len(missing)} model file(s)."
+            issue["summary"] = f"Missing {missing_count} model file(s)."
         else:
             issue["ok"] = True
             if isinstance(status_label, QtWidgets.QLabel):
@@ -1835,9 +1848,29 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         issue_info = self._issue_lookup.get("models") or {}
         issue_data = issue_info.get("data") if isinstance(issue_info, dict) else {}
         missing_after = issue_data.get("missing_models") if isinstance(issue_data, dict) else None
+        remaining_unresolved: Any = "unknown"
+        if isinstance(missing_after, list):
+            remaining_unresolved = 0
+            for entry in missing_after:
+                if not isinstance(entry, dict):
+                    continue
+                status_value = str(entry.get("resolve_status") or "").strip().lower()
+                if status_value in {"success", "resolved", "copied"}:
+                    continue
+                remaining_unresolved += 1
+        if self._workflow_folder:
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+                system_debug(
+                    f"[Validation] Persisted resolve status after model update | path='{self._workflow_folder}'"
+                )
+            except Exception as exc:
+                system_warning(f"Failed to persist resolve status after model update: {exc}")
+        else:
+            system_debug("[Validation] Skipped resolve status persist; workflow folder unavailable")
         system_debug(
             "[Validation] Completed mark model resolved | "
-            f"row={row} remaining_missing={len(missing_after) if isinstance(missing_after, list) else 'unknown'} "
+            f"row={row} remaining_missing={remaining_unresolved} "
             f"issue_ok={issue_info.get('ok') if isinstance(issue_info, dict) else 'unknown'}"
         )
         self._update_overall_state()
@@ -2005,24 +2038,25 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         missing = data.get("missing_models")
         if isinstance(missing, list):
-            removed = False
+            status_lower = status.lower()
+            resolve_status_value = "success" if status_lower in {"resolved", "copied"} else status_lower
+            resolve_method_value = str(row_info.get("resolve_method") or "").strip() or status
+            updated_missing = False
+
+            def _update_missing_entry(entry: Dict[str, Any]) -> None:
+                nonlocal updated_missing
+                if not isinstance(entry, dict):
+                    return
+                entry["resolve_status"] = resolve_status_value
+                entry["resolve_method"] = resolve_method_value if resolve_status_value == "success" else ""
+                entry["resolve_failed"] = "" if resolve_status_value == "success" else entry.get("resolve_failed") or ""
+                updated_missing = True
+
             missing_entry = row_info.get("missing_entry")
             if isinstance(missing_entry, dict):
-                for i, entry in enumerate(list(missing)):
-                    if entry is missing_entry:
-                        missing.pop(i)
-                        removed = True
-                        row_info["missing_entry"] = None
-                        break
+                _update_missing_entry(missing_entry)
 
-            if removed:
-                updated_missing = [entry for entry in missing if isinstance(entry, dict)]
-                data["missing_models"] = updated_missing
-                system_debug(
-                    "[Validation] Removed missing entry via object identity | "
-                    f"row={row_index} remaining_missing={len(updated_missing)}"
-                )
-            else:
+            if not updated_missing:
                 signature = row_info.get("reference_signature")
                 target_name: Optional[str]
                 target_category: Optional[str]
@@ -2072,14 +2106,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 if isinstance(ref_index, int) and 0 <= ref_index < len(missing):
                     candidate = missing[ref_index]
                     if _matches_entry(candidate):
-                        missing.pop(ref_index)
-                        removed = True
+                        _update_missing_entry(candidate)
 
-                if not removed:
-                    for i, item in enumerate(list(missing)):
+                if not updated_missing:
+                    for item in list(missing):
                         if _matches_entry(item):
-                            missing.pop(i)
-                            removed = True
+                            _update_missing_entry(item)
                             break
 
                 normalized_candidates = {
@@ -2090,9 +2122,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 }
                 normalized_candidates = {value for value in normalized_candidates if value}
 
-                if not removed and normalized_candidates:
-                    fallback_removed = False
-                    for i, entry in enumerate(list(missing)):
+                if not updated_missing and normalized_candidates:
+                    for entry in list(missing):
                         if not isinstance(entry, dict):
                             continue
                         entry_candidates = {
@@ -2106,16 +2137,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                             entry_candidates.add(self._normalize_identifier(raw_payload.get("path")))
                         entry_candidates = {value for value in entry_candidates if value}
                         if entry_candidates & normalized_candidates:
-                            missing.pop(i)
-                            fallback_removed = True
-                    removed = fallback_removed
+                            _update_missing_entry(entry)
+                            break
 
-                filtered_missing = [entry for entry in missing if isinstance(entry, dict)]
-                data["missing_models"] = filtered_missing
-                if removed:
+                if updated_missing:
                     system_debug(
-                        "[Validation] Removed missing entry via signature/normalized match | "
-                        f"row={row_index} remaining_missing={len(filtered_missing)}"
+                        "[Validation] Updated missing entry resolve fields | "
+                        f"row={row_index} remaining_missing={len(missing)}"
                     )
                 else:
                     try:
@@ -2127,39 +2155,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         f"name='{debug_name}', workflow_value='{workflow_value}'."
                     )
 
-        resolver_info = data.get("resolver")
-        if isinstance(resolver_info, dict):
-            ref_index = row_info.get("reference_index")
-            resolver_missing = resolver_info.get("missing")
-            if isinstance(resolver_missing, list):
-                filtered = []
-                for entry in resolver_missing:
-                    if not isinstance(entry, dict):
-                        continue
-                    if isinstance(ref_index, int) and entry.get("index") == ref_index:
-                        continue
-                    name_value = entry.get("name")
-                    category_value = entry.get("category")
-                    node_value = entry.get("node_type")
-                    signature = row_info.get("reference_signature")
-                    if (
-                        isinstance(signature, tuple)
-                        and name_value == signature[0]
-                        and category_value == signature[1]
-                        and node_value == signature[2]
-                    ):
-                        continue
-                    filtered.append(entry)
-                resolver_info["missing"] = filtered
-                if not filtered:
-                    resolver_info["missing"] = []
-            resolver_invalid = resolver_info.get("invalid")
-            if isinstance(resolver_invalid, list) and isinstance(ref_index, int):
-                resolver_info["invalid"] = [
-                    entry
-                    for entry in resolver_invalid
-                    if not (isinstance(entry, dict) and entry.get("index") == ref_index)
-                ]
     def _ensure_custom_node_package_map(self) -> None:
         if self._custom_node_package_map is not None:
             return
@@ -2442,6 +2437,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         reference = row_info.get("reference") or {}
         original_name = str(reference.get("name") or "").strip()
         system_debug(
+            "[Validation] Auto-resolve: begin | "
+            f"row={row} name='{original_name}' category='{reference.get('category')}' "
+            f"node_type='{reference.get('node_type')}' "
+            f"attempted_dirs={reference.get('attempted_directories')} "
+            f"attempted_cats={reference.get('attempted_categories')} "
+            f"url='{reference.get('url') or ''}'"
+        )
+        system_debug(
             "[Validation] Attempting model auto-resolve | "
             f"row={row} name='{original_name}' models_root='{row_info.get('models_root')}'"
         )
@@ -2450,6 +2453,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         expected_path: Optional[str] = None
         notified_manual = False
         local_matches = find_local_model_matches(reference, models_root)
+        system_debug(
+            "[Validation] Auto-resolve: local scan complete | "
+            f"row={row} matches={len(local_matches) if local_matches else 0}"
+        )
         if local_matches:
             selected = self._select_candidate_path(
                 local_matches,
@@ -2458,6 +2465,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 models_root=models_root,
             )
             if selected:
+                system_debug(
+                    "[Validation] Auto-resolve: local selection made | "
+                    f"row={row} selected='{selected}'"
+                )
                 workflow_value = self._compute_workflow_value(reference, selected, models_root, comfy_dir)
                 display_text = self._format_model_display_path(selected, models_root)
                 success, message = self._apply_model_override(original_name, workflow_value)
@@ -2480,9 +2491,17 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     return True
                 if message:
                     QtWidgets.QMessageBox.warning(self, "Workflow Update Failed", message)
+            else:
+                system_debug("[Validation] Auto-resolve: local selection skipped/canceled")
+        else:
+            system_debug("[Validation] Auto-resolve: no local matches found")
 
         file_name = os.path.basename(original_name) or os.path.basename(str(reference.get("name") or ""))
         shared_matches = find_shared_model_matches(file_name)
+        system_debug(
+            "[Validation] Auto-resolve: shared repo lookup complete | "
+            f"row={row} matches={len(shared_matches) if shared_matches else 0}"
+        )
         if shared_matches:
             selected = self._select_candidate_path(
                 shared_matches,
@@ -2493,12 +2512,24 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 ),
             )
             if selected:
+                system_debug(
+                    "[Validation] Auto-resolve: shared repo selection made | "
+                    f"row={row} selected='{selected}'"
+                )
                 expected_path = determine_expected_model_path(reference, models_root, comfy_dir)
+                system_debug(
+                    "[Validation] Auto-resolve: computed expected path from shared repo | "
+                    f"row={row} expected='{expected_path}' models_root='{models_root}' comfy_dir='{comfy_dir}'"
+                )
                 if not expected_path:
                     if models_root:
                         expected_path = os.path.join(models_root, file_name)
                     else:
                         expected_path = os.path.join(os.path.dirname(selected), file_name)
+                    system_debug(
+                        "[Validation] Auto-resolve: fallback expected path | "
+                        f"row={row} expected='{expected_path}'"
+                    )
                 workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
                 destination_display = self._format_model_display_path(expected_path, models_root)
                 download_text = (
@@ -2544,16 +2575,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                             f"source='{selected}' destination='{expected_path}' message='{message}'"
                         )
                         QtWidgets.QMessageBox.warning(self, "Copy Failed", message)
-                else:
-                    self._append_issue_note("models", "Copy canceled by user.")
-                    self._notify_manual_download(file_name, models_root, expected_path)
-                    notified_manual = True
+            else:
+                self._append_issue_note("models", "Copy canceled by user.")
+                self._notify_manual_download(file_name, models_root, expected_path)
+                notified_manual = True
+                system_debug("[Validation] Auto-resolve: shared repo download canceled by user")
+        else:
+            system_debug("[Validation] Auto-resolve: no shared repo matches found")
         url_value = str(row_info.get("url") or reference.get("url") or "").strip()
         if url_value and not notified_manual and not local_matches and not shared_matches:
             expected_path = expected_path or determine_expected_model_path(reference, models_root, comfy_dir)
             if not expected_path:
                 expected_path = os.path.join(models_root or "", file_name)
             if expected_path:
+                system_debug(
+                    "[Validation] Auto-resolve: attempting direct URL download | "
+                    f"row={row} url='{url_value}' dest='{expected_path}'"
+                )
                 destination_display = self._format_model_display_path(expected_path, models_root)
                 try:
                     os.makedirs(os.path.dirname(expected_path), exist_ok=True)
@@ -2574,13 +2612,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     self._refresh_models_issue_status()
                     return True
                 except Exception as exc:
+                    system_debug(
+                        "[Validation] Auto-resolve: URL download failed | "
+                        f"row={row} url='{url_value}' error='{exc}'"
+                    )
                     QtWidgets.QMessageBox.warning(
                         self,
                         "Download Failed",
                         f"Could not download model from URL.\n\nURL: {url_value}\nError: {exc}",
                     )
+        elif not url_value:
+            system_debug("[Validation] Auto-resolve: no URL provided for missing model")
         if not notified_manual:
             if expected_path and os.path.exists(expected_path):
+                system_debug(
+                    "[Validation] Auto-resolve: found model already at expected path | "
+                    f"row={row} path='{expected_path}'"
+                )
                 workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
                 destination_display = self._format_model_display_path(expected_path, models_root)
                 system_debug(
@@ -2599,6 +2647,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value)
                 self._refresh_models_issue_status()
                 return True
+            system_debug("[Validation] Auto-resolve: no automated resolution found; notifying manual download")
             self._notify_manual_download(file_name, models_root, expected_path)
         return False
 
@@ -2976,6 +3025,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 system_warning(
                     f"Failed to persist validation resolve status after auto-resolve: {exc}"
                 )
+        else:
+            system_debug("[Validation] Skipped resolve status persist; workflow folder unavailable")
 
     def _append_issue_note(self, issue_key: str, message: str) -> None:
         widget_info = self._issue_widgets.get(issue_key)

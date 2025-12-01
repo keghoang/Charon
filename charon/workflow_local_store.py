@@ -137,8 +137,16 @@ def _relative_workflow_path(remote_folder: str) -> str:
 
 
 def get_local_workflow_folder(remote_folder: str, *, ensure: bool = True) -> str:
+    folder_path = os.path.abspath(remote_folder)
+    local_root = os.path.abspath(get_local_workflow_root(ensure=ensure))
+    if folder_path.lower().startswith(local_root.lower()):
+        # Already points into the local mirror; just ensure it exists and return.
+        if ensure:
+            os.makedirs(folder_path, exist_ok=True)
+        return folder_path
+
     relative = _relative_workflow_path(remote_folder)
-    candidate = os.path.join(get_local_workflow_root(ensure=ensure), relative)
+    candidate = os.path.join(local_root, relative)
     if ensure:
         os.makedirs(candidate, exist_ok=True)
     return candidate
@@ -697,13 +705,18 @@ def _normalize_validation_payload(
 def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any], *, overwrite: bool = True) -> None:
     if not remote_folder or not isinstance(payload, dict):
         return
-    status_path = validation_resolve_status_path(remote_folder, ensure_parent=True)
+    try:
+        status_path = validation_resolve_status_path(remote_folder, ensure_parent=True)
+    except Exception as exc:
+        system_warning(f"Failed to resolve validation status path for '{remote_folder}': {exc}")
+        return
     if status_path.exists() and not overwrite:
         return
     wrapped = _build_resolve_status_payload(payload, remote_folder)
     try:
         with status_path.open("w", encoding="utf-8") as handle:
             json.dump(wrapped, handle, indent=2)
+        system_debug(f"[Validation] Persisted resolve status to '{status_path}'")
     except Exception as exc:
         system_warning(f"Failed to write validation resolve status for '{remote_folder}': {exc}")
 
