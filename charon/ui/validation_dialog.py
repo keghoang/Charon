@@ -2448,7 +2448,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             resolved = self._resolve_model_entry(row, row_info)
             if isinstance(issue_row, IssueRow):
                 if resolved:
-                    issue_row.mark_as_successful(row_info.get("success_text"))
+                    detail_text = row_info.get("resolve_method") or None
+                    issue_row.mark_as_successful(
+                        row_info.get("success_text"),
+                        detail=detail_text,
+                    )
                 else:
                     issue_row.reset_to_idle()
             elif button and not resolved:
