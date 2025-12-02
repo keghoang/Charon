@@ -455,6 +455,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._header_subtitle: Optional[QtWidgets.QLabel] = None
         self._header_icon: Optional[QtWidgets.QLabel] = None
         self._auto_resolve_button: Optional[QtWidgets.QPushButton] = None
+        self._auto_resolve_queue: List[Tuple[str, int]] = []
+        self._auto_resolve_running = False
         self._success_title: Optional[QtWidgets.QLabel] = None
         self._success_subtitle: Optional[QtWidgets.QLabel] = None
         self._dependencies_cache: Optional[List[Dict[str, Any]]] = None
@@ -1076,30 +1078,76 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _auto_resolve_all(self) -> None:
         if not self._auto_resolve_button:
             return
+        if self._auto_resolve_running:
+            return
+
+        queue = self._build_auto_resolve_queue()
+        if not queue:
+            return
+
+        self._auto_resolve_running = True
+        self._auto_resolve_queue = queue
         self._auto_resolve_button.setText("Resolving...")
         self._auto_resolve_button.setEnabled(False)
         QtWidgets.QApplication.processEvents()
+        self._process_next_auto_resolve_item()
 
-        def _finalize_auto_resolve() -> None:
-            if self._auto_resolve_button:
-                self._auto_resolve_button.setText("✨ Auto-resolve All")
-                self._auto_resolve_button.setEnabled(True)
-            self._populate_sections()
-            self._update_overall_state()
+    def _build_auto_resolve_queue(self) -> List[Tuple[str, int]]:
+        queue: List[Tuple[str, int]] = []
+        for issue_key in self._issue_lookup.keys():
+            if issue_key not in self.SUPPORTED_KEYS:
+                continue
+            widget_info = self._issue_widgets.get(issue_key) or {}
+            rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
+            for row_index in sorted(rows.keys()):
+                row_info = rows.get(row_index) or {}
+                if row_info.get("resolved"):
+                    continue
+                queue.append((issue_key, row_index))
+        return queue
 
-        def _run_models_and_finalize() -> None:
-            self._handle_auto_resolve("models")
-            _finalize_auto_resolve()
-
-        custom_issue = self._issue_lookup.get("custom_nodes") or {}
-        custom_data = custom_issue.get("data") or {}
-        dependencies = self._load_dependencies()
-        if custom_data and self._start_custom_nodes_worker(custom_data, dependencies, _run_models_and_finalize):
+    def _process_next_auto_resolve_item(self) -> None:
+        if not self._auto_resolve_running:
             return
+        while self._auto_resolve_queue:
+            issue_key, row_index = self._auto_resolve_queue.pop(0)
+            widget_info = self._issue_widgets.get(issue_key) or {}
+            rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
+            row_info = rows.get(row_index)
+            if not row_info or row_info.get("resolved"):
+                continue
 
-        for key in ("custom_nodes", "models"):
-            self._handle_auto_resolve(key)
-        _finalize_auto_resolve()
+            if issue_key == "custom_nodes":
+                self._handle_custom_node_auto_resolve(row_index)
+                if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
+                    return
+                QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
+                return
+
+            if issue_key == "models":
+                self._handle_model_auto_resolve(row_index)
+                QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
+                return
+
+        self._finalize_auto_resolve_sequence()
+
+    def _continue_auto_resolve_queue(self) -> None:
+        if not self._auto_resolve_running:
+            return
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
+            return
+        QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
+
+    def _finalize_auto_resolve_sequence(self) -> None:
+        self._auto_resolve_running = False
+        self._auto_resolve_queue = []
+        self._reset_auto_resolve_button()
+        self._update_overall_state()
+
+    def _reset_auto_resolve_button(self) -> None:
+        if self._auto_resolve_button:
+            self._auto_resolve_button.setText("✨ Auto-resolve All")
+            self._auto_resolve_button.setEnabled(True)
 
     def _start_custom_nodes_worker(
         self,
@@ -1279,6 +1327,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._show_restart_cta(display_name, require_all_custom_nodes_resolved=True)
         self._update_overall_state()
         self._start_next_custom_node_from_queue()
+        self._continue_auto_resolve_queue()
 
     def _on_custom_node_install_failed(self, message: str) -> None:
         context = self._custom_node_row_context or {}
@@ -1292,6 +1341,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             button.setEnabled(True)
         self._update_overall_state()
         self._start_next_custom_node_from_queue()
+        self._continue_auto_resolve_queue()
 
 
     def _filter_missing_with_resolved(
