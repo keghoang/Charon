@@ -197,6 +197,7 @@ Selecting *Resolve* opens a rich checklist (`ValidationResolveDialog`) that summ
 - **Checklist Rows**: Each issue renders as a pass/fail row with a concise summary and the original detail text.
 - **Formatted Details**: Missing assets call out the exact filename and the directories ComfyUI searched (for example, `Cannot find <b>FLUX1\flux1-fill-dev.safetensors</b> under <b>models/unet, models/diffusion_models</b>`).
 - **Auto Resolve Buttons**: Supported issues expose an *Auto Resolve* button that delegates to the helpers in `charon.validation_resolver` (copying models, cloning custom nodes, etc.). Resolution only searches the directories Comfy reported for the missing asset (resolver.missing[].searched), preventing cross-folder fixes.
+- **Auto-resolve All Queueing**: Clicking **Auto-resolve All** now queues every remaining row. The first row shows *Resolving*; all others switch to *In Queue* so artists know everything is already scheduled. Each item runs one-by-one (custom nodes honor the manager install queue).
 - **Advanced Mode Raw View**: When **Advanced User Mode** is enabled, the context menu on the *Validate* column adds *Show Raw Validation Payload*, opening the JSON payload for power users.
 - **Activity Log**: Each auto-resolve attempt appends a note at the bottom of the dialog so artists can see what changed.
 
