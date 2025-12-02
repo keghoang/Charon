@@ -5,7 +5,7 @@ import json
 import os
 import urllib.request
 from urllib.parse import urlparse
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..qt_compat import QtCore, QtGui, QtWidgets
 from ..paths import resolve_comfy_environment
@@ -386,6 +386,25 @@ class _FileCopyWorker(QtCore.QObject):
                     pass
 
 
+class _CustomNodesResolveWorker(QtCore.QObject):
+    finished = QtCore.Signal(object)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, data: Dict[str, Any], comfy_path: str, dependencies: Iterable[Dict[str, Any]]) -> None:
+        super().__init__()
+        self._data = copy.deepcopy(data)
+        self._comfy_path = comfy_path
+        self._dependencies = list(dependencies or [])
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            result = resolve_missing_custom_nodes(self._data, self._comfy_path, self._dependencies)
+            self.finished.emit(result)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            self.failed.emit(str(exc))
+
+
 class ValidationResolveDialog(QtWidgets.QDialog):
     comfy_restart_requested = QtCore.Signal()
     """Display validation results with auto-resolve helpers."""
@@ -422,6 +441,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._success_subtitle: Optional[QtWidgets.QLabel] = None
         self._dependencies_cache: Optional[List[Dict[str, Any]]] = None
         self._workflow_folder: Optional[str] = None
+        self._custom_nodes_thread: Optional[QtCore.QThread] = None
+        self._custom_nodes_worker: Optional[_CustomNodesResolveWorker] = None
+        self._custom_nodes_callback: Optional[Callable[[], None]] = None
         restart_flag = False
         if isinstance(self._payload, dict):
             restart_flag = bool(
@@ -1036,12 +1058,76 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._auto_resolve_button.setText("Resolving...")
         self._auto_resolve_button.setEnabled(False)
         QtWidgets.QApplication.processEvents()
+
+        def _finalize_auto_resolve() -> None:
+            if self._auto_resolve_button:
+                self._auto_resolve_button.setText("✨ Auto-resolve All")
+                self._auto_resolve_button.setEnabled(True)
+            self._populate_sections()
+            self._update_overall_state()
+
+        def _run_models_and_finalize() -> None:
+            self._handle_auto_resolve("models")
+            _finalize_auto_resolve()
+
+        custom_issue = self._issue_lookup.get("custom_nodes") or {}
+        custom_data = custom_issue.get("data") or {}
+        dependencies = self._load_dependencies()
+        if custom_data and self._start_custom_nodes_worker(custom_data, dependencies, _run_models_and_finalize):
+            return
+
         for key in ("custom_nodes", "models"):
             self._handle_auto_resolve(key)
-        self._auto_resolve_button.setText("✨ Auto-resolve All")
-        self._auto_resolve_button.setEnabled(True)
-        self._populate_sections()
-        self._update_overall_state()
+        _finalize_auto_resolve()
+
+    def _start_custom_nodes_worker(
+        self,
+        data: Dict[str, Any],
+        dependencies: Iterable[Dict[str, Any]],
+        on_complete: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        """Run custom node resolution off the UI thread to avoid freezes (e.g., inside Nuke)."""
+        if self._custom_nodes_thread:
+            return False
+        worker = _CustomNodesResolveWorker(data, self._comfy_path, dependencies)
+        thread = QtCore.QThread(self)
+        self._custom_nodes_worker = worker
+        self._custom_nodes_thread = thread
+        self._custom_nodes_callback = on_complete
+        worker.moveToThread(thread)
+        worker.finished.connect(lambda result: self._on_custom_nodes_worker_finished(result, None))
+        worker.failed.connect(lambda message: self._on_custom_nodes_worker_finished(None, message))
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        return True
+
+    def _on_custom_nodes_worker_finished(
+        self,
+        result: Optional[ResolutionResult],
+        error_message: Optional[str],
+    ) -> None:
+        self._cleanup_custom_nodes_worker()
+        if error_message:
+            QtWidgets.QMessageBox.warning(self, "Custom Node Resolve Failed", error_message)
+        elif result is not None:
+            self._report_resolution("custom_nodes", result)
+            self._refresh_custom_nodes_issue_status()
+        callback = self._custom_nodes_callback
+        self._custom_nodes_callback = None
+        if callable(callback):
+            callback()
+        else:
+            self._update_overall_state()
+
+    def _cleanup_custom_nodes_worker(self) -> None:
+        thread = self._custom_nodes_thread
+        self._custom_nodes_thread = None
+        self._custom_nodes_worker = None
+        if thread:
+            thread.quit()
+            thread.wait(2000)
 
 
     def _filter_missing_with_resolved(
