@@ -991,7 +991,15 @@ class ScriptPanel(QtWidgets.QWidget):
                 data = issue.get("data") or {}
                 if key == "models":
                     missing = data.get("missing_models") or data.get("missing") or []
-                    if missing:
+                    unresolved = []
+                    for entry in missing:
+                        if not isinstance(entry, dict):
+                            continue
+                        status = str(entry.get("resolve_status") or "").strip().lower()
+                        if status in {"success", "resolved", "installed", "copied"}:
+                            continue
+                        unresolved.append(entry)
+                    if unresolved:
                         issue["ok"] = False
                     elif "ok" not in issue:
                         issue["ok"] = True
