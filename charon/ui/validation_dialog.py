@@ -414,6 +414,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_node_install_queue: List[Dict[str, Any]] = []
         self._transfer_manager = transfer_manager
         self._transfer_subscriptions: Dict[int, Dict[str, Any]] = {}
+        self._pending_transfer_queue: List[Dict[str, Any]] = []
         restart_flag = False
         if isinstance(self._payload, dict):
             restart_flag = bool(
@@ -1100,6 +1101,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return
         if self._has_active_transfers():
             return
+        if self._start_next_queued_transfer():
+            return
         while self._auto_resolve_queue:
             issue_key, row_index = self._auto_resolve_queue.pop(0)
             widget_info = self._issue_widgets.get(issue_key) or {}
@@ -1130,6 +1133,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
             return
         if self._has_active_transfers():
+            return
+        if self._start_next_queued_transfer():
             return
         QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
 
@@ -1272,6 +1277,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _teardown_transfers(self) -> None:
         subscriptions = list(self._transfer_subscriptions.items())
         self._transfer_subscriptions.clear()
+        self._pending_transfer_queue = []
         for listener_id, entry in subscriptions:
             destination = entry.get("destination") or ""
             try:
@@ -1331,6 +1337,39 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if state.in_progress or include_completed:
             return state
         return None
+
+    def _queue_transfer(
+        self,
+        *,
+        kind: str,
+        payload: Dict[str, Any],
+        row_info: Dict[str, Any],
+    ) -> None:
+        self._pending_transfer_queue.append({"kind": kind, "payload": payload})
+        issue_row = row_info.get("issue_row")
+        button = row_info.get("button")
+        if isinstance(issue_row, IssueRow):
+            issue_row.btn_resolve.setText("In Queue")
+            issue_row.btn_resolve.setEnabled(False)
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(False)
+            button.setText("In Queue")
+
+    def _start_next_queued_transfer(self) -> bool:
+        if self._has_active_transfers():
+            return True
+        if not self._pending_transfer_queue:
+            return False
+        entry = self._pending_transfer_queue.pop(0)
+        kind = entry.get("kind")
+        payload: Dict[str, Any] = entry.get("payload") or {}
+        if kind == "copy":
+            self._copy_shared_model(**payload, allow_queue=False)  # type: ignore[arg-type]
+            return True
+        if kind == "download":
+            self._download_model_from_url(**payload, allow_queue=False)  # type: ignore[arg-type]
+            return True
+        return False
 
     def _reattach_model_transfers(self) -> None:
         widget_info = self._issue_widgets.get("models") or {}
@@ -2458,6 +2497,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         destination_display: str,
         note: str,
         file_name: str,
+        allow_queue: bool = True,
     ) -> Tuple[Optional[bool], Optional[str]]:
         system_debug(
             "[Validation] Starting Global Repo copy | "
@@ -2468,6 +2508,26 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         reference = row_info.get("reference")
         if isinstance(reference, dict):
             reference["expected_path"] = destination
+        if allow_queue and self._has_active_transfers():
+            self._queue_transfer(
+                kind="copy",
+                payload={
+                    "source": source,
+                    "destination": destination,
+                    "row": row,
+                    "row_info": row_info,
+                    "workflow_value": workflow_value,
+                    "destination_display": destination_display,
+                    "note": note,
+                    "file_name": file_name,
+                },
+                row_info=row_info,
+            )
+            self._set_issue_row_subtitle(
+                row_info,
+                f"Queued copy from Global Repo to {destination_display}...",
+            )
+            return None, None
         active_state = self._active_transfer_for_row(row_info, include_completed=True)
         if active_state:
             active_state.resolve_method = active_state.resolve_method or note
@@ -2516,6 +2576,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         destination_display: str,
         note: str,
         file_name: str,
+        allow_queue: bool = True,
     ) -> Tuple[Optional[bool], Optional[str]]:
         system_debug(
             "[Validation] Starting URL model download | "
@@ -2526,6 +2587,26 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         reference = row_info.get("reference")
         if isinstance(reference, dict):
             reference["expected_path"] = destination
+        if allow_queue and self._has_active_transfers():
+            self._queue_transfer(
+                kind="download",
+                payload={
+                    "url": url,
+                    "destination": destination,
+                    "row": row,
+                    "row_info": row_info,
+                    "workflow_value": workflow_value,
+                    "destination_display": destination_display,
+                    "note": note,
+                    "file_name": file_name,
+                },
+                row_info=row_info,
+            )
+            self._set_issue_row_subtitle(
+                row_info,
+                f"Queued download to {destination_display}...",
+            )
+            return None, None
         active_state = self._active_transfer_for_row(row_info, include_completed=True)
         if active_state:
             active_state.resolve_method = active_state.resolve_method or note
@@ -2651,7 +2732,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._unsubscribe_transfer(row_info)
         self._refresh_models_issue_status()
         self._update_overall_state()
-        self._continue_auto_resolve_queue()
+        if not self._start_next_queued_transfer():
+            self._continue_auto_resolve_queue()
 
     def _handle_transfer_update(self, row_info: Dict[str, Any], state: TransferState) -> None:
         row_info["expected_path"] = state.destination
@@ -2662,6 +2744,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._handle_transfer_error(row_info, state)
             return
         self._handle_transfer_success(row_info, state)
+        self._start_next_queued_transfer()
 
     def _select_candidate_path(
         self,
