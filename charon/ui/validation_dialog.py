@@ -1240,15 +1240,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         resolved = bool(result.resolved)
         note = "; ".join(result.resolved or result.failed or result.notes or [])
-        # Only surface notes when something failed; success already shows detail in the row.
-        if note and result.failed:
-            self._append_issue_note("custom_nodes", note)
         if not resolved and result.failed:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Install Failed",
                 "\n".join(result.failed),
             )
+            if isinstance(issue_row, IssueRow) and note:
+                issue_row.lbl_sub.setText(note)
+                issue_row.lbl_sub.show()
             if isinstance(issue_row, IssueRow):
                 issue_row.reset_to_idle()
             if button:
@@ -2624,7 +2624,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         resolved = bool(install_result.resolved)
         note = "; ".join(install_result.resolved or install_result.failed or install_result.notes or [])
         if note:
-            self._append_issue_note("custom_nodes", note)
+            row_info["resolve_method"] = note
         if resolved:
             return True
         if install_result.failed:
@@ -3185,29 +3185,26 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     normalized = self._normalize_identifier(part)
                     if normalized:
                         resolved_nodes.add(normalized)
-            if not resolved_nodes:
-                normalized = self._normalize_identifier(node_name)
-                if normalized:
-                    resolved_nodes.add(normalized)
+        if not resolved_nodes:
+            normalized = self._normalize_identifier(node_name)
+            if normalized:
+                resolved_nodes.add(normalized)
 
-            for resolved_key in resolved_nodes:
-                normalized_missing.pop(resolved_key, None)
+        for resolved_key in resolved_nodes:
+            normalized_missing.pop(resolved_key, None)
 
-            data["missing"] = list(normalized_missing.values())
-            repo = row_info.get("manager_repo")
-            if repo:
-                repo_key = self._normalize_repo_identifier(repo)
-                current_missing = data.get("missing_repos") or []
-                data["missing_repos"] = [
-                    entry for entry in current_missing if self._normalize_repo_identifier(entry) != repo_key
-                ]
-                current_disabled = data.get("disabled_repos") or []
-                data["disabled_repos"] = [
-                    entry for entry in current_disabled if self._normalize_repo_identifier(entry) != repo_key
-                ]
-
-        if note and "Restart ComfyUI" not in note:
-            self._append_issue_note("custom_nodes", note)
+        data["missing"] = list(normalized_missing.values())
+        repo = row_info.get("manager_repo")
+        if repo:
+            repo_key = self._normalize_repo_identifier(repo)
+            current_missing = data.get("missing_repos") or []
+            data["missing_repos"] = [
+                entry for entry in current_missing if self._normalize_repo_identifier(entry) != repo_key
+            ]
+            current_disabled = data.get("disabled_repos") or []
+            data["disabled_repos"] = [
+                entry for entry in current_disabled if self._normalize_repo_identifier(entry) != repo_key
+            ]
 
         self._refresh_custom_nodes_issue_status()
         self._update_overall_state()
