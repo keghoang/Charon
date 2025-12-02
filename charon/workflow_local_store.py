@@ -603,16 +603,24 @@ def _normalize_validation_payload(
                     pack, include_resolve=include_resolve
                 )
                 missing_packs.append(normalized_pack)
+            unresolved_packs = [
+                p
+                for p in missing_packs
+                if str(p.get("resolve_status") or "").strip().lower() not in {"success", "resolved", "installed"}
+            ]
             norm_data = {
                 "missing_packs": missing_packs,
             }
             total_nodes = sum(len(p.get("nodes") or []) for p in missing_packs)
-            summary = f"Missing {len(missing_packs)} custom node pack(s) ({total_nodes} nodes total)." if missing_packs else "All custom nodes registered in the active ComfyUI session."
+            if unresolved_packs:
+                summary = f"Missing {len(unresolved_packs)} custom node pack(s) ({total_nodes} nodes total)."
+            else:
+                summary = "All custom nodes registered in the active ComfyUI session."
             normalized_issues.append(
                 {
                     "key": "custom_nodes",
                     "label": issue.get("label") or "Custom nodes loaded",
-                    "ok": bool(not missing_packs),
+                    "ok": bool(not unresolved_packs),
                     "summary": summary,
                     "details": issue.get("details") or [],
                     "data": norm_data,
