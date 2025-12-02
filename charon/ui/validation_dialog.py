@@ -248,6 +248,10 @@ class IssueRow(QtWidgets.QWidget):
         text_v.setContentsMargins(0, 0, 0, 0)
         text_v.setSpacing(2)
         text_v.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        text_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
 
         self.lbl_title = QtWidgets.QLabel(title)
         self.lbl_title.setStyleSheet("font-size: 14px; color: {0};".format(COLORS["text_main"]))
@@ -255,6 +259,10 @@ class IssueRow(QtWidgets.QWidget):
         self.lbl_sub = QtWidgets.QLabel(subtitle)
         self.lbl_sub.setStyleSheet("font-size: 13px; color: {0};".format(COLORS["text_sub"]))
         self.lbl_sub.setWordWrap(True)
+        self.lbl_sub.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
 
         text_v.addWidget(self.lbl_title)
         text_v.addWidget(self.lbl_sub)
@@ -268,6 +276,7 @@ class IssueRow(QtWidgets.QWidget):
         row_h.addWidget(self.icon_lbl)
         row_h.addWidget(text_widget)
         row_h.addWidget(self.btn_resolve)
+        row_h.setStretch(1, 1)
 
         self.layout.addWidget(container)
 
