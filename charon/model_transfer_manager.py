@@ -62,6 +62,7 @@ class ModelTransferManager:
         state = self._transfers.get(key)
         if state:
             state.listeners.pop(listener_id, None)
+            self._prune_if_idle(state)
 
     def start_copy(
         self,
@@ -159,6 +160,15 @@ class ModelTransferManager:
                 callback(state)
             except Exception as exc:
                 system_warning(f"[Transfer] Listener error: {exc}")
+        self._prune_if_idle(state)
+
+    def _prune_if_idle(self, state: TransferState) -> None:
+        if state.in_progress:
+            return
+        if state.listeners:
+            return
+        key = self._key(state.destination)
+        self._transfers.pop(key, None)
 
     def _run_copy(self, state: TransferState) -> None:
         if not state.source:
