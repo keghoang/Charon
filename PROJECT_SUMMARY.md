@@ -11,6 +11,7 @@ Charon is a Nuke add-on that bridges the node graph to ComfyUI's API workflows. 
 - **Infrastructure (`charon/paths.py`, `charon/preferences.py`, `charon/config.py`, `charon/comfy_client.py`)** - Filesystem resolution, persisted settings, and REST utilities.
 
 Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay under `charon/resources/`.
+- Tiny Mode UI now pre-sizes rounded progress bars to avoid the entry-time width snap and keep cards visually grouped.
 
 ## 2. Typical Workflow
 1. **Launch** - In Nuke's Script Editor run:
