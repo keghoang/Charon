@@ -682,7 +682,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return
 
         if self._connected:
-            if self._send_shutdown_signal():
+            if self._send_shutdown_signal(allow_manager_reboot=False):
                 system_info("Sent shutdown request to the running ComfyUI instance.")
                 self._launch_in_progress = False
                 self._set_status("checking", False)
@@ -741,8 +741,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._restart_pending = False
             self._set_status("checking", False)
 
-    def _send_shutdown_signal(self) -> bool:
-        return send_shutdown_signal(self._DEFAULT_URL)
+    def _send_shutdown_signal(self, *, allow_manager_reboot: bool = True) -> bool:
+        return send_shutdown_signal(self._DEFAULT_URL, allow_manager_reboot=allow_manager_reboot)
 
     def _force_kill_comfy_processes(self) -> bool:
         comfy_env = resolve_comfy_environment(self._comfy_path)

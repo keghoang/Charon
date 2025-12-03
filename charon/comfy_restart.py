@@ -9,7 +9,7 @@ from .paths import resolve_comfy_environment
 DEFAULT_URL = "http://127.0.0.1:8188"
 
 
-def send_shutdown_signal(base_url: str = DEFAULT_URL) -> bool:
+def send_shutdown_signal(base_url: str = DEFAULT_URL, *, allow_manager_reboot: bool = True) -> bool:
     """
     Best-effort shutdown/restart request to a running ComfyUI instance.
     Mirrors the logic used by Comfy connection UI and validation flows.
@@ -19,8 +19,9 @@ def send_shutdown_signal(base_url: str = DEFAULT_URL) -> bool:
         ("POST", f"{base_url}/shutdown"),
         ("GET", f"{base_url}/system/shutdown"),
         ("GET", f"{base_url}/shutdown"),
-        ("GET", f"{base_url}/manager/reboot"),
     ]
+    if allow_manager_reboot:
+        endpoints.append(("GET", f"{base_url}/manager/reboot"))
     last_error = None
     for method, url in endpoints:
         try:
