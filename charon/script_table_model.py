@@ -199,6 +199,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 phase = int(entry.get("phase", 0)) if isinstance(entry, dict) else 0
                 if restart_required:
                     return "⚠ ComfyUI Restart required"
+                if state == "installing":
+                    return "Installing..."
                 if state == "validated":
                     return "✔ Ready"
                 if state == "needs_resolve":
@@ -218,6 +220,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                     return "Fix Issue"
                 if state == "validated":
                     return "Grab"
+                if state == "installing":
+                    return "Fix Issue"
                 if state == "needs_resolve":
                     return "Fix Issue"
                 if state == "validating":

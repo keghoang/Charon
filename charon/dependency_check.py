@@ -164,22 +164,22 @@ def ensure_manager_security_level(
             )
             return
 
-    manager_dirs = [
-        os.path.join(comfy_dir, "user", "default", "ComfyUI-Manager"),
-        os.path.join(comfy_dir, "user", "__manager"),
-    ]
-    manager_config = None
-    for candidate_dir in manager_dirs:
-        candidate_cfg = os.path.join(candidate_dir, "config.ini")
-        if os.path.exists(candidate_cfg):
-            manager_config = candidate_cfg
-            break
-    if manager_config is None:
-        manager_config = os.path.join(manager_dirs[0], "config.ini")
+        manager_dirs = [
+            os.path.join(comfy_dir, "user", "default", "ComfyUI-Manager"),
+            os.path.join(comfy_dir, "user", "__manager"),
+        ]
+        manager_config = None
+        for candidate_dir in manager_dirs:
+            candidate_cfg = os.path.join(candidate_dir, "config.ini")
+            if os.path.exists(candidate_cfg):
+                manager_config = candidate_cfg
+                break
+        if manager_config is None:
+            manager_config = os.path.join(manager_dirs[0], "config.ini")
 
-    parser = configparser.ConfigParser()
-    if os.path.exists(manager_config):
-        parser.read(manager_config, encoding="utf-8")
+        parser = configparser.ConfigParser()
+        if os.path.exists(manager_config):
+            parser.read(manager_config, encoding="utf-8")
 
         if not parser.has_section("default"):
             parser.add_section("default")

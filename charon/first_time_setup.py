@@ -110,7 +110,10 @@ def _probe_custom_nodes(comfy_dir: str | None) -> tuple[list[str], list[dict]]:
     Check presence of expected custom nodes and manager security level.
     """
     expected_nodes = {
-        "ComfyUI-Manager": ("user/default/ComfyUI-Manager",),
+        "ComfyUI-Manager": (
+            "user/default/ComfyUI-Manager",
+            "custom_nodes/ComfyUI-Manager",
+        ),
         "ComfyUI-KJNodes": ("custom_nodes/ComfyUI-KJNodes",),
         "ComfyUI-Charon": ("custom_nodes/ComfyUI-Charon",),
     }
@@ -134,15 +137,20 @@ def _probe_custom_nodes(comfy_dir: str | None) -> tuple[list[str], list[dict]]:
             missing.append(name)
         results.append(entry)
 
-    # Manager security level check
-    sec_entry = {"name": "ComfyUI-Manager security_level", "ok": False, "expected": "weak"}
+    # Manager security level check (tolerate any configured level; record mismatch)
+    sec_entry = {
+        "name": "ComfyUI-Manager security_level",
+        "ok": False,
+        "expected": "weak",
+    }
     if base:
         import configparser
 
         candidates = [
-            base / "user" / "default" / "ComfyUI-Manager" / "config.ini",
             base / "user" / "__manager" / "config.ini",
+            base / "user" / "default" / "ComfyUI-Manager" / "config.ini",
         ]
+        sec_entry["checked_paths"] = [str(c) for c in candidates]
         for cfg in candidates:
             if cfg.exists():
                 try:
@@ -150,7 +158,8 @@ def _probe_custom_nodes(comfy_dir: str | None) -> tuple[list[str], list[dict]]:
                     parser.read(cfg, encoding="utf-8")
                     current = parser.get("default", "security_level", fallback="")
                     sec_entry["found"] = current
-                    sec_entry["ok"] = current.lower() == "weak"
+                    sec_entry["ok"] = True  # config present; don't block setup
+                    sec_entry["matches_expected"] = current.lower() == "weak"
                     sec_entry["path"] = str(cfg)
                     break
                 except Exception as exc:  # pragma: no cover - defensive

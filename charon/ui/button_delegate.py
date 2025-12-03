@@ -76,7 +76,7 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
                 text_color = QtGui.QColor("#ffffff")
                 if opt.state & QtWidgets.QStyle.State_MouseOver:
                     background_color = background_color.lighter(110)
-            elif validation_state == "needs_resolve" or restart_required:
+            elif validation_state in {"needs_resolve", "installing"} or restart_required:
                 background_color = QtGui.QColor(0, 0, 0, 0)
                 border_color = QtGui.QColor("#4dabf7")
                 text_color = QtGui.QColor("#4dabf7")
