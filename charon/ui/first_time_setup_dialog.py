@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -179,6 +180,32 @@ def _has_manager(custom_nodes_dir: str) -> bool:
     return False
 
 
+def _download_and_extract_zip(repo_url: str, dest_dir: str, branch: str = "main") -> Tuple[bool, str]:
+    """
+    Fallback installer when git is unavailable: download a zip archive and unpack it into dest_dir.
+    """
+    try:
+        url = f"{repo_url.rstrip('/')}/archive/refs/heads/{branch}.zip"
+        download_root = Path(get_charon_temp_dir()) / "downloads"
+        ts = int(time.time())
+        download_root.mkdir(parents=True, exist_ok=True)
+        zip_path = download_root / f"{Path(dest_dir).name}_{ts}.zip"
+        extract_root = download_root / f"{Path(dest_dir).name}_{ts}"
+        with urllib.request.urlopen(url) as resp:
+            zip_path.write_bytes(resp.read())
+        extract_root.mkdir(parents=True, exist_ok=True)
+        shutil.unpack_archive(str(zip_path), str(extract_root))
+        candidates = [p for p in extract_root.iterdir() if p.is_dir()]
+        if not candidates:
+            return False, "Downloaded archive missing expected folder."
+        src_dir = candidates[0]
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        shutil.copytree(src_dir, dest_dir)
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _debug_log(message: str) -> None:
     """Append a debug message for setup wizard to the Charon debug folder."""
     try:
@@ -230,6 +257,9 @@ class FirstTimeSetupWorker(QtCore.QObject):
                 msg = "ComfyUI embedded Python not found. Please select the correct run_nvidia_gpu.bat."
                 self.finished.emit(False, [], msg)
                 return
+            git_path = shutil.which("git")
+            if not git_path:
+                _debug_log("git executable not found; will use zip fallbacks for node installs.")
 
             custom_nodes_dir = os.path.join(comfy_dir or "", "custom_nodes")
             manager_dir = os.path.join(custom_nodes_dir, "ComfyUI-Manager")
@@ -308,34 +338,60 @@ class FirstTimeSetupWorker(QtCore.QObject):
                 )
             if missing_manager:
                 statuses["manager"] = "installing"
-                tasks.append(
-                    (
-                        "Cloning ComfyUI-Manager...",
-                        [
-                            "git",
-                            "clone",
-                            "https://github.com/Comfy-Org/ComfyUI-Manager",
-                            manager_dir,
-                        ],
+                if git_path:
+                    tasks.append(
+                        (
+                            "Cloning ComfyUI-Manager...",
+                            [
+                                git_path,
+                                "clone",
+                                "https://github.com/Comfy-Org/ComfyUI-Manager",
+                                manager_dir,
+                            ],
+                        )
                     )
-                )
+                else:
+                    _emit_status(27, "Downloading ComfyUI-Manager (zip)...")
+                    ok, err = _download_and_extract_zip(
+                        "https://github.com/Comfy-Org/ComfyUI-Manager", manager_dir, branch="main"
+                    )
+                    _debug_log(f"[download] manager ok={ok} err={err}")
+                    if not ok:
+                        messages.append(f"ComfyUI-Manager download failed ({err})")
+                        statuses["manager"] = "failed"
+                        self.finished.emit(False, messages, err or "Failed to download ComfyUI-Manager")
+                        return
+                    messages.append("Downloaded ComfyUI-Manager (zip)")
                 _append_requirements_tasks(tasks, python_exe, manager_dir, "ComfyUI-Manager")
             else:
                 messages.append("ComfyUI-Manager already installed")
 
             if missing_kjnodes:
                 statuses["kjnodes"] = "installing"
-                tasks.append(
-                    (
-                        "Cloning ComfyUI-KJNodes...",
-                        [
-                            "git",
-                            "clone",
-                            "https://github.com/kijai/ComfyUI-KJNodes",
-                            kjnodes_dir,
-                        ],
+                if git_path:
+                    tasks.append(
+                        (
+                            "Cloning ComfyUI-KJNodes...",
+                            [
+                                git_path,
+                                "clone",
+                                "https://github.com/kijai/ComfyUI-KJNodes",
+                                kjnodes_dir,
+                            ],
+                        )
                     )
-                )
+                else:
+                    _emit_status(33, "Downloading ComfyUI-KJNodes (zip)...")
+                    ok, err = _download_and_extract_zip(
+                        "https://github.com/kijai/ComfyUI-KJNodes", kjnodes_dir, branch="main"
+                    )
+                    _debug_log(f"[download] kjnodes ok={ok} err={err}")
+                    if not ok:
+                        messages.append(f"ComfyUI-KJNodes download failed ({err})")
+                        statuses["kjnodes"] = "failed"
+                        self.finished.emit(False, messages, err or "Failed to download ComfyUI-KJNodes")
+                        return
+                    messages.append("Downloaded ComfyUI-KJNodes (zip)")
                 _append_requirements_tasks(tasks, python_exe, kjnodes_dir, "ComfyUI-KJNodes")
             else:
                 messages.append("ComfyUI-KJNodes already installed")
