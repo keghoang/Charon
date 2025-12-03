@@ -690,6 +690,22 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self._stop_restart_timer()
         self.comfy_running_preinstall = self._is_comfy_running()
 
+        if self.comfy_running_preinstall:
+            self.progress_timer.stop()
+            self.progress_val = 0
+            self.progress_target = 0
+            self.pbar.setValue(0)
+            self.install_ready_label.setVisible(False)
+            self.install_desc.setText("ComfyUI is currently running. Please close it before continuing setup.")
+            self.install_status_label.setText(
+                "Stop the running ComfyUI session, then click Retry to install dependencies safely."
+            )
+            self.install_status_label.setVisible(True)
+            self.btn_next.setEnabled(True)
+            self.btn_next.setText("Retry")
+            _debug_log("blocked setup: ComfyUI detected running before installation")
+            return
+
         if not self.comfy_path:
             QtWidgets.QMessageBox.warning(
                 self,
