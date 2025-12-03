@@ -77,6 +77,8 @@ class CharonWindow(QtWidgets.QWidget):
 
         self._footer_comfy_layout: Optional[QtWidgets.QHBoxLayout] = None
         self._comfy_widget_in_tiny_mode: bool = False
+        self._refresh_in_progress: bool = False
+        self._last_refresh_time: float = 0.0
 
         resolved_global_path = global_path or config.WORKFLOW_REPOSITORY_ROOT
         self.global_path = resolved_global_path
@@ -256,19 +258,9 @@ class CharonWindow(QtWidgets.QWidget):
         # Clear the cached folder list for the current base
         if self.current_base:
             folder_list_cache_key = f"folders:{self.current_base}"
-            if folder_list_cache_key in cache_manager.general_cache:
-                del cache_manager.general_cache[folder_list_cache_key]
-                system_debug(f"Cleared folder list cache for {self.current_base}")
-        
-        # Invalidate all folders in the current base
-        if self.current_base and os.path.exists(self.current_base):
-            try:
-                with os.scandir(self.current_base) as entries:
-                    for entry in entries:
-                        if entry.is_dir():
-                            cache_manager.invalidate_folder(entry.path)
-            except Exception as e:
-                system_error(f"Error clearing cache: {e}")
+            cache_manager.invalidate_cached_data(folder_list_cache_key)
+            system_debug(f"Cleared folder list cache for {self.current_base}")
+            cache_manager.invalidate_base_path(self.current_base)
         
         # Store current selection
         current_folder = self.folder_panel.get_selected_folder()
@@ -2304,7 +2296,7 @@ QPushButton#NewWorkflowButton:pressed {{
             stats = cache_manager.get_stats()
             
             tooltip = f"""Refresh metadata and re-index quick search (Ctrl+R)
-            
+        
 Cache Stats:
 - Folders cached: {stats['folder_cache_size']}
 - Tags cached: {stats['tag_cache_size']}
@@ -2316,8 +2308,29 @@ Cache Stats:
             # Don't break if cache manager not available
             pass
 
+    def _set_refresh_enabled(self, enabled: bool):
+        """Enable/disable refresh triggers to prevent overlapping work."""
+        try:
+            if hasattr(self, "header_refresh_button"):
+                self.header_refresh_button.setEnabled(enabled)
+        except Exception:
+            pass
+
     def on_refresh_clicked(self):
         """Handle the refresh button click."""
+        # Throttle repeated clicks to avoid overlapping work in background threads
+        now = time.monotonic()
+        if self._refresh_in_progress:
+            system_debug("Refresh already in progress; ignoring additional trigger")
+            return
+        if now - getattr(self, "_last_refresh_time", 0.0) < 0.35:
+            system_debug("Refresh ignored due to rapid re-trigger")
+            return
+
+        self._refresh_in_progress = True
+        self._last_refresh_time = now
+        self._set_refresh_enabled(False)
+
         # Store current focus widget to restore it later
         current_focus = QtWidgets.QApplication.focusWidget()
         
@@ -2347,9 +2360,8 @@ Cache Stats:
                 
                 # Clear the cached folder list to ensure we pick up new folders
                 folder_list_cache_key = f"folders:{self.current_base}"
-                if folder_list_cache_key in cache_manager.general_cache:
-                    del cache_manager.general_cache[folder_list_cache_key]
-                    system_debug(f"Cleared folder list cache for {self.current_base}")
+                cache_manager.invalidate_cached_data(folder_list_cache_key)
+                system_debug(f"Cleared folder list cache for {self.current_base}")
                 
                 # Invalidate folder in persistent cache
                 cache_manager.invalidate_folder(folder_path)
@@ -2407,6 +2419,8 @@ Cache Stats:
                 except RuntimeError:
                     # Widget was deleted during refresh (e.g., tag buttons)
                     pass
+            self._refresh_in_progress = False
+            self._set_refresh_enabled(True)
 
     def open_settings(self):
         """Open the settings dialog"""

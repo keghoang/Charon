@@ -49,7 +49,13 @@ class BaseScriptLoader(QtCore.QThread):
         """Signal the thread to stop loading"""
         self._should_stop = True
         if self.isRunning():
-            self.wait(1000)  # Wait up to 1 second for thread to finish
+            try:
+                self.requestInterruption()
+                self.quit()
+            except Exception:
+                pass
+            # Non-blocking wait so UI thread stays responsive
+            self.wait(0)
 
     def _load_script_item(self, script_path, script_name, metadata):
         """Common method to create ScriptItem"""
@@ -70,6 +76,9 @@ class GlobalIndexLoader(BaseScriptLoader):
     def load_index(self, base_path):
         if self.isRunning():
             self.stop_loading()
+            if self.isRunning():
+                QtCore.QTimer.singleShot(50, lambda bp=base_path: self.load_index(bp))
+                return
         self.base_path = base_path
         self._should_stop = False
         self.start()
@@ -208,6 +217,11 @@ class FolderLoader(BaseScriptLoader):
     
     def load_folder(self, folder_path, host="None"):
         """Start loading scripts from the given folder path"""
+        if self.isRunning():
+            self.stop_loading()
+            if self.isRunning():
+                QtCore.QTimer.singleShot(50, lambda fp=folder_path, h=host: self.load_folder(fp, h))
+                return
         self.folder_path = folder_path
         self.host = host
         self._should_stop = False
