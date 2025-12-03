@@ -12,6 +12,7 @@ from ..comfy_client import ComfyUIClient
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 
 from ..comfy_restart import send_shutdown_signal
 
@@ -680,6 +681,15 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             QtCore.QTimer.singleShot(1500, lambda: self._check_connection(manual=False))
             return
 
+        if self._connected:
+            if self._send_shutdown_signal():
+                system_info("Sent shutdown request to the running ComfyUI instance.")
+                self._launch_in_progress = False
+                self._set_status("checking", False)
+                QtCore.QTimer.singleShot(2000, lambda: self._check_connection(manual=False))
+                return
+            system_warning("ComfyUI shutdown request did not respond; attempting force kill.")
+
         forced = self._force_kill_comfy_processes()
         if forced:
             system_info("Force-terminated ComfyUI processes.")
@@ -739,8 +749,11 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         comfy_dir = comfy_env.get("comfy_dir") or ""
         base_dir = comfy_env.get("base_dir") or ""
         candidates = {os.path.normpath(p) for p in (comfy_dir, base_dir) if p}
+        port_hint = urlparse(self._DEFAULT_URL).port or 8188
+        name_hints = {"comfyui", "comfy_ui"}
         if not candidates:
-            return False
+            # Still try to find ComfyUI by name or listening port if paths are unknown.
+            candidates = set()
 
         try:
             import psutil  # type: ignore
@@ -749,12 +762,45 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return False
 
         killed = False
+        port_pids = set()
+        try:
+            port_pids = {
+                conn.pid
+                for conn in psutil.net_connections(kind="inet")
+                if conn.pid and getattr(conn.laddr, "port", None) == port_hint
+            }
+        except Exception:
+            # AccessDenied is common on Windows without elevation; fall back to per-process scan.
+            port_pids = set()
+
         for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
             try:
-                exe = proc.info.get("exe") or ""
-                cmdline = " ".join(proc.info.get("cmdline") or [])
-                haystack = (exe.lower(), cmdline.lower())
-                if any(candidate.lower() in text for candidate in candidates for text in haystack):
+                exe = (proc.info.get("exe") or "").lower()
+                cmdline_list = proc.info.get("cmdline") or []
+                cmdline = " ".join(cmdline_list).lower()
+                haystack = (exe, cmdline)
+                matches_path = any(
+                    candidate.lower() in text for candidate in candidates for text in haystack
+                )
+                matches_name = any(hint in exe or hint in cmdline for hint in name_hints)
+                matches_port = proc.info.get("pid") in port_pids
+                if not matches_port:
+                    try:
+                        for conn in proc.connections(kind="inet"):
+                            laddr = getattr(conn, "laddr", None)
+                            if laddr and getattr(laddr, "port", None) == port_hint:
+                                matches_port = True
+                                break
+                    except Exception:
+                        # AccessDenied and zombie processes are expected occasionally.
+                        pass
+
+                # Match by install path, default port, or process name to catch external launches.
+                if matches_path or matches_port or matches_name:
+                    system_debug(
+                        f"Force-killing ComfyUI candidate PID {proc.pid} "
+                        f"(name={proc.info.get('name')}, exe={proc.info.get('exe')})"
+                    )
                     proc.kill()
                     killed = True
             except Exception:
