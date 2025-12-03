@@ -125,9 +125,14 @@ def collect_model_replacements_from_validation(remote_folder: str) -> List[Tuple
         data = issue.get("data") or {}
         models_root = str(data.get("models_root") or "")
         found_paths = [path for path in data.get("found") or [] if isinstance(path, str)]
+        category_paths = data.get("model_paths")
+        if not isinstance(category_paths, dict):
+            category_paths = {}
         missing_models = data.get("missing_models") or []
         for entry in missing_models:
-            replacement = _replacement_for_missing_model(entry, models_root, found_paths)
+            replacement = _replacement_for_missing_model(
+                entry, models_root, found_paths, category_paths
+            )
             if replacement:
                 replacements.append(replacement)
 
@@ -164,6 +169,7 @@ def _replacement_for_missing_model(
     entry: Any,
     models_root: str,
     found_paths: Sequence[str],
+    category_paths: Optional[Dict[str, Sequence[str]]] = None,
 ) -> Optional[Tuple[str, str]]:
     if not isinstance(entry, dict):
         return None
@@ -176,13 +182,30 @@ def _replacement_for_missing_model(
         return None
 
     category = str(entry.get("category") or "").strip()
+    attempted_categories = [
+        str(value).strip()
+        for value in entry.get("attempted_categories") or []
+        if isinstance(value, str) and str(value).strip()
+    ]
+    attempted_directories = [
+        str(value).strip()
+        for value in entry.get("attempted_directories") or []
+        if isinstance(value, str) and str(value).strip()
+    ]
     path_hint = _match_found_path(original, category, found_paths, models_root)
     if not path_hint:
         path_hint = _extract_path_from_text(entry.get("resolve_method"))
     if not path_hint:
         return None
 
-    resolved_value = _normalize_resolved_value(path_hint, models_root, category)
+    resolved_value = _normalize_resolved_value(
+        path_hint,
+        models_root,
+        category,
+        attempted_directories,
+        attempted_categories,
+        category_paths,
+    )
     normalized_original = _normalize_path(original)
     if not resolved_value or resolved_value == normalized_original:
         return None
@@ -221,15 +244,44 @@ def _match_found_path(
             best = abs_candidate
 
     return best
-
-
-def _normalize_resolved_value(path_value: str, models_root: str, category: str) -> str:
+def _normalize_resolved_value(
+    path_value: str,
+    models_root: str,
+    category: str,
+    attempted_directories: Optional[Sequence[str]] = None,
+    attempted_categories: Optional[Sequence[str]] = None,
+    category_paths: Optional[Dict[str, Sequence[str]]] = None,
+) -> str:
     normalized = _relativize_model_path(path_value, models_root)
+    if not normalized:
+        return normalized
+
+    hints: set[str] = set()
+    category_normalized = category.strip().lower() if category else ""
+    if category_normalized:
+        hints.add(category_normalized)
+    for value in attempted_categories or []:
+        candidate = str(value or "").strip().lower()
+        if candidate:
+            hints.add(candidate)
+    for value in attempted_directories or []:
+        candidate = os.path.basename(str(value or "").replace("\\", "/")).strip().lower()
+        if candidate:
+            hints.add(candidate)
+    if category_paths and category_normalized:
+        for value in category_paths.get(category, []):
+            candidate = os.path.basename(str(value or "").replace("\\", "/")).strip().lower()
+            if candidate:
+                hints.add(candidate)
+
     segments = [segment for segment in normalized.split("/") if segment]
-    if category:
-        cat_lower = category.lower()
-        if segments and segments[0].lower() == cat_lower:
-            normalized = "/".join(segments[1:]) if len(segments) > 1 else segments[0]
+    is_absolute = normalized.startswith("//") or os.path.isabs(normalized)
+    if segments and not is_absolute and len(segments) > 1:
+        if segments[0].lower() in hints:
+            segments = segments[1:]
+    if segments:
+        normalized = "/".join(segments)
+
     return _format_for_api_path(normalized)
 
 

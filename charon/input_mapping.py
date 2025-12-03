@@ -441,6 +441,12 @@ def _infer_widget_names(node_data: Dict[str, Any]) -> List[str]:
         if inferred:
             return inferred
 
+    inputs = node_data.get("inputs")
+    if isinstance(inputs, dict):
+        ordered = [str(name) for name in inputs.keys() if name]
+        if ordered:
+            return ordered
+
     return []
 
 
