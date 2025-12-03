@@ -1,0 +1,10 @@
+# Step 2 dependencies (ComfyUI embedded env)
+playwright
+trimesh
+
+# Installed custom nodes
+# - ComfyUI-Manager
+# - ComfyUI-KJNodes
+# - ComfyUI-Charon (from custom_nodes/comfyUI/ComfyUI-Charon)
+
+# Security note: Manager config set to security_level="weak".
