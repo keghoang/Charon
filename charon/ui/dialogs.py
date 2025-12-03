@@ -51,6 +51,25 @@ def _compute_workflow_hash(path: str) -> Optional[str]:
         return None
 
 
+def _is_placeholder_label(label: Optional[str]) -> bool:
+    """Return True when the label is just a widgets_values placeholder."""
+    if not label:
+        return False
+    normalized = str(label).strip().lower()
+    return normalized.startswith("widgets_values[") and normalized.endswith("]")
+
+
+def _has_meaningful_labels(candidates: Tuple[ExposableNode, ...]) -> bool:
+    """Detect whether any attribute has a descriptive label."""
+    for node in candidates or ():
+        for attr in node.attributes or ():
+            label_placeholder = _is_placeholder_label(attr.label)
+            key_placeholder = _is_placeholder_label(attr.key)
+            if not label_placeholder and not key_placeholder:
+                return True
+    return False
+
+
 def _serialize_candidates(candidates: Tuple[ExposableNode, ...]) -> List[Dict[str, Any]]:
     serialized: List[Dict[str, Any]] = []
     for node in candidates or ():
@@ -146,6 +165,9 @@ def _store_cached_parameters(path: Optional[str], data) -> None:
         return
 
     candidates = tuple(data or ())
+    if not _has_meaningful_labels(candidates):
+        system_debug("Parameter discovery yielded only placeholder labels; skipping cache write.")
+        return
     payload = {
         "schema": _CACHE_SCHEMA_VERSION,
         "workflow_hash": workflow_hash,
@@ -721,11 +743,13 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_group.setTitle(base_title)
 
         cached = _get_cached_parameters(self._workflow_path)
-        if cached is not None:
+        if cached is not None and _has_meaningful_labels(cached):
             self._stop_scan_animation()
             system_debug("Metadata dialog loaded parameters from cache.")
             self._render_parameter_candidates(cached)
             return
+        if cached is not None:
+            system_debug("Cached parameters only contained placeholder labels; resuming discovery.")
 
         self._cancel_parameter_discovery()
 
