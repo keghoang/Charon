@@ -1983,10 +1983,6 @@ def process_charonop_node():
             if input_node is not None:
                 connected_inputs[index] = input_node
 
-        if not connected_inputs:
-            log_debug('Please connect at least one input node', 'ERROR')
-            raise RuntimeError('Please connect at least one input node before processing')
-
         render_jobs = []
         ensure_placeholder_read_node()
         if isinstance(input_mapping, list):
@@ -2002,13 +1998,17 @@ def process_charonop_node():
                     'node': connected_inputs[index]
                 })
 
-        if not render_jobs:
+        expected_inputs = len(input_mapping) if isinstance(input_mapping, list) else 0
+        if not render_jobs and connected_inputs:
             first_index, first_node = next(iter(connected_inputs.items()))
             render_jobs.append({
                 'index': first_index,
                 'mapping': {'name': f'Input {first_index + 1}', 'type': 'image'},
                 'node': first_node
             })
+        elif not render_jobs and expected_inputs > 0:
+            log_debug('Expected input nodes but none are connected', 'ERROR')
+            raise RuntimeError('Please connect the required input nodes before processing')
 
         primary_job = None
         for job in render_jobs:
@@ -2016,71 +2016,72 @@ def process_charonop_node():
             if isinstance(mapping, dict) and mapping.get('type') == 'image':
                 primary_job = job
                 break
-        if not primary_job:
+        if not primary_job and render_jobs:
             primary_job = render_jobs[0]
-        primary_index = primary_job['index']
+        primary_index = primary_job['index'] if primary_job else None
 
         rendered_files = {}
-        current_frame = int(nuke.frame())
-        for job in render_jobs:
-            idx = job['index']
-            mapping = job.get('mapping', {})
-            input_node = job['node']
-            friendly_name = mapping.get('name', f'Input {idx + 1}') if isinstance(mapping, dict) else f'Input {idx + 1}'
-            safe_tag = ''.join(c if c.isalnum() else '_' for c in friendly_name).strip('_') or f'input_{idx + 1}'
-            temp_path = os.path.join(temp_dir, f'charon_{safe_tag}_{str(uuid.uuid4())[:8]}.png')
-            temp_path_nuke = temp_path.replace('\\', '/')
+        if render_jobs:
+            current_frame = int(nuke.frame())
+            for job in render_jobs:
+                idx = job['index']
+                mapping = job.get('mapping', {})
+                input_node = job['node']
+                friendly_name = mapping.get('name', f'Input {idx + 1}') if isinstance(mapping, dict) else f'Input {idx + 1}'
+                safe_tag = ''.join(c if c.isalnum() else '_' for c in friendly_name).strip('_') or f'input_{idx + 1}'
+                temp_path = os.path.join(temp_dir, f'charon_{safe_tag}_{str(uuid.uuid4())[:8]}.png')
+                temp_path_nuke = temp_path.replace('\\', '/')
 
-            source_node = input_node
-            shuffle_node = None
-            try:
-                channels = source_node.channels()
-            except Exception:
-                channels = []
-            has_rgb = any(
-                ch.endswith(".red") or ch.endswith(".green") or ch.endswith(".blue")
-                for ch in channels or []
-            )
-            has_alpha = any(ch.endswith(".alpha") for ch in channels or [])
-            if not has_rgb and has_alpha:
+                source_node = input_node
+                shuffle_node = None
                 try:
-                    shuffle_node = nuke.createNode('Shuffle', inpanel=False)
-                    shuffle_node.setInput(0, source_node)
-                    for channel in ("red", "green", "blue", "alpha"):
-                        try:
-                            shuffle_node[channel].setValue("alpha")
-                        except Exception:
-                            pass
-                    source_node = shuffle_node
-                    log_debug(f"Inserted Shuffle to promote alpha for '{friendly_name}'")
-                except Exception as shuffle_error:
-                    log_debug(f"Failed to insert Shuffle for '{friendly_name}': {shuffle_error}", 'WARNING')
+                    channels = source_node.channels()
+                except Exception:
+                    channels = []
+                has_rgb = any(
+                    ch.endswith(".red") or ch.endswith(".green") or ch.endswith(".blue")
+                    for ch in channels or []
+                )
+                has_alpha = any(ch.endswith(".alpha") for ch in channels or [])
+                if not has_rgb and has_alpha:
+                    try:
+                        shuffle_node = nuke.createNode('Shuffle', inpanel=False)
+                        shuffle_node.setInput(0, source_node)
+                        for channel in ("red", "green", "blue", "alpha"):
+                            try:
+                                shuffle_node[channel].setValue("alpha")
+                            except Exception:
+                                pass
+                        source_node = shuffle_node
+                        log_debug(f"Inserted Shuffle to promote alpha for '{friendly_name}'")
+                    except Exception as shuffle_error:
+                        log_debug(f"Failed to insert Shuffle for '{friendly_name}': {shuffle_error}", 'WARNING')
+                        if shuffle_node:
+                            try:
+                                nuke.delete(shuffle_node)
+                            except Exception:
+                                pass
+                        shuffle_node = None
+
+                write_node = nuke.createNode('Write', inpanel=False)
+                write_node['file'].setValue(temp_path_nuke)
+                write_node['file_type'].setValue('png')
+                write_node.setInput(0, source_node)
+                try:
+                    nuke.execute(write_node, current_frame, current_frame)
+                finally:
+                    try:
+                        nuke.delete(write_node)
+                    except Exception:
+                        pass
                     if shuffle_node:
                         try:
                             nuke.delete(shuffle_node)
                         except Exception:
                             pass
-                    shuffle_node = None
 
-            write_node = nuke.createNode('Write', inpanel=False)
-            write_node['file'].setValue(temp_path_nuke)
-            write_node['file_type'].setValue('png')
-            write_node.setInput(0, source_node)
-            try:
-                nuke.execute(write_node, current_frame, current_frame)
-            finally:
-                try:
-                    nuke.delete(write_node)
-                except Exception:
-                    pass
-                if shuffle_node:
-                    try:
-                        nuke.delete(shuffle_node)
-                    except Exception:
-                        pass
-
-            rendered_files[idx] = temp_path
-            log_debug(f"Rendered '{friendly_name}' to {temp_path_nuke}")
+                rendered_files[idx] = temp_path
+                log_debug(f"Rendered '{friendly_name}' to {temp_path_nuke}")
 
         _charon_window, comfy_client, comfy_path = _resolve_comfy_environment()
         if not comfy_client:
@@ -2335,7 +2336,10 @@ def process_charonop_node():
                 else:
                     parameter_specs_local = parameter_specs
 
-                update_progress(0.2, 'Uploading images', extra=conversion_extra or None)
+                if render_jobs:
+                    update_progress(0.2, 'Uploading images', extra=conversion_extra or None)
+                else:
+                    update_progress(0.2, 'Preparing submission', extra=conversion_extra or None)
 
                 workflow_copy = copy.deepcopy(prompt_data)
                 applied_overrides = _apply_parameter_overrides(
@@ -2413,7 +2417,7 @@ def process_charonop_node():
                                 if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
                                     assign_to_node(target_id, uploaded_filename)
                                     break
-                else:
+                elif render_jobs:
                     filename = uploaded_assets.get(primary_index)
                     if filename:
                         for target_id, target_data in workflow_copy.items():
@@ -2506,6 +2510,131 @@ def process_charonop_node():
                                             _append_artifact(candidate, "meshes")
                     return artifacts
 
+                def _recover_cached_artifacts(prompt_payload: Dict[str, Any], current_prompt_id: Optional[str]) -> List[Dict[str, Any]]:
+                    """
+                    When ComfyUI serves a fully cached execution without outputs, try to reuse
+                    outputs from the most recent matching prompt in history.
+                    """
+                    try:
+                        prompt_hash = compute_workflow_hash(prompt_payload)
+                    except Exception as exc:
+                        log_debug(f"Could not hash prompt for cache lookup: {exc}", "WARNING")
+                        return []
+
+                    try:
+                        history_map = comfy_client.get_full_history()
+                    except Exception as exc:
+                        log_debug(f"Failed to read ComfyUI history for cache reuse: {exc}", "WARNING")
+                        return []
+
+                    if not isinstance(history_map, dict):
+                        return []
+
+                    def _completion_timestamp(entry: Dict[str, Any]) -> int:
+                        messages = entry.get("status", {}).get("messages") or []
+                        for name, payload in reversed(messages):
+                            if isinstance(payload, dict) and "timestamp" in payload:
+                                try:
+                                    return int(payload["timestamp"])
+                                except Exception:
+                                    continue
+                        return 0
+
+                    sorted_history = sorted(
+                        history_map.items(),
+                        key=lambda item: _completion_timestamp(item[1]) if isinstance(item[1], dict) else 0,
+                        reverse=True,
+                    )
+
+                    for candidate_id, entry in sorted_history:
+                        if candidate_id == current_prompt_id or not isinstance(entry, dict):
+                            continue
+
+                        prompt_field = entry.get("prompt")
+                        candidate_prompt = None
+                        if isinstance(prompt_field, list) and len(prompt_field) >= 3:
+                            candidate_prompt = prompt_field[2]
+                        elif isinstance(prompt_field, dict):
+                            candidate_prompt = prompt_field
+
+                        if not isinstance(candidate_prompt, dict):
+                            continue
+
+                        try:
+                            candidate_hash = compute_workflow_hash(candidate_prompt)
+                        except Exception:
+                            continue
+
+                        if candidate_hash != prompt_hash:
+                            continue
+
+                        candidate_outputs = entry.get("outputs") or {}
+                        recovered = _collect_output_artifacts(candidate_outputs, candidate_prompt)
+                        if recovered:
+                            log_debug(f"Reused cached ComfyUI outputs from prompt {candidate_id}")
+                            return recovered
+
+                    return []
+
+                def _recover_artifacts_by_prefix(expected_prefixes: List[str]) -> List[Dict[str, Any]]:
+                    """
+                    Secondary recovery path: reuse any recent outputs whose filenames match
+                    the expected SaveImage filename prefixes.
+                    """
+                    if not expected_prefixes:
+                        return []
+                    try:
+                        history_map = comfy_client.get_full_history()
+                    except Exception as exc:
+                        log_debug(f"Failed to read ComfyUI history for prefix-based reuse: {exc}", "WARNING")
+                        return []
+                    if not isinstance(history_map, dict):
+                        return []
+
+                    def _completion_timestamp(entry: Dict[str, Any]) -> int:
+                        messages = entry.get("status", {}).get("messages") or []
+                        for name, payload in reversed(messages):
+                            if isinstance(payload, dict) and "timestamp" in payload:
+                                try:
+                                    return int(payload["timestamp"])
+                                except Exception:
+                                    continue
+                        return 0
+
+                    sorted_history = sorted(
+                        history_map.items(),
+                        key=lambda item: _completion_timestamp(item[1]) if isinstance(item[1], dict) else 0,
+                        reverse=True,
+                    )
+                    lowered_prefixes = [p.lower() for p in expected_prefixes if p]
+
+                    for candidate_id, entry in sorted_history:
+                        if not isinstance(entry, dict):
+                            continue
+                        prompt_field = entry.get("prompt")
+                        if isinstance(prompt_field, list) and len(prompt_field) >= 3:
+                            candidate_prompt = prompt_field[2]
+                        elif isinstance(prompt_field, dict):
+                            candidate_prompt = prompt_field
+                        else:
+                            candidate_prompt = {}
+
+                        candidate_outputs = entry.get("outputs") or {}
+                        recovered = _collect_output_artifacts(candidate_outputs, candidate_prompt)
+                        if not recovered:
+                            continue
+
+                        for artifact in recovered:
+                            filename = str(artifact.get("filename") or "").lower()
+                            for prefix in lowered_prefixes:
+                                if prefix and filename.startswith(prefix):
+                                    log_debug(
+                                        f"Reused cached ComfyUI outputs with prefix match from prompt {candidate_id}"
+                                    )
+                                    return recovered
+
+                    return []
+
 
                 for batch_index in range(batch_count):
                     seed_offset = batch_index * 9973
@@ -2567,6 +2696,20 @@ def process_charonop_node():
                                 if status_str == 'success':
                                     outputs = history_data.get('outputs', {})
                                     artifacts = _collect_output_artifacts(outputs, base_prompt) if outputs else []
+                                    if not artifacts:
+                                        artifacts = _recover_cached_artifacts(prompt_payload, prompt_id)
+                                    if not artifacts:
+                                        # Attempt prefix-based recovery using any SaveImage filename prefixes
+                                        prefixes = []
+                                        for node_entry in prompt_payload.values():
+                                            if not isinstance(node_entry, dict):
+                                                continue
+                                            if (node_entry.get("class_type") or "").lower() == "saveimage":
+                                                prefix_val = node_entry.get("inputs", {}).get("filename_prefix")
+                                                if isinstance(prefix_val, str):
+                                                    prefixes.append(prefix_val)
+                                        if prefixes:
+                                            artifacts = _recover_artifacts_by_prefix(prefixes)
                                     if not artifacts:
                                         raise Exception('ComfyUI did not return an output file')
 

@@ -118,6 +118,18 @@ class ComfyUIClient:
             logger.error("Failed to get history: %s", exc)
             return None
 
+    def get_full_history(self):
+        """Return the complete history map from ComfyUI."""
+        try:
+            request = urllib.request.Request(f"{self.base_url}/history")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.getcode() == 200:
+                    return json.loads(response.read().decode("utf-8"))
+            return None
+        except Exception as exc:
+            logger.error("Failed to get full history: %s", exc)
+            return None
+
     def get_queue_status(self):
         """Get current queue status and progress info."""
         try:

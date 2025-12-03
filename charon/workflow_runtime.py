@@ -136,9 +136,14 @@ def spawn_charon_node(
 
     if "nodes" in workflow:
         inputs = analyze_ui_workflow_inputs(workflow)
+        has_load_nodes = _workflow_has_load_nodes_ui(workflow)
     else:
         inputs = analyze_workflow_inputs(workflow)
-    if not inputs:
+        has_load_nodes = _workflow_has_load_nodes_api(workflow)
+
+    if not inputs and not has_load_nodes:
+        inputs = []
+    elif not inputs and has_load_nodes:
         inputs = _default_inputs()
 
     temp_dir = get_charon_temp_dir()
@@ -199,6 +204,31 @@ def _default_inputs() -> List[Dict[str, Any]]:
             "source": "default",
         }
     ]
+
+
+def _workflow_has_load_nodes_ui(ui_workflow: Dict[str, Any]) -> bool:
+    """Return True if the UI workflow declares any load-image style nodes."""
+    if not isinstance(ui_workflow, dict):
+        return False
+    nodes = ui_workflow.get("nodes") or []
+    for node in nodes:
+        node_type = str(node.get("type") or "").strip()
+        if node_type in {"LoadImage", "LoadImageMask", "LoadImageBuiltin", "LoadImageFromBase64", "LoadImageFromURL"}:
+            return True
+    return False
+
+
+def _workflow_has_load_nodes_api(api_workflow: Dict[str, Any]) -> bool:
+    """Return True if the API workflow declares any load-image style nodes."""
+    if not isinstance(api_workflow, dict):
+        return False
+    for node_data in api_workflow.values():
+        if not isinstance(node_data, dict):
+            continue
+        class_type = str(node_data.get("class_type") or "").strip()
+        if class_type in {"LoadImage", "LoadImageMask", "LoadImageBuiltin", "LoadImageFromBase64", "LoadImageFromURL"}:
+            return True
+    return False
 
 
 def _build_processor_script() -> str:
