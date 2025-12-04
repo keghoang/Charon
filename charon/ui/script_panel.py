@@ -289,6 +289,35 @@ class ScriptPanel(QtWidgets.QWidget):
         # Create the background loader
         self.folder_loader = workflow_model.FolderLoader(self)
         self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
+        self.folder_loader.finished.connect(self._on_folder_load_finished)
+
+    def _reset_folder_loader(self):
+        """Replace the loader so a stuck thread can't block new selections."""
+        old_loader = getattr(self, "folder_loader", None)
+        if old_loader:
+            try:
+                old_loader.scripts_loaded.disconnect(self.on_scripts_loaded)
+            except Exception:
+                pass
+            try:
+                old_loader.stop_loading()
+            except Exception:
+                pass
+            try:
+                old_loader.finished.connect(old_loader.deleteLater)
+            except Exception:
+                pass
+        self.folder_loader = workflow_model.FolderLoader(self)
+        self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
+        self.folder_loader.finished.connect(self._on_folder_load_finished)
+
+    def _on_folder_load_finished(self):
+        """Ensure UI is re-enabled even if a load was interrupted."""
+        self._loading = False
+        try:
+            self.script_view.setEnabled(True)
+        except Exception:
+            pass
     
     def _normalize_script_path(self, script_path: str) -> str:
         return os.path.normpath(script_path or "").lower()
@@ -320,12 +349,19 @@ class ScriptPanel(QtWidgets.QWidget):
         return inferred or fallback
 
     def _read_validation_cache(self, script_path: str):
+        normalized = self._normalize_script_path(script_path)
+        if normalized in self._validation_cache:
+            return self._validation_cache[normalized]
+
         resolved_payload = load_validation_resolve_status(script_path or "")
         if isinstance(resolved_payload, dict):
             state = self._derive_state_from_payload(resolved_payload, fallback="needs_resolve")
-            normalized = self._normalize_script_path(script_path)
-            self._validation_cache[normalized] = {"state": state, "payload": resolved_payload}
-            return {"state": state, "payload": resolved_payload}
+            entry = {"state": state, "payload": resolved_payload}
+            self._validation_cache[normalized] = entry
+            return entry
+        
+        # Cache the miss to avoid repeated lookups
+        self._validation_cache[normalized] = None
         return None
 
     def _write_validation_cache(self, script_path: str, state: str, payload) -> None:
@@ -345,16 +381,16 @@ class ScriptPanel(QtWidgets.QWidget):
             cached = self._read_validation_cache(script.path)
             if not cached:
                 continue
-            state = cached.get("state")
-            payload = cached.get("payload")
-            if isinstance(payload, dict):
-                restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
-                if restart_required and state == "validated":
-                    state = "needs_resolve"
-            if isinstance(state, str):
-                self.script_model.set_validation_state(script.path, state, payload)
-                normalized = self._normalize_script_path(script.path)
-                self._validation_cache[normalized] = cached
+            # Only apply if we have actual state data, ignore sentinel
+            if cached.get("state"):
+                state = cached.get("state")
+                payload = cached.get("payload")
+                if isinstance(payload, dict):
+                    restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
+                    if restart_required and state == "validated":
+                        state = "needs_resolve"
+                if isinstance(state, str):
+                    self.script_model.set_validation_state(script.path, state, payload)
 
     def set_host(self, host):
         """Set the host software after initialization"""
@@ -386,8 +422,12 @@ class ScriptPanel(QtWidgets.QWidget):
 
     def load_scripts_for_folder(self, folder_path):
         """Load scripts from a folder using background thread"""
-        if self._loading:
-            self.folder_loader.stop_loading()
+        if self.folder_loader.isRunning():
+            self._reset_folder_loader()
+            self._loading = False
+        elif self._loading:
+            # Previous load finished without emitting scripts_loaded (cancelled)
+            self._on_folder_load_finished()
         
         # Check if we're in navigation context (from parent main window)
         main_window = self.window()
@@ -428,6 +468,16 @@ class ScriptPanel(QtWidgets.QWidget):
         self._loading = True
         # Show loading state
         self.script_view.setEnabled(False)
+
+        # Fail-safe: re-enable the view if loading takes too long
+        def _failsafe_enable():
+            if self._loading:
+                self._loading = False
+                try:
+                    self.script_view.setEnabled(True)
+                except Exception:
+                    pass
+        QtCore.QTimer.singleShot(3000, _failsafe_enable)
         
         # Start background loading
         self.folder_loader.load_folder(folder_path, self.host or "None")
@@ -606,6 +656,11 @@ class ScriptPanel(QtWidgets.QWidget):
             self._loading = False
         self._all_scripts = []  # Clear stored scripts
         self.script_model.updateItems([], sort=False)  # No need to sort empty list
+        # Ensure the view stays interactive even if a previous load was interrupted
+        try:
+            self.script_view.setEnabled(True)
+        except Exception:
+            pass
         # Clear the view selection
         self.script_view.clearSelection()
         self.script_view.setCurrentIndex(QtCore.QModelIndex())
@@ -987,8 +1042,8 @@ class ScriptPanel(QtWidgets.QWidget):
                 restart_required = bool(dialog.restart_required())
             except Exception:
                 restart_required = bool(getattr(dialog, "_restart_required", False))
-            payload["restart_required"] = restart_required or payload.get("restart_required", False)
-            payload.setdefault("requires_restart", payload.get("restart_required", False))
+            payload["restart_required"] = restart_required
+            payload["requires_restart"] = restart_required
 
         new_state = "needs_resolve"
         if isinstance(payload, dict):

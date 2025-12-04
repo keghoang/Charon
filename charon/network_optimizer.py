@@ -21,7 +21,7 @@ class NetworkBatchReader:
         self.max_workers = max_workers
         self.cache_manager = get_cache_manager()
     
-    def batch_read_metadata(self, folder_path: str) -> Dict[str, dict]:
+    def batch_read_metadata(self, folder_path: str, stop_callback=None) -> Dict[str, dict]:
         """
         Read all metadata files in a folder in parallel.
         
@@ -38,8 +38,16 @@ class NetworkBatchReader:
         try:
             # First, collect all potential metadata files
             metadata_files = []
+            def _cancelled() -> bool:
+                try:
+                    return bool(stop_callback and stop_callback())
+                except Exception:
+                    return False
+
             with os.scandir(folder_path) as entries:
                 for entry in entries:
+                    if _cancelled():
+                        return {}
                     if entry.is_dir() and not entry.name.startswith('.'):
                         json_path = get_metadata_path(entry.path)
                         metadata_files.append((entry.name, json_path))
@@ -52,6 +60,10 @@ class NetworkBatchReader:
                 }
                 
                 for future in as_completed(future_to_script):
+                    if _cancelled():
+                        for f in future_to_script:
+                            f.cancel()
+                        return {}
                     script_name = future_to_script[future]
                     try:
                         metadata = future.result()

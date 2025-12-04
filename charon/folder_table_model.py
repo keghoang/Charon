@@ -10,6 +10,7 @@ class FolderItem:
         self.name = name
         self.path = path
         self.is_special = is_special  # For Bookmarks folder
+        self.is_compatible = True  # Default to optimistic True until checked
         
 
 class FolderTableModel(QtCore.QAbstractTableModel):
@@ -54,13 +55,8 @@ class FolderTableModel(QtCore.QAbstractTableModel):
             if folder.is_special:
                 return None
                 
-            # Check compatibility for regular folders
-            is_compatible = True
-            if self.base_path:
-                folder_path = os.path.join(self.base_path, folder.name)
-                is_compatible = is_folder_compatible_with_host(folder_path, self.host)
-                
-            if not is_compatible:
+            # Check compatibility using cached state
+            if not folder.is_compatible:
                 color = QtGui.QColor("#95a5a6")  # Default gray
                 return QtGui.QBrush(apply_incompatible_opacity(color))
                 
@@ -79,10 +75,7 @@ class FolderTableModel(QtCore.QAbstractTableModel):
         elif role == self.CompatibleRole:
             if folder.is_special:
                 return True
-            if self.base_path:
-                folder_path = os.path.join(self.base_path, folder.name)
-                return is_folder_compatible_with_host(folder_path, self.host)
-            return True
+            return folder.is_compatible
             
         return None
         
@@ -98,6 +91,28 @@ class FolderTableModel(QtCore.QAbstractTableModel):
         self.folders = folders
         self.endResetModel()
         
+    def update_compatibility(self, compatibility_map):
+        """Update compatibility status for folders from a map"""
+        if not compatibility_map:
+            return
+            
+        changed = False
+        for folder in self.folders:
+            # Look up by original name (folder name)
+            name = getattr(folder, 'original_name', folder.name)
+            if name in compatibility_map:
+                new_state = compatibility_map[name]
+                if folder.is_compatible != new_state:
+                    folder.is_compatible = new_state
+                    changed = True
+        
+        if changed:
+            self.sortItems()
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(len(self.folders) - 1, 0)
+            )
+        
     def clear(self):
         """Clear all folders"""
         self.beginResetModel()
@@ -105,14 +120,23 @@ class FolderTableModel(QtCore.QAbstractTableModel):
         self.endResetModel()
         
     def sortItems(self):
-        """Sort folders using the centralized folder sorting logic"""
-        from charon.utilities import create_folder_sort_key
-        # For folders, we need to pass the original name for sorting
-        self.folders.sort(key=lambda f: create_folder_sort_key(
-            getattr(f, 'original_name', f.name),  # Use original name if available
-            self.host, 
-            self.base_path
-        ))
+        """Sort folders using cached properties to avoid I/O"""
+        def sort_key(folder):
+            # 1. Special folders (Bookmarks) - Priority 0
+            if folder.is_special:
+                priority = 0
+            # 2. Compatible folders - Priority 1
+            elif folder.is_compatible:
+                priority = 1
+            # 3. Incompatible folders - Priority 3 (matches legacy)
+            else:
+                priority = 3
+                
+            # Secondary sort: alphabetical by original name or display name
+            name = getattr(folder, 'original_name', folder.name).lower()
+            return (priority, name)
+            
+        self.folders.sort(key=sort_key)
         self.layoutChanged.emit()
         
     def set_host(self, host):

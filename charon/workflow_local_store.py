@@ -207,7 +207,13 @@ def _write_workflow_state(remote_folder: str, state: WorkflowState) -> WorkflowS
     return state
 
 
+def _clear_validation_status_cache(remote_folder: str) -> None:
+    normalized = os.path.normpath(remote_folder)
+    _VALIDATION_STATUS_CACHE.pop(normalized, None)
+
+
 def _clear_validation_cache(remote_folder: str) -> None:
+    _clear_validation_status_cache(remote_folder)
     log_path = workflow_validation_log_path(remote_folder, ensure_parent=False)
     try:
         if log_path.exists():
@@ -715,9 +721,13 @@ def _normalize_validation_payload(
     return normalized_payload
 
 
+_VALIDATION_STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
 def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any], *, overwrite: bool = True) -> None:
     if not remote_folder or not isinstance(payload, dict):
         return
+    normalized_folder = os.path.normpath(remote_folder)
     try:
         status_path = validation_resolve_status_path(remote_folder, ensure_parent=True)
     except Exception as exc:
@@ -729,6 +739,7 @@ def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any],
     try:
         with status_path.open("w", encoding="utf-8") as handle:
             json.dump(wrapped, handle, indent=2)
+        _VALIDATION_STATUS_CACHE[normalized_folder] = wrapped.get("payload") or wrapped
         system_debug(f"[Validation] Persisted resolve status to '{status_path}'")
     except Exception as exc:
         system_warning(f"Failed to write validation resolve status for '{remote_folder}': {exc}")
@@ -737,8 +748,13 @@ def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any],
 def load_validation_resolve_status(remote_folder: str) -> Optional[Dict[str, Any]]:
     if not remote_folder:
         return None
+    normalized_folder = os.path.normpath(remote_folder)
+    if normalized_folder in _VALIDATION_STATUS_CACHE:
+        return _VALIDATION_STATUS_CACHE[normalized_folder]
+
     status_path = validation_resolve_status_path(remote_folder, ensure_parent=False)
     if not status_path.exists():
+        _VALIDATION_STATUS_CACHE[normalized_folder] = None
         return None
     try:
         with status_path.open("r", encoding="utf-8") as handle:
@@ -746,7 +762,9 @@ def load_validation_resolve_status(remote_folder: str) -> Optional[Dict[str, Any
         if isinstance(data, dict):
             payload = data.get("payload")
             if isinstance(payload, dict):
+                _VALIDATION_STATUS_CACHE[normalized_folder] = payload
                 return payload
+            _VALIDATION_STATUS_CACHE[normalized_folder] = data
             return data
     except Exception as exc:
         system_warning(f"Failed to read validation resolve status for '{remote_folder}': {exc}")

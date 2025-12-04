@@ -1,0 +1,11 @@
+{
+    "software": [
+        "Nuke"
+    ],
+    "entry": "main.py",
+    "script_type": "python",
+    "run_on_main": true,
+    "mirror_prints": true,
+    "hidden": false,
+    "tags": []
+}
