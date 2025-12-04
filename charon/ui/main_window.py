@@ -36,7 +36,7 @@ except ImportError:
 from ..metadata_manager import clear_metadata_cache, get_charon_config, get_folder_tags
 from ..workflow_model import GlobalIndexLoader
 from ..settings import user_settings_db
-from ..utilities import is_compatible_with_host, get_current_user_slug
+from ..utilities import get_current_user_slug
 from ..cache_manager import get_cache_manager
 from ..execution.result import ExecutionStatus
 from ..charon_logger import (
@@ -67,7 +67,7 @@ COLOR_NEW_WORKFLOW_PRESSED = "#7393bf"
 class CharonWindow(QtWidgets.QWidget):
     WINDOW_TITLE_BASE = "Charon - Nuke/ComfyUI Integration"
 
-    def __init__(self, global_path=None, local_path=None, host="None", parent=None, startup_mode="normal"):
+    def __init__(self, global_path=None, local_path=None, host="Nuke", parent=None, startup_mode="normal"):
         super(CharonWindow, self).__init__(parent)
         self._charon_is_charon_window = True
         try:
@@ -98,13 +98,8 @@ class CharonWindow(QtWidgets.QWidget):
         # The cache uses full paths as keys, so different repositories won't conflict
         # This significantly improves performance when switching between repositories
 
-        # If no host is specified but we're in a panel, try to detect the host
-        if host == "None" and not global_path:
-            from charon.utilities import detect_host
-            host = detect_host()
-            system_debug(f"Auto-detected host in panel: {host}")
-
-        self.host = host
+        # Charon only targets Nuke; legacy host detection removed
+        self.host = host or "Nuke"
         self.current_base = self.global_path  # Initialize current_base to avoid None errors
         self.comfy_client = None
 
@@ -137,7 +132,6 @@ class CharonWindow(QtWidgets.QWidget):
         # Initialize folder loader before setup_ui
         self.folder_list_loader = FolderListLoader(self)
         self.folder_list_loader.folders_loaded.connect(self._on_folders_loaded)
-        self.folder_list_loader.compatibility_loaded.connect(self._on_compatibility_loaded)
 
         # Setup UI
         self.setup_ui()
@@ -1235,9 +1229,8 @@ QPushButton#NewWorkflowButton:pressed {{
         self.folder_list_loader.load_folders(
             self.current_base,
             host=self.host,
-            check_compatibility=True  # Load compatibility in background
         )
-        self._debug_user_action("Started async folder load with compatibility check")
+        self._debug_user_action("Started async folder load")
     
     def _on_folders_loaded(self, folders):
         """Handle loaded folders from async loader."""
@@ -1280,31 +1273,6 @@ QPushButton#NewWorkflowButton:pressed {{
             if not self.folder_panel.get_selected_folder():  # Only if nothing is selected yet
                 # Now that folders are loaded, we can safely select Bookmarks
                 self.folder_panel.select_folder("Bookmarks")
-
-    def _on_compatibility_loaded(self, compatibility_map):
-        """Handle compatibility data loaded in background."""
-        # Apply compatibility map to the folder model so empty/incompatible folders gray out
-        try:
-            model = self.folder_panel.folder_model
-        except Exception:
-            return
-        try:
-            apply_fn = getattr(self.folder_panel, "apply_compatibility", None)
-            if callable(apply_fn):
-                apply_fn(compatibility_map)
-                return
-        except Exception:
-            pass
-        # Fallback: try model-level update or repaint
-        try:
-            update_compat = getattr(model, "update_compatibility", None)
-            if callable(update_compat):
-                update_compat(compatibility_map)
-                return
-        except Exception:
-            pass
-        if hasattr(model, "layoutChanged"):
-            model.layoutChanged.emit()
 
     def on_folder_selected(self, folder_name):
         if not folder_name:

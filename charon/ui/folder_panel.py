@@ -1,7 +1,5 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, QEvent
-from ..metadata_manager import is_folder_compatible_with_host
 from .. import config
-from ..utilities import apply_incompatible_opacity, is_compatible_with_host
 from .custom_table_widgets import FolderTableView
 from ..folder_table_model import FolderTableModel, FolderItem
 import os
@@ -17,7 +15,7 @@ class FolderPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super(FolderPanel, self).__init__(parent)
         self.selected_folder = None
-        self.host = "None"
+        self.host = "Nuke"
         self.base_path = None
         self._selection_timer = QtCore.QTimer()
         self._selection_timer.setSingleShot(True)

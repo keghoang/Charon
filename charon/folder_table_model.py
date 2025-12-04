@@ -1,6 +1,5 @@
 from .qt_compat import QtCore, QtGui, Qt, UserRole, DisplayRole, Horizontal
-from .utilities import is_compatible_with_host, apply_incompatible_opacity, get_software_color_for_metadata
-from .metadata_manager import is_folder_compatible_with_host
+from .utilities import apply_incompatible_opacity
 import os
 
 
@@ -28,7 +27,7 @@ class FolderTableModel(QtCore.QAbstractTableModel):
     def __init__(self, parent=None):
         super(FolderTableModel, self).__init__(parent)
         self.folders = []
-        self.host = "None"
+        self.host = "Nuke"
         self.base_path = None
         
     def rowCount(self, parent=QtCore.QModelIndex()):
