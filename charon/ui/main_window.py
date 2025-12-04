@@ -2,6 +2,7 @@ from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, UserRole, UniqueConnection
 from typing import Optional, Tuple
 import os, sys, time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, Future
 
 from .folder_panel import FolderPanel
 from .script_panel import ScriptPanel
@@ -86,6 +87,11 @@ class CharonWindow(QtWidgets.QWidget):
         self._comfy_widget_in_tiny_mode: bool = False
         self._refresh_in_progress: bool = False
         self._last_refresh_time: float = 0.0
+        self._folder_probe_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="FolderCompat"
+        )
+        self._folder_probe_generation: int = 0
+        self._pending_folder_selection: Optional[str] = None
 
         resolved_global_path = global_path or config.WORKFLOW_REPOSITORY_ROOT
         self.global_path = resolved_global_path
@@ -253,6 +259,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.setWindowTitle(self.WINDOW_TITLE_BASE)
         
         # Make sure folder panel is refreshed
+        self._pending_folder_selection = self.folder_panel.get_selected_folder()
         self.refresh_folder_panel()
         
         # Register hotkeys again
@@ -285,6 +292,7 @@ class CharonWindow(QtWidgets.QWidget):
         self._debug_user_action(
             f"Stored current folder before refresh: {current_folder or 'None'}"
         )
+        self._pending_folder_selection = current_folder
         
         # Refresh the folder panel (this will reload all folders from disk)
         self.refresh_folder_panel()
@@ -397,6 +405,10 @@ class CharonWindow(QtWidgets.QWidget):
         shutdown_cache_manager()
         if hasattr(self, 'bookmark_loader'):
             self.bookmark_loader.stop_loading()
+        try:
+            self._folder_probe_executor.shutdown(wait=False)
+        except Exception:
+            pass
         
         # Clean up the execution engine to restore stdout/stderr
         if hasattr(self, 'execution_engine'):
@@ -1251,15 +1263,27 @@ QPushButton#NewWorkflowButton:pressed {{
             system_error(f"Error checking bookmarks: {str(e)}")
 
         normal_folders = {
-            name for name in folders if name and (not user_slug or name.lower() != user_slug)
+            name
+            for name in folders
+            if name
+            and name != "Bookmarks"
+            and (not user_slug or name.lower() != user_slug)
         }
         if user_slug and user_dir_exists:
-            normal_folders.add(user_slug)
+            display_folders.append(user_slug)
 
         display_folders.extend(sorted(normal_folders, key=str.lower))
 
         # Update folder panel
         self.folder_panel.update_folders(display_folders)
+
+        # Prefer restoring a pending selection (e.g., during refresh) to avoid flicker
+        preferred = self._pending_folder_selection
+        self._pending_folder_selection = None
+        if preferred and preferred in display_folders:
+            self.folder_panel.select_folder(preferred)
+            return
+        self._apply_folder_compatibility_async(display_folders)
 
         # Prefer selecting the user's folder if nothing is selected yet
         if not self.folder_panel.get_selected_folder() and user_slug and user_dir_exists:
@@ -1273,6 +1297,92 @@ QPushButton#NewWorkflowButton:pressed {{
             if not self.folder_panel.get_selected_folder():  # Only if nothing is selected yet
                 # Now that folders are loaded, we can safely select Bookmarks
                 self.folder_panel.select_folder("Bookmarks")
+
+    def _apply_folder_compatibility_async(self, folder_names):
+        """Apply compatibility colors without blocking the UI thread."""
+        if not self.current_base or not os.path.isdir(self.current_base):
+            return
+
+        cache_manager = get_cache_manager()
+        compatibility = {}
+        pending = []
+
+        for folder_name in folder_names:
+            if folder_name == "Bookmarks":
+                continue
+
+            folder_path = os.path.join(self.current_base, folder_name)
+            cache_key = f"folder_nonempty:{folder_path}"
+            cached = cache_manager.get_cached_data(cache_key, max_age_seconds=600)
+            if cached is not None:
+                compatibility[folder_name] = bool(cached)
+            else:
+                pending.append((folder_name, folder_path, cache_key))
+
+        if compatibility:
+            self.folder_panel.apply_compatibility(compatibility)
+
+        if not pending:
+            return
+
+        self._folder_probe_generation += 1
+        generation = self._folder_probe_generation
+
+        future: Future = self._folder_probe_executor.submit(
+            self._probe_folder_compatibility, pending
+        )
+        future.add_done_callback(
+            lambda f: self._on_folder_compatibility_ready(generation, f)
+        )
+
+    def _probe_folder_compatibility(self, pending):
+        """Background task to check which folders have visible content."""
+        cache_manager = get_cache_manager()
+        results = {}
+        for folder_name, folder_path, cache_key in pending:
+            has_items = self._folder_has_visible_items(folder_path)
+            cache_manager.cache_data(cache_key, has_items, ttl_seconds=600)
+            results[folder_name] = has_items
+        return results
+
+    def _on_folder_compatibility_ready(self, generation, future: Future):
+        """Apply compatibility results on the main thread, discarding stale runs."""
+        if generation != self._folder_probe_generation:
+            return
+
+        try:
+            results = future.result()
+        except Exception as exc:
+            system_error(f"Folder compatibility probe failed: {exc}")
+            return
+
+        if not results:
+            return
+
+        def apply_results():
+            if generation != self._folder_probe_generation:
+                return
+            self.folder_panel.apply_compatibility(results)
+
+        QtCore.QMetaObject.invokeMethod(
+            self,
+            lambda: apply_results(),
+            QtCore.Qt.QueuedConnection,
+        )
+
+    def _folder_has_visible_items(self, folder_path):
+        """Check if a folder contains any files or subfolders (excluding hidden)."""
+        try:
+            with os.scandir(folder_path) as entries:
+                for entry in entries:
+                    if entry.name.startswith("."):
+                        continue
+                    return True
+        except FileNotFoundError:
+            return False
+        except Exception as exc:
+            system_error(f"Error scanning folder contents for {folder_path}: {exc}")
+        return False
 
     def on_folder_selected(self, folder_name):
         if not folder_name:
@@ -2047,6 +2157,9 @@ QPushButton#NewWorkflowButton:pressed {{
         
         # Load bookmarked scripts, filtered by current base path
         base_path = self.current_base or config.WORKFLOW_REPOSITORY_ROOT
+        # Prepare script panel for bookmark load so results are not dropped
+        if hasattr(self, "script_panel"):
+            self.script_panel.begin_bookmark_load()
         self.bookmark_loader.load_bookmarks(self.host, base_path=base_path)
     
     def on_bookmarked_scripts_loaded(self, scripts):
@@ -2393,6 +2506,7 @@ Cache Stats:
                     # Use the selected folder
                     folder_path = os.path.join(self.current_base, current_folder)
                 self._debug_user_action(f"Refreshing current folder: {folder_path}")
+                self._pending_folder_selection = current_folder
                 
                 # Clear LRU cache since we're doing a refresh anyway
                 from ..metadata_manager import clear_metadata_cache

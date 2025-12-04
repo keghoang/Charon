@@ -2,6 +2,7 @@ from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, QEvent
 from .. import config
 from .custom_table_widgets import FolderTableView
 from ..folder_table_model import FolderTableModel, FolderItem
+from ..utilities import get_current_user_slug
 import os
 
 class FolderPanel(QtWidgets.QWidget):
@@ -83,6 +84,7 @@ class FolderPanel(QtWidgets.QWidget):
     def update_folders(self, folders):
         """Update the folder list model with a new list of folders."""
         # Create FolderItem objects
+        current_user_slug = get_current_user_slug()
         folder_items = []
         for folder_name in folders:
             is_special = folder_name == "Bookmarks"
@@ -96,6 +98,8 @@ class FolderPanel(QtWidgets.QWidget):
             item = FolderItem(display_name, folder_path, is_special)
             # Store original name for signals
             item.original_name = folder_name
+            # Flag the current user's folder so it can be prioritized in sorting
+            item.is_current_user = bool(current_user_slug and folder_name.lower() == current_user_slug)
             folder_items.append(item)
         
         # Update model
