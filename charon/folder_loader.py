@@ -9,7 +9,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .cache_manager import get_cache_manager
 from .metadata_manager import is_folder_compatible_with_host
-from .charon_logger import system_debug, system_error
+from .charon_logger import system_debug, system_error, log_user_action_detail
+import time
 
 
 class FolderListLoader(QtCore.QThread):
@@ -28,6 +29,12 @@ class FolderListLoader(QtCore.QThread):
         
     def load_folders(self, base_path, host="None", check_compatibility=False):
         """Start loading folders from the given base path."""
+        log_user_action_detail(
+            "folder_load_start",
+            base_path=base_path,
+            host=host,
+            check_compatibility=check_compatibility,
+        )
         if self.isRunning():
             self.stop_loading()
             if self.isRunning():
@@ -46,6 +53,12 @@ class FolderListLoader(QtCore.QThread):
     def stop_loading(self):
         """Signal the thread to stop loading."""
         self._should_stop = True
+        log_user_action_detail(
+            "folder_load_stop_requested",
+            base_path=self.base_path,
+            host=self.host,
+            running=self.isRunning(),
+        )
         if self.isRunning():
             self.requestInterruption()
             self.quit()
@@ -55,10 +68,16 @@ class FolderListLoader(QtCore.QThread):
     def run(self):
         """Load folders in background thread."""
         if not self.base_path or not os.path.exists(self.base_path):
+            log_user_action_detail(
+                "folder_load_missing_base",
+                base_path=self.base_path,
+                host=self.host,
+            )
             self.folders_loaded.emit([])
             return
             
         cache_manager = get_cache_manager()
+        start_time = time.perf_counter()
         
         try:
             # Check cache first for folder list
@@ -68,6 +87,12 @@ class FolderListLoader(QtCore.QThread):
             if cached_folders is not None:
                 system_debug(f"Using cached folder list for {self.base_path}")
                 folders = cached_folders
+                log_user_action_detail(
+                    "folder_load_cache_hit",
+                    base_path=self.base_path,
+                    host=self.host,
+                    count=len(folders),
+                )
             else:
                 # Scan directory for folders
                 folders = []
@@ -75,6 +100,11 @@ class FolderListLoader(QtCore.QThread):
                     with os.scandir(self.base_path) as entries:
                         for entry in entries:
                             if self._should_stop:
+                                log_user_action_detail(
+                                    "folder_load_cancelled_during_scan",
+                                    base_path=self.base_path,
+                                    host=self.host,
+                                )
                                 return
                                 
                             if entry.is_dir() and not entry.name.startswith('.'):
@@ -90,10 +120,23 @@ class FolderListLoader(QtCore.QThread):
                     
             # Sort folders alphabetically for now
             folders.sort()
+            log_user_action_detail(
+                "folder_load_scanned",
+                base_path=self.base_path,
+                host=self.host,
+                count=len(folders),
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+            )
             
             # Emit folder list immediately so UI can update
             if not self._should_stop:
                 self.folders_loaded.emit(folders)
+                log_user_action_detail(
+                    "folder_load_emitted",
+                    base_path=self.base_path,
+                    host=self.host,
+                    count=len(folders),
+                )
                 
             # If compatibility checking requested, do it in parallel
             if self.check_compatibility and folders:
@@ -103,16 +146,28 @@ class FolderListLoader(QtCore.QThread):
             system_error(f"Error loading folders: {e}")
             if not self._should_stop:
                 self.folders_loaded.emit([])
+            log_user_action_detail(
+                "folder_load_error",
+                base_path=self.base_path,
+                host=self.host,
+                error=str(e),
+            )
                 
     def _check_compatibility_parallel(self, folders):
         """Check folder compatibility in parallel."""
         compatibility_map = {}
         cache_manager = get_cache_manager()
+        start_time = time.perf_counter()
         
         # Check cache first
         uncached_folders = []
         for folder in folders:
             if self._should_stop:
+                log_user_action_detail(
+                    "folder_compat_cancelled_before_cache",
+                    base_path=self.base_path,
+                    host=self.host,
+                )
                 return
                 
             cache_key = f"compat:{self.base_path}:{folder}:{self.host}"
@@ -122,9 +177,22 @@ class FolderListLoader(QtCore.QThread):
                 compatibility_map[folder] = cached_compat
             else:
                 uncached_folders.append(folder)
+        if compatibility_map:
+            log_user_action_detail(
+                "folder_compat_cache_hits",
+                base_path=self.base_path,
+                host=self.host,
+                hits=len(compatibility_map),
+            )
                 
         # Check uncached folders in parallel
         if uncached_folders and not self._should_stop:
+            log_user_action_detail(
+                "folder_compat_start",
+                base_path=self.base_path,
+                host=self.host,
+                pending=len(uncached_folders),
+            )
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 future_to_folder = {
                     executor.submit(
@@ -139,6 +207,13 @@ class FolderListLoader(QtCore.QThread):
                         # Cancel remaining futures
                         for f in future_to_folder:
                             f.cancel()
+                        log_user_action_detail(
+                            "folder_compat_cancelled",
+                            base_path=self.base_path,
+                            host=self.host,
+                            completed=len(compatibility_map),
+                            pending=len(future_to_folder),
+                        )
                         return
                         
                     folder = future_to_folder[future]
@@ -153,10 +228,24 @@ class FolderListLoader(QtCore.QThread):
                     except Exception as e:
                         system_error(f"Error checking compatibility for {folder}: {e}")
                         compatibility_map[folder] = True  # Default to compatible on error
+                        log_user_action_detail(
+                            "folder_compat_error",
+                            base_path=self.base_path,
+                            host=self.host,
+                            folder=folder,
+                            error=str(e),
+                        )
                         
         # Emit compatibility results
         if not self._should_stop:
             self.compatibility_loaded.emit(compatibility_map)
+            log_user_action_detail(
+                "folder_compat_emitted",
+                base_path=self.base_path,
+                host=self.host,
+                checked=len(compatibility_map),
+                duration_ms=int((time.perf_counter() - start_time) * 1000),
+            )
             
     def _check_single_folder_compat(self, folder_name):
         """Check compatibility for a single folder."""

@@ -2,9 +2,10 @@ from .qt_compat import QtCore, QtGui
 from .metadata_manager import get_charon_config
 from .utilities import is_compatible_with_host, apply_incompatible_opacity, get_software_color_for_metadata
 from .cache_manager import get_cache_manager
-from .charon_logger import system_debug
+from .charon_logger import system_debug, log_user_action_detail
 from .network_optimizer import get_batch_reader
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class ScriptItem:
@@ -217,6 +218,12 @@ class FolderLoader(BaseScriptLoader):
     
     def load_folder(self, folder_path, host="None"):
         """Start loading scripts from the given folder path"""
+        log_user_action_detail(
+            "script_folder_load_start",
+            folder_path=folder_path,
+            host=host,
+            running=self.isRunning(),
+        )
         if self.isRunning():
             self.stop_loading()
             if self.isRunning():
@@ -231,6 +238,12 @@ class FolderLoader(BaseScriptLoader):
     def stop_loading(self):
         """Signal the thread to stop loading"""
         self._should_stop = True
+        log_user_action_detail(
+            "script_folder_load_stop_requested",
+            folder_path=self.folder_path,
+            host=self.host,
+            running=self.isRunning(),
+        )
         if self.isRunning():
             try:
                 self.requestInterruption()
@@ -245,11 +258,17 @@ class FolderLoader(BaseScriptLoader):
         if not self.folder_path or not os.path.exists(self.folder_path):
             # Only emit empty if we weren't stopped
             if not self._should_stop:
+                log_user_action_detail(
+                    "script_folder_missing",
+                    folder_path=self.folder_path,
+                    host=self.host,
+                )
                 self.scripts_loaded.emit([])
             return
         
         cache_manager = get_cache_manager()
         batch_reader = get_batch_reader()
+        start_time = time.perf_counter()
         
         try:
             # Check cache first
@@ -259,12 +278,23 @@ class FolderLoader(BaseScriptLoader):
                 # Use cached folder contents
                 script_paths = cached_contents
                 system_debug(f"Using cached folder contents for {self.folder_path}")
+                log_user_action_detail(
+                    "script_folder_cache_hit",
+                    folder_path=self.folder_path,
+                    host=self.host,
+                    count=len(script_paths),
+                )
             else:
                 # First pass: collect all directories
                 script_paths = []
                 with os.scandir(self.folder_path) as entries:
                     for entry in entries:
                         if self._should_stop:
+                            log_user_action_detail(
+                                "script_folder_cancelled_during_scan",
+                                folder_path=self.folder_path,
+                                host=self.host,
+                            )
                             return
                         
                         if entry.is_dir() and not entry.name.startswith('.'):
@@ -272,6 +302,12 @@ class FolderLoader(BaseScriptLoader):
                 
                 # Cache the folder contents
                 cache_manager.cache_folder_contents(self.folder_path, script_paths)
+                log_user_action_detail(
+                    "script_folder_scanned",
+                    folder_path=self.folder_path,
+                    host=self.host,
+                    count=len(script_paths),
+                )
             
             # Use batch operations for metadata
             items = []
@@ -285,6 +321,12 @@ class FolderLoader(BaseScriptLoader):
                     # Use cached metadata
                     metadata_map = cached_metadata
                     system_debug(f"Using cached batch metadata for {self.folder_path}")
+                    log_user_action_detail(
+                        "script_metadata_cache_hit",
+                        folder_path=self.folder_path,
+                        host=self.host,
+                        count=len(metadata_map),
+                    )
                 else:
                     # Batch load all metadata at once (cancellable)
                     metadata_map = batch_reader.batch_read_metadata(
@@ -293,10 +335,22 @@ class FolderLoader(BaseScriptLoader):
                     )
                     # Cache it
                     cache_manager.cache_data(batch_metadata_key, metadata_map, ttl_seconds=600)
+                    log_user_action_detail(
+                        "script_metadata_loaded",
+                        folder_path=self.folder_path,
+                        host=self.host,
+                        count=len(metadata_map),
+                    )
                 
                 # Create script items
                 for path, name in script_paths:
                     if self._should_stop:
+                        log_user_action_detail(
+                            "script_folder_cancelled_during_item_build",
+                            folder_path=self.folder_path,
+                            host=self.host,
+                            built=len(items),
+                        )
                         return
                     
                     # Get metadata from batch results
@@ -308,12 +362,25 @@ class FolderLoader(BaseScriptLoader):
             
             if not self._should_stop:
                 self.scripts_loaded.emit(items)
+                log_user_action_detail(
+                    "script_folder_emitted",
+                    folder_path=self.folder_path,
+                    host=self.host,
+                    count=len(items),
+                    duration_ms=int((time.perf_counter() - start_time) * 1000),
+                )
                 
         except Exception as e:
             from .charon_logger import system_error
             system_error(f"Error loading folder {self.folder_path}: {str(e)}")
             if not self._should_stop:
                 self.scripts_loaded.emit([])
+            log_user_action_detail(
+                "script_folder_error",
+                folder_path=self.folder_path,
+                host=self.host,
+                error=str(e),
+            )
 
 
 class ScriptListModel(QtCore.QAbstractListModel):

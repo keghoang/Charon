@@ -39,7 +39,14 @@ from ..settings import user_settings_db
 from ..utilities import is_compatible_with_host, get_current_user_slug
 from ..cache_manager import get_cache_manager
 from ..execution.result import ExecutionStatus
-from ..charon_logger import system_info, system_debug, system_warning, system_error
+from ..charon_logger import (
+    system_info,
+    system_debug,
+    system_warning,
+    system_error,
+    log_user_action,
+    log_user_action_detail,
+)
 from ..icon_manager import get_icon_manager
 from ..paths import get_charon_temp_dir
 
@@ -182,6 +189,18 @@ class CharonWindow(QtWidgets.QWidget):
         if mode == "tiny" and hasattr(self, "enter_tiny_mode"):
             self.enter_tiny_mode()
 
+    def _debug_user_action(self, message: str) -> None:
+        """Emit a concise debug line for user-triggered UI actions."""
+        try:
+            system_debug(f"[UserAction] {message}")
+        except Exception:
+            pass
+        try:
+            log_user_action(message)
+            log_user_action_detail("ui_action", message=message)
+        except Exception:
+            pass
+
     def mark_tiny_offset_dirty(self) -> None:
         """Ensure the next tiny-mode entry uses default offsets."""
         self._use_tiny_offset_defaults_once = True
@@ -247,9 +266,11 @@ class CharonWindow(QtWidgets.QWidget):
     
     def _refresh_everything(self):
         """Refresh everything - folders and all caches."""
+        self._debug_user_action("Full refresh requested (folders + caches)")
         # Clear all caches
         from ..metadata_manager import clear_metadata_cache
         clear_metadata_cache()
+        self._debug_user_action("Cleared in-memory metadata cache")
         
         # Clear the entire persistent cache for the current base
         from ..cache_manager import get_cache_manager
@@ -261,9 +282,15 @@ class CharonWindow(QtWidgets.QWidget):
             cache_manager.invalidate_cached_data(folder_list_cache_key)
             system_debug(f"Cleared folder list cache for {self.current_base}")
             cache_manager.invalidate_base_path(self.current_base)
+            self._debug_user_action(
+                f"Invalidated caches for base path {self.current_base}"
+            )
         
         # Store current selection
         current_folder = self.folder_panel.get_selected_folder()
+        self._debug_user_action(
+            f"Stored current folder before refresh: {current_folder or 'None'}"
+        )
         
         # Refresh the folder panel (this will reload all folders from disk)
         self.refresh_folder_panel()
@@ -272,6 +299,7 @@ class CharonWindow(QtWidgets.QWidget):
         if self.current_base and config.CACHE_PREFETCH_ALL_FOLDERS:
             cache_manager.queue_all_folders_prefetch(self.current_base, self.host)
             system_debug("Started background prefetching of all folders")
+            self._debug_user_action("Queued background prefetch for all folders")
         
         # Restore selection if possible
         if current_folder:
@@ -279,6 +307,9 @@ class CharonWindow(QtWidgets.QWidget):
             def restore_selection():
                 self.folder_panel.select_folder(current_folder)
             QtCore.QTimer.singleShot(100, restore_selection)
+            self._debug_user_action(
+                f"Scheduled folder re-selection after refresh: {current_folder}"
+            )
     
     def _cleanup_missing_script_hotkeys(self, show_dialog=False):
         """
@@ -1183,7 +1214,12 @@ QPushButton#NewWorkflowButton:pressed {{
         """Refresh the folder panel with the current base path (global path)."""
         if not self.current_base or not os.path.exists(self.current_base):
             system_warning(f"Current base path does not exist: {self.current_base}")
+            self._debug_user_action("Refresh folders aborted (base path missing)")
             return
+
+        self._debug_user_action(
+            f"Refreshing folder panel (base={self.current_base}, host={self.host})"
+        )
 
         # The script panel will handle clearing the metadata panel
         
@@ -1193,6 +1229,7 @@ QPushButton#NewWorkflowButton:pressed {{
         # Invalidate cached folder listing so new directories appear immediately
         cache_manager = get_cache_manager()
         cache_manager.invalidate_cached_data(f"folders:{self.current_base}")
+        self._debug_user_action("Invalidated cached folder listing for current base")
 
         # Start async folder loading
         self.folder_list_loader.load_folders(
@@ -1200,6 +1237,7 @@ QPushButton#NewWorkflowButton:pressed {{
             host=self.host,
             check_compatibility=True  # Load compatibility in background
         )
+        self._debug_user_action("Started async folder load with compatibility check")
     
     def _on_folders_loaded(self, folders):
         """Handle loaded folders from async loader."""
@@ -1245,21 +1283,42 @@ QPushButton#NewWorkflowButton:pressed {{
 
     def _on_compatibility_loaded(self, compatibility_map):
         """Handle compatibility data loaded in background."""
-        # This arrives after folders are displayed, update visual state
-        # The folder model will use this for coloring
-        # For now, just trigger a refresh of the folder view
-        if hasattr(self.folder_panel.folder_model, 'layoutChanged'):
-            self.folder_panel.folder_model.layoutChanged.emit()
+        # Apply compatibility map to the folder model so empty/incompatible folders gray out
+        try:
+            model = self.folder_panel.folder_model
+        except Exception:
+            return
+        try:
+            apply_fn = getattr(self.folder_panel, "apply_compatibility", None)
+            if callable(apply_fn):
+                apply_fn(compatibility_map)
+                return
+        except Exception:
+            pass
+        # Fallback: try model-level update or repaint
+        try:
+            update_compat = getattr(model, "update_compatibility", None)
+            if callable(update_compat):
+                update_compat(compatibility_map)
+                return
+        except Exception:
+            pass
+        if hasattr(model, "layoutChanged"):
+            model.layoutChanged.emit()
 
     def on_folder_selected(self, folder_name):
         if not folder_name:
             return
+        self._debug_user_action(
+            f"Folder selected: {folder_name} (base={self.current_base})"
+        )
         
         # Skip deselection if we're navigating programmatically
         if not self._is_navigating:
             # Always clear current script selection and hide metadata panel when changing folders
             # This includes re-selecting the same folder
             if self.script_panel.current_script:
+                self._debug_user_action("Clearing current script selection for new folder")
                 self.script_panel.on_script_deselected()
         
         # Don't clear cache during normal folder switching - this was causing slowdown
@@ -1272,6 +1331,7 @@ QPushButton#NewWorkflowButton:pressed {{
         self.tag_bar.clear_selection()
         # Clear existing tags - they'll be repopulated when scripts load
         self.tag_bar.update_tags([])
+        self._debug_user_action("Cleared tag filters and tag list for new folder")
         
         # Check if this is the special Bookmarks folder
         if folder_name == "Bookmarks":
@@ -1281,12 +1341,14 @@ QPushButton#NewWorkflowButton:pressed {{
             
             # Load bookmarked scripts
             self.load_bookmarked_scripts()
+            self._debug_user_action("Loaded bookmarked workflows")
             return
         
         folder_path = os.path.join(self.current_base, folder_name)
         
         # Track the current folder for efficient tag loading
         self.current_folder = folder_path
+        self._debug_user_action(f"Set current folder path: {folder_path}")
         
         if os.path.isdir(folder_path):
             # The script panel will handle clearing the metadata panel
@@ -1297,6 +1359,9 @@ QPushButton#NewWorkflowButton:pressed {{
             
             # Load scripts in background thread for better responsiveness
             self.script_panel.load_scripts_for_folder(folder_path)
+            self._debug_user_action(f"Loading scripts for folder: {folder_path}")
+        else:
+            self._debug_user_action(f"Folder path missing on selection: {folder_path}")
 
     def run_script_from_shortcut(self):
         """Wrapper to run script from shortcut, checking focus and button state."""
@@ -2321,9 +2386,11 @@ Cache Stats:
         # Throttle repeated clicks to avoid overlapping work in background threads
         now = time.monotonic()
         if self._refresh_in_progress:
+            self._debug_user_action("Refresh ignored (already in progress)")
             system_debug("Refresh already in progress; ignoring additional trigger")
             return
         if now - getattr(self, "_last_refresh_time", 0.0) < 0.35:
+            self._debug_user_action("Refresh ignored (throttled)")
             system_debug("Refresh ignored due to rapid re-trigger")
             return
 
@@ -2338,6 +2405,11 @@ Cache Stats:
             # Get current state
             current_folder = self.folder_panel.get_selected_folder()
             current_script = self.script_panel.get_selected_script()
+            current_script_path = getattr(current_script, "path", None) if current_script else None
+            self._debug_user_action(
+                f"Refresh started (folder={current_folder or 'None'}, "
+                f"script={current_script_path or 'None'})"
+            )
             
             # Import cache manager
             from ..cache_manager import get_cache_manager
@@ -2353,51 +2425,72 @@ Cache Stats:
                 else:
                     # Use the selected folder
                     folder_path = os.path.join(self.current_base, current_folder)
+                self._debug_user_action(f"Refreshing current folder: {folder_path}")
                 
                 # Clear LRU cache since we're doing a refresh anyway
                 from ..metadata_manager import clear_metadata_cache
                 clear_metadata_cache()
+                self._debug_user_action("Cleared metadata cache before folder refresh")
                 
                 # Clear the cached folder list to ensure we pick up new folders
                 folder_list_cache_key = f"folders:{self.current_base}"
                 cache_manager.invalidate_cached_data(folder_list_cache_key)
                 system_debug(f"Cleared folder list cache for {self.current_base}")
+                self._debug_user_action(
+                    f"Invalidated folder list cache for base {self.current_base}"
+                )
                 
                 # Invalidate folder in persistent cache
                 cache_manager.invalidate_folder(folder_path)
+                self._debug_user_action(f"Invalidated cached folder data: {folder_path}")
                 
                 # Refresh the folder panel to pick up any new folders
                 stored_folder = current_folder
                 self.refresh_folder_panel()
+                self._debug_user_action("Triggered folder panel refresh (current folder)")
                 
                 # Restore selection and reload scripts after folder panel updates
                 def restore_and_reload():
                     if stored_folder:
                         self.folder_panel.select_folder(stored_folder)
+                        self._debug_user_action(
+                            f"Re-selected folder after refresh: {stored_folder}"
+                        )
                     # Reload scripts for the folder
                     self.script_panel.load_scripts_for_folder(folder_path)
+                    self._debug_user_action(
+                        f"Reloaded scripts for folder: {folder_path}"
+                    )
                     # Update metadata panel if a script is selected
                     if current_script:
                         self.metadata_panel.update_metadata(current_script.path)
+                        self._debug_user_action(
+                            f"Updated metadata for script: {current_script.path}"
+                        )
                 
                 QtCore.QTimer.singleShot(100, restore_and_reload)
             else:
                 # Nothing selected - refresh everything
+                self._debug_user_action("No selection; triggering full refresh")
                 self._refresh_everything()
             
             # Clean up hotkeys for missing scripts (don't show dialog on refresh)
             self._cleanup_missing_script_hotkeys(show_dialog=False)
+            self._debug_user_action("Cleaned up missing script hotkeys")
             
             # Refresh hotkeys
             self.register_hotkeys()
+            self._debug_user_action("Registered hotkeys after refresh")
             
             # Re-index quick search
             self._start_async_indexing()
+            self._debug_user_action("Started async quick-search reindex")
 
             # Update CharonBoard state as part of the unified refresh
             try:
                 if hasattr(self, "charon_board_panel"):
                     self.charon_board_panel.refresh_nodes()
+                    self._debug_user_action("Refreshed CharonBoard nodes")
             except Exception as board_exc:
                 system_warning(f"CharonBoard refresh failed: {board_exc}")
 
@@ -2421,6 +2514,7 @@ Cache Stats:
                     pass
             self._refresh_in_progress = False
             self._set_refresh_enabled(True)
+            self._debug_user_action("Refresh finished")
 
     def open_settings(self):
         """Open the settings dialog"""

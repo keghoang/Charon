@@ -112,6 +112,13 @@ class FolderPanel(QtWidgets.QWidget):
                 pass
             self.folder_view.selectionModel().currentChanged.connect(self.on_current_changed)
 
+    def apply_compatibility(self, compatibility_map):
+        """Update compatibility while preserving selection."""
+        selected = self.get_selected_folder()
+        self.folder_model.update_compatibility(compatibility_map)
+        if selected:
+            self.select_folder(selected)
+
     def on_current_changed(self, current, previous):
         """Handle folder selection by keyboard navigation."""
         if current.isValid():
