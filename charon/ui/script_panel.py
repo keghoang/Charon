@@ -430,6 +430,11 @@ class ScriptPanel(QtWidgets.QWidget):
 
     def load_scripts_for_folder(self, folder_path):
         """Load scripts from a folder using background thread"""
+        normalized_target = os.path.normpath(folder_path or "").lower()
+        if self._loading and normalized_target == os.path.normpath(self._active_folder_path or "").lower():
+            # Already loading this folder; ignore redundant trigger
+            return
+
         if self.folder_loader.isRunning():
             self._reset_folder_loader()
             self._loading = False
