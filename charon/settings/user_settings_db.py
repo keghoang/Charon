@@ -5,6 +5,7 @@ import shutil
 from typing import Optional
 
 from .. import config
+from ..preferences import get_preferences_root
 
 _DB_PATH = None
 
@@ -46,13 +47,9 @@ def initialize(global_repo_path):
     """
     global _DB_PATH
     
-    # Store database locally for better performance on network drives
-    if os.name == 'nt':  # Windows
-        app_data = os.path.expandvars(r"%LOCALAPPDATA%")
-    else:  # Unix-like systems
-        app_data = os.path.expanduser("~/.local/share")
-    
-    db_folder = os.path.join(app_data, "Charon", "db")
+    # Use the same root as preferences, derived from GALT_PLUGIN_DIR or default
+    db_base_folder = get_preferences_root(ensure_dir=True)
+    db_folder = os.path.join(db_base_folder, "db") # Subfolder for DB files
     if not os.path.exists(db_folder):
         os.makedirs(db_folder, exist_ok=True)
 
