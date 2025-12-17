@@ -2841,7 +2841,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             target_repo=repo_url,
             target_pack=row_info.get("package_name"),
         )
-        self._show_restart_cta(display_name)
+        self._show_restart_cta(display_name, require_all_custom_nodes_resolved=True)
         return True
 
     def _mark_custom_node_resolved(
@@ -2943,10 +2943,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._update_overall_state()
         if prompt_restart:
             display_name = row_info.get("package_name") or row_info.get("node_name") or "Custom node"
-            self._show_restart_cta(display_name)
+            self._show_restart_cta(display_name, require_all_custom_nodes_resolved=True)
         return False
 
-    def _show_restart_cta(self, package_display: str) -> None:
+    def _show_restart_cta(self, package_display: str, *, require_all_custom_nodes_resolved: bool = False) -> None:
+        if require_all_custom_nodes_resolved:
+            remaining_custom = self._remaining_rows("custom_nodes")
+            if remaining_custom > 0:
+                return
         self._restart_required = True
         self._restart_in_progress = False
         btn = getattr(self, "_restart_button", None)
@@ -3304,9 +3308,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             target_pack=normalized.get("name"),
         )
         row_info["dependency"] = normalized
-        self._show_restart_cta(dep_display)
+        self._show_restart_cta(dep_display, require_all_custom_nodes_resolved=True)
         return True
 
     def _prompt_restart_after_install(self, package_display: str) -> None:
         # Deprecated modal prompt; use inline restart button instead.
-        self._show_restart_cta(package_display)
+        self._show_restart_cta(package_display, require_all_custom_nodes_resolved=True)
