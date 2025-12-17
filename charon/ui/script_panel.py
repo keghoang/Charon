@@ -15,6 +15,7 @@ from .. import config, preferences
 from ..comfy_validation import validate_comfy_environment
 from ..paths import get_default_comfy_launch_path
 from .validation_dialog import ValidationResolveDialog
+from ..dependency_check import ensure_manager_security_level
 from ..workflow_local_store import (
     clear_validation_artifacts,
     write_validation_raw,
@@ -859,6 +860,7 @@ class ScriptPanel(QtWidgets.QWidget):
         return normalized in {"on", "true", "1", "yes"}
 
     def _start_validation(self, script_path: str, workflow_bundle: dict) -> None:
+        ensure_manager_security_level("weak")
         comfy_path = self._resolve_comfy_path()
         if not comfy_path:
             QtWidgets.QMessageBox.warning(
