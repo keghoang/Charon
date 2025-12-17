@@ -683,12 +683,17 @@ class CharonWindow(QtWidgets.QWidget):
         self.project_label.setMinimumWidth(280)
         project_layout.addWidget(self.project_label)
 
-        self.resource_widget = ResourceWidget(parent)
-        project_layout.addWidget(self.resource_widget)
-
         footer_layout.addWidget(project_container, 1)
 
         footer_layout.addStretch()
+        
+        # Right side container for Comfy status and Resources
+        right_container = QtWidgets.QWidget(parent)
+        right_layout = QtWidgets.QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(2)
+        right_layout.setAlignment(Qt.AlignRight)
+        
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
         self.comfy_connection_widget.connection_status_changed.connect(
@@ -697,7 +702,13 @@ class CharonWindow(QtWidgets.QWidget):
         self.script_panel.update_comfy_connection_status(
             self.comfy_connection_widget.is_connected()
         )
-        footer_layout.addWidget(self.comfy_connection_widget)
+        right_layout.addWidget(self.comfy_connection_widget)
+        
+        self.resource_widget = ResourceWidget(parent)
+        right_layout.addWidget(self.resource_widget)
+        
+        footer_layout.addWidget(right_container)
+        
         self._footer_comfy_layout = footer_layout
         main_layout.addLayout(footer_layout)
 

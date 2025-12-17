@@ -26,11 +26,7 @@ class CompactResourceBar(QWidget):
         
         layout.addWidget(self.bar)
         
-        self.value_label = QLabel("0%")
-        self.value_label.setStyleSheet("color: #ccc; font-size: 10px;")
-        self.value_label.setFixedWidth(35)
-        self.value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.value_label)
+        # self.value_label removed per request
 
     def update_style(self, value):
         color = self.default_color
@@ -50,9 +46,16 @@ class CompactResourceBar(QWidget):
             }}
         """)
 
-    def set_value(self, value, text_override=None):
+    def set_value(self, value, tooltip_text=None):
         self.bar.setValue(int(value))
-        self.value_label.setText(text_override if text_override else f"{int(value)}%")
+        if tooltip_text:
+            self.setToolTip(tooltip_text)
+            self.bar.setToolTip(tooltip_text)
+        else:
+            txt = f"{int(value)}%"
+            self.setToolTip(txt)
+            self.bar.setToolTip(txt)
+            
         self.update_style(value)
 
 class ResourceWidget(QWidget):
@@ -64,6 +67,7 @@ class ResourceWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignRight) # Align content to right
         
         # CPU
         self.cpu_bar = CompactResourceBar("CPU")
@@ -87,8 +91,8 @@ class ResourceWidget(QWidget):
         self.cpu_bar.set_value(stats['cpu_percent'])
         
         ram_p = stats['ram_percent']
-        ram_gb = f"{stats['ram_used_gb']:.1f}G"
-        self.ram_bar.set_value(ram_p, ram_gb)
+        ram_txt = f"RAM: {stats['ram_used_gb']:.1f}GB / {stats['ram_total_gb']:.1f}GB ({ram_p:.1f}%)"
+        self.ram_bar.set_value(ram_p, ram_txt)
         
         gpus = stats.get('gpus', [])
         
@@ -105,10 +109,10 @@ class ResourceWidget(QWidget):
                 self.gpu_widgets[idx] = (core_bar, vram_bar)
             
             core, vram = self.gpu_widgets[idx]
-            core.set_value(gpu['utilization'])
+            core.set_value(gpu['utilization'], f"GPU Usage: {gpu['utilization']}%")
             
             vram_p = gpu['vram_percent']
-            vram_txt = f"{gpu['vram_used_gb']:.1f}G"
+            vram_txt = f"VRAM: {gpu['vram_used_gb']:.1f}GB / {gpu['vram_total_gb']:.1f}GB ({vram_p:.1f}%)"
             vram.set_value(vram_p, vram_txt)
 
     def closeEvent(self, event):
