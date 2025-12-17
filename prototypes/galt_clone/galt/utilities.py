@@ -635,15 +635,18 @@ def apply_incompatible_opacity(color):
     return color
 
 
-def get_software_color_for_metadata(metadata, host):
-    """Centralized color selection for software-based items with metadata"""
+def get_software_color_for_metadata(metadata):
+    """Return the display color for a workflow entry.
+
+    Historically this keyed off per-host software tags. Now that Charon only
+    targets Nuke, we collapse the logic to a single palette entry so the UI
+    remains consistent.
+    """
     from galt import config
-    from galt.metadata_manager import get_software_for_host
-    
+
     if not metadata:
-        return config.SOFTWARE_COLORS.get("No Metadata", "#7f8c8d")
-    sw = get_software_for_host(metadata, host)
-    return config.SOFTWARE_COLORS.get(sw, "#95a5a6")
+        return config.SOFTWARE_COLORS.get("Nuke", "#95a5a6")
+    return config.SOFTWARE_COLORS.get("Nuke", "#95a5a6")
 
 
 def create_script_sort_key(script_item, host):

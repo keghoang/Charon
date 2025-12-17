@@ -1,5 +1,5 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, QShortcut, QKeySequence
-from ..utilities import get_software_color_for_metadata, is_compatible_with_host, apply_incompatible_opacity, create_sort_key
+from ..utilities import get_software_color_for_metadata, create_sort_key
 from ..icon_manager import get_icon_manager
 from .. import config
 
@@ -97,26 +97,7 @@ class QuickSearchDelegate(QtWidgets.QStyledItemDelegate):
                             self.icon_size
                         )
                         
-                        # Apply opacity based on compatibility
-                        if hasattr(index.model(), 'host'):
-                            host = index.model().host
-                            is_compatible = is_compatible_with_host(metadata, host)
-                            
-                            if not is_compatible:
-                                # Script can't run at all - use incompatible opacity
-                                painter.setOpacity(config.INCOMPATIBLE_OPACITY)
-                            elif software.lower() == host.lower():
-                                # Software matches current host - full opacity
-                                painter.setOpacity(1.0)
-                            else:
-                                # Software doesn't match current host - faded
-                                painter.setOpacity(config.INCOMPATIBLE_OPACITY)
-                        else:
-                            # No host info - default to full opacity
-                            painter.setOpacity(1.0)
-                        
                         painter.drawPixmap(icon_rect, pixmap)
-                        painter.setOpacity(1.0)  # Reset opacity
                     
                     x -= self.icon_spacing
         
@@ -135,7 +116,6 @@ class QuickSearchModel(QtCore.QAbstractListModel):
     def __init__(self, parent=None):
         super(QuickSearchModel, self).__init__(parent)
         self.entries = []  # List of (display, path, metadata) tuples
-        self.host = "None"  # Store host for software selection
     
     def rowCount(self, parent=QtCore.QModelIndex()):
         return len(self.entries)
@@ -150,17 +130,8 @@ class QuickSearchModel(QtCore.QAbstractListModel):
         
         if role == QtCore.Qt.ItemDataRole.ForegroundRole:
             _, _, metadata = self.entries[index.row()]
-            base_color = get_software_color_for_metadata(metadata, self.host)
-            
-            # Check if script is compatible with current host
-            is_compatible = is_compatible_with_host(metadata, self.host)
-            
-            if is_compatible:
-                return QtGui.QBrush(QtGui.QColor(base_color))
-            else:
-                # Apply opacity to incompatible scripts while preserving base color
-                color = QtGui.QColor(base_color)
-                return QtGui.QBrush(apply_incompatible_opacity(color))
+            base_color = get_software_color_for_metadata(metadata)
+            return QtGui.QBrush(QtGui.QColor(base_color))
         
         return None
     
@@ -170,10 +141,6 @@ class QuickSearchModel(QtCore.QAbstractListModel):
         self.entries = entries
         self.endResetModel()
     
-    def set_host(self, host):
-        """Set the host software for proper software selection."""
-        self.host = host
-
 class QuickSearchDialog(QtWidgets.QDialog):
     """Dynamic popup dialog that starts minimal and grows with search results."""
 
@@ -279,7 +246,6 @@ class QuickSearchDialog(QtWidgets.QDialog):
         layout.addWidget(self.results_container)
 
         self.model = QuickSearchModel()
-        self.model.set_host(self.host)  # Set the host for proper software selection
         self.list_view.setModel(self.model)
         
         # Set custom delegate for software icons
