@@ -228,7 +228,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             if col == self.COL_NAME:
                 return self.get_foreground_brush(script)
             if col == self.COL_VALIDATE:
-                return QtGui.QBrush(QtGui.QColor("#e0e4eb"))
+                return QtGui.QBrush(QtGui.QColor("#c2c7d1"))
             
         elif role == TextAlignmentRole:
             if col == self.COL_HOTKEY:
