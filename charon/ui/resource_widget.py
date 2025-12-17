@@ -130,7 +130,7 @@ class ResourceWidget(QWidget):
         
         # Feedback Label (Row 0, Col 3) - spans 2 rows
         self.flush_feedback = QLabel("")
-        self.flush_feedback.setStyleSheet("color: #4CAF50; font-size: 10px; font-weight: bold; margin-left: 4px;")
+        self.flush_feedback.setStyleSheet("color: #cfd3dc; font-size: 10px; margin-left: 4px;")
         self.flush_feedback.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.grid.addWidget(self.flush_feedback, 0, 3, 2, 1)
         
@@ -151,7 +151,6 @@ class ResourceWidget(QWidget):
     def _flush_vram(self):
         self.pre_flush_vram = self.current_total_vram_gb
         self.flush_btn.setEnabled(False)
-        self.flush_feedback.setStyleSheet("color: #FFC107; font-size: 10px; font-weight: bold; margin-left: 4px;") # Amber
         self.flush_feedback.setText("Flushing")
         self.anim_timer.start(300)
         
@@ -171,15 +170,17 @@ class ResourceWidget(QWidget):
             # Wait 1.5s for VRAM to actually drop and update in monitor
             QTimer.singleShot(1500, self._show_flush_result)
         else:
-            self.flush_feedback.setStyleSheet("color: #F44336; font-size: 10px; font-weight: bold; margin-left: 4px;") # Red
             self.flush_feedback.setText("Failed")
             self.flush_btn.setEnabled(True)
             QTimer.singleShot(3000, lambda: self.flush_feedback.setText(""))
 
     def _show_flush_result(self):
         diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
-        self.flush_feedback.setStyleSheet("color: #4CAF50; font-size: 10px; font-weight: bold; margin-left: 4px;") # Green
-        self.flush_feedback.setText(f"Freed {diff:.1f}GB!")
+        if diff < 0.1:
+            self.flush_feedback.setText("Flushed")
+        else:
+            self.flush_feedback.setText(f"Freed {diff:.1f}GB")
+        
         self.flush_btn.setEnabled(True)
         QTimer.singleShot(4000, lambda: self.flush_feedback.setText(""))
 
