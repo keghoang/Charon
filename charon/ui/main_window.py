@@ -1982,9 +1982,7 @@ QPushButton#NewWorkflowButton:pressed {{
 
     def _apply_folder_compatibility_async(self, folder_names):
         """Apply compatibility colors without blocking the UI thread."""
-        print(f"[DEBUG] _apply_folder_compatibility_async called")
         if not self.current_base or not os.path.isdir(self.current_base):
-            print(f"[DEBUG] current_base invalid, returning")
             return
 
         cache_manager = get_cache_manager()
@@ -1999,21 +1997,16 @@ QPushButton#NewWorkflowButton:pressed {{
             cache_key = f"folder_nonempty_v2:{folder_path}"
             cached = cache_manager.get_cached_data(cache_key, max_age_seconds=600)
             if cached is not None:
-                print(f"[DEBUG] Cache hit for {folder_name}: {cached}")
                 compatibility[folder_name] = bool(cached)
             else:
-                print(f"[DEBUG] Cache miss for {folder_name}")
                 pending.append((folder_name, folder_path, cache_key))
 
         if compatibility:
-            print(f"[DEBUG] Applying cached compatibility: {compatibility}")
             self.folder_panel.apply_compatibility(compatibility)
 
         if not pending:
-            print(f"[DEBUG] No pending folders")
             return
 
-        print(f"[DEBUG] Submitting {len(pending)} folders for probing")
         self._folder_probe_generation += 1
         generation = self._folder_probe_generation
 
