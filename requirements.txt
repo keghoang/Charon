@@ -2,6 +2,8 @@
 playwright
 trimesh
 hf_xet
+psutil
+pynvml
 
 # Installed custom nodes
 # - ComfyUI-Manager

@@ -11,6 +11,7 @@ from .execution_history_panel import ExecutionHistoryPanel
 from .quick_search import QuickSearchDialog
 from .tag_bar import TagBar
 from .tiny_mode_widget import TinyModeWidget
+from .resource_widget import ResourceWidget
 from ..folder_loader import FolderListLoader
 from .comfy_connection_widget import ComfyConnectionWidget
 from .scene_nodes_panel import SceneNodesPanel as CharonBoardPanel
@@ -392,6 +393,12 @@ class CharonWindow(QtWidgets.QWidget):
         except Exception:
             pass
         
+        if hasattr(self, 'resource_widget'):
+            try:
+                self.resource_widget.close()
+            except Exception:
+                pass
+
         super().closeEvent(event)
 
     def setup_ui(self):
@@ -676,15 +683,8 @@ class CharonWindow(QtWidgets.QWidget):
         self.project_label.setMinimumWidth(280)
         project_layout.addWidget(self.project_label)
 
-        self.gpu_label = QtWidgets.QLabel(parent)
-        self.gpu_label.setObjectName("charonGpuLabel")
-        self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.gpu_label.setWordWrap(False)
-        gpu_font = QtGui.QFont(self.project_label.font())
-        gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
-        self.gpu_label.setFont(gpu_font)
-        self.gpu_label.setStyleSheet("color: #cfd3dc;")
-        project_layout.addWidget(self.gpu_label)
+        self.resource_widget = ResourceWidget(parent)
+        project_layout.addWidget(self.resource_widget)
 
         footer_layout.addWidget(project_container, 1)
 
@@ -1032,18 +1032,7 @@ QPushButton#NewWorkflowButton:pressed {{
 
     def _refresh_gpu_display(self):
         """Update the footer with detected GPU/VRAM summary."""
-        label = getattr(self, "gpu_label", None)
-        if label is None:
-            return
-        if not getattr(self, "_gpu_summary", None):
-            try:
-                self._gpu_summary = self._detect_gpu_summary()
-            except Exception as exc:
-                system_debug(f"GPU detection fallback failed: {exc}")
-                self._gpu_summary = "GPU: Unknown"
-        summary = self._gpu_summary or "GPU: Unknown"
-        label.setText(summary)
-        label.setToolTip(summary)
+        pass
     
     def _on_keybind_triggered(self, action: str):
         """Handle keybind trigger from keybind manager."""

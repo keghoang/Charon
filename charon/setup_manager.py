@@ -120,6 +120,8 @@ class SetupManager:
         statuses["playwright"] = "found" if self._playwright_available() else "missing"
         statuses["trimesh"] = "found" if self._module_available("trimesh") else "missing"
         statuses["hf_xet"] = "found" if self._module_available("hf_xet") else "missing"
+        statuses["psutil"] = "found" if self._module_available("psutil") else "missing"
+        statuses["pynvml"] = "found" if self._module_available("pynvml") else "missing"
 
         # Custom Nodes
         if self.comfy_dir:
@@ -228,7 +230,15 @@ class SetupManager:
         if current_status.get("hf_xet") == "missing":
             tasks.append(("Installing hf_xet...", [self.python_exe, "-m", "pip", "install", "hf_xet"]))
 
-        # 4. ComfyUI-Manager
+        # 4. psutil
+        if current_status.get("psutil") == "missing":
+            tasks.append(("Installing psutil...", [self.python_exe, "-m", "pip", "install", "psutil"]))
+
+        # 5. pynvml
+        if current_status.get("pynvml") == "missing":
+            tasks.append(("Installing pynvml...", [self.python_exe, "-m", "pip", "install", "pynvml"]))
+
+        # 6. ComfyUI-Manager
         if current_status.get("manager") == "missing":
             if git_path:
                 tasks.append(( 
