@@ -92,6 +92,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
         self.launch_button = QtWidgets.QPushButton("Start Server")
         self.launch_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.launch_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self.launch_button.clicked.connect(self._handle_launch_or_stop)
         self.launch_button.setSizePolicy(
             QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred
@@ -111,6 +112,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.settings_button.setText("")  # Hide gear icon; popover moved to main Settings button
         self.settings_button.setAutoRaise(True)
         self.settings_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.settings_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self.settings_button.setToolTip("")
         self.settings_button.setMinimumWidth(20)
         self.settings_button.installEventFilter(self)
@@ -346,6 +348,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             f" border: 1px solid {border};"
             " padding: 2px 10px;"
             " border-radius: 3px;"
+            " margin: 0px;"
+            " outline: none;"
             "}"
         )
         if hover and button.isEnabled():
@@ -361,6 +365,13 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 f" color: {text_color};"
                 "}"
             )
+        style += (
+            " QPushButton:focus {"
+            f" background-color: {background};"
+            " outline: none;"
+            f" border: 1px solid {border};"
+            "}"
+        )
         button.setStyleSheet(style)
 
     def _apply_outline_button_style(
@@ -379,6 +390,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             f" border: 1px solid {border};"
             " padding: 2px 10px;"
             " border-radius: 3px;"
+            " margin: 0px;"
+            " outline: none;"
             "}"
             " QPushButton:disabled {"
             " background-color: transparent;"
@@ -393,6 +406,13 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 f" border-color: {hover};"
                 "}"
             )
+        style += (
+            " QPushButton:focus {"
+            " background-color: transparent;"
+            " outline: none;"
+            f" border: 1px solid {border};"
+            "}"
+        )
         button.setStyleSheet(style)
 
     def _compute_launch_button_min_width(self) -> int:

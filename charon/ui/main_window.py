@@ -68,10 +68,13 @@ COLOR_NEW_WORKFLOW_PRESSED = "#7393bf"
 
 class CharonWindow(QtWidgets.QWidget):
     WINDOW_TITLE_BASE = "Charon - Nuke/ComfyUI Integration"
+    
+    gpu_info_ready = QtCore.Signal(str)
 
     def __init__(self, global_path=None, local_path=None, host="Nuke", parent=None, startup_mode="normal"):
         super(CharonWindow, self).__init__(parent)
         self._charon_is_charon_window = True
+        self.gpu_info_ready.connect(self._update_gpu_label)
         try:
             self.setObjectName("CharonWindow")
         except Exception:
@@ -1545,22 +1548,24 @@ QPushButton#NewWorkflowButton:pressed {{
         label.setText(f"Project: Unknown")
         label.setToolTip(f"Project not found, saving to {destination}")
 
-    def _refresh_gpu_display(self):
-        """Update the footer with detected GPU/VRAM summary (async)."""
+    def _update_gpu_label(self, summary: str):
+        self._gpu_summary = summary
         label = getattr(self, "gpu_label", None)
-        if label is None:
-            return
-            
-        # Use cached value if available
-        if getattr(self, "_gpu_summary", None):
-            summary = self._gpu_summary
+        if label:
             label.setText(f"GPU: {summary}")
             label.setToolTip(summary)
+
+    def _refresh_gpu_display(self):
+        """Update the footer with detected GPU/VRAM summary (async)."""
+        if getattr(self, "_gpu_summary", None):
+            self._update_gpu_label(self._gpu_summary)
             return
 
-        label.setText("GPU: Detecting...")
+        label = getattr(self, "gpu_label", None)
+        if label:
+            label.setText("GPU: Detecting...")
         
-        def worker():
+        def run_check():
             try:
                 entries = self._detect_nvidia_gpus()
                 if not entries:
@@ -1569,29 +1574,13 @@ QPushButton#NewWorkflowButton:pressed {{
             except Exception as exc:
                 system_debug(f"GPU detection failed: {exc}")
                 summary = "Unknown GPU"
-            return summary
+            
+            self.gpu_info_ready.emit(summary)
 
-        def on_complete(summary):
-            self._gpu_summary = summary
-            if getattr(self, "gpu_label", None):
-                self.gpu_label.setText(f"GPU: {summary}")
-                self.gpu_label.setToolTip(summary)
-        
-        future = self._folder_probe_executor.submit(worker)
-        
-        def callback(f):
-            try:
-                result = f.result()
-            except:
-                result = "Unknown GPU"
-            
-            QtCore.QMetaObject.invokeMethod(
-                label,
-                lambda: on_complete(result),
-                QtCore.Qt.QueuedConnection
-            )
-            
-        future.add_done_callback(callback)
+        # Use dedicated thread to avoid thread pool starvation
+        thread = threading.Thread(target=run_check)
+        thread.daemon = True
+        thread.start()
     
     def _on_keybind_triggered(self, action: str):
         """Handle keybind trigger from keybind manager."""
