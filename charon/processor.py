@@ -1805,15 +1805,15 @@ def process_charonop_node():
                     pass
 
             read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
-            target_read_name = f"CharonRead2D_{read_base}"
+            target_read_name = f"CR2D_{read_base}"
             try:
                 read_node.setName(target_read_name)
             except Exception:
                 try:
-                    read_node.setName(f"CharonRead2D_{read_base}_{charon_node_id}")
+                    read_node.setName(f"CR2D_{read_base}_{charon_node_id}")
                 except Exception:
                     try:
-                        read_node.setName("CharonRead2D")
+                        read_node.setName("CR2D")
                     except Exception:
                         pass
             try:
@@ -2971,10 +2971,10 @@ def process_charonop_node():
                                             read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
                                             label_base = _sanitize_name(label, "Output2D")
                                             try:
-                                                read_node.setName(f"CharonRead2D_{read_base}_{label_base}")
+                                                read_node.setName(f"CR2D_{read_base}_{label_base}")
                                             except Exception:
                                                 try:
-                                                    read_node.setName("CharonRead2D")
+                                                    read_node.setName("CR2D")
                                                 except Exception:
                                                     pass
                                             log_debug(f'Created CharonRead2D for output group: {label}')
@@ -3073,6 +3073,15 @@ def process_charonop_node():
                                             except Exception:
                                                 pass
                                         try:
+                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            label_base = _sanitize_name(label, "Output3D")
+                                            read_node.setName(f"CR3D_{read_base}_{label_base}")
+                                        except Exception:
+                                            try:
+                                                read_node.setName("CR3D")
+                                            except Exception:
+                                                pass
+                                        try:
                                             navigation_json = json.dumps(group_entries)
                                         except Exception as serialize_error:
                                             log_debug(f'Could not serialize 3D outputs for {label}: {serialize_error}', 'WARNING')
@@ -3159,10 +3168,10 @@ def process_charonop_node():
                                         try:
                                             read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
                                             label_base = _sanitize_name(label, "Output3D")
-                                            read_node.setName(f"CharonRead3D_{read_base}_{label_base}")
+                                            read_node.setName(f"CR3D_{read_base}_{label_base}")
                                         except Exception:
                                             try:
-                                                read_node.setName("CharonRead3D")
+                                                read_node.setName("CR3D")
                                             except Exception:
                                                 pass
 
@@ -3338,15 +3347,16 @@ def process_charonop_node():
                                                     except Exception:
                                                         pass
                                                 try:
-                                                    node_name_base = _sanitize_name(CAMERA_OUTPUT_LABEL, 'CharonCamera')
-                                                    cam_node.setName(f'{node_name_base}_{_sanitize_name(parent_norm_local, "cam")}')
+                                                    camera_folder = os.path.basename(os.path.dirname(camera_path_norm)) or ""
+                                                    camera_label = _sanitize_name(camera_folder, 'Cam')
+                                                    cam_node.setName(f"CRCAM_{camera_label}")
                                                 except Exception:
                                                     try:
-                                                        cam_node.setName('CharonCamera_DA3')
+                                                        cam_node.setName('CRCAM')
                                                     except Exception:
                                                         pass
                                                 try:
-                                                    cam_node['label'].setValue(f'{CAMERA_OUTPUT_LABEL}\\nFile: {os.path.basename(camera_path_norm)}')
+                                                    cam_node['label'].setValue("")
                                                 except Exception:
                                                     pass
                                                 try:
@@ -3662,11 +3672,11 @@ def recreate_missing_read_node():
         pass
     try:
         read_base = _sanitize_name(os.path.splitext(os.path.basename(normalized_output))[0], "Workflow")
-        target_name = f"CharonRead3D_{read_base}" if read_class == "ReadGeo2" else f"CharonRead2D_{read_base}"
+        target_name = f"CR3D_{read_base}" if read_class == "ReadGeo2" else f"CR2D_{read_base}"
         read_node.setName(target_name)
     except Exception:
         try:
-            fallback_name = "CharonRead3D" if read_class == "ReadGeo2" else "CharonRead2D"
+            fallback_name = "CR3D" if read_class == "ReadGeo2" else "CR2D"
             read_node.setName(fallback_name)
         except Exception:
             pass

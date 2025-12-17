@@ -166,6 +166,7 @@ class TinyModeWidget(QtWidgets.QWidget):
         self.node_list.setUniformItemSizes(True)
         self.node_list.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.node_list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.node_list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.node_list.setSpacing(4)
         self.node_list.itemDoubleClicked.connect(self._on_node_item_double_clicked)
 
@@ -302,6 +303,9 @@ class TinyModeWidget(QtWidgets.QWidget):
         if not hasattr(self, "node_list"):
             return
 
+        vbar = self.node_list.verticalScrollBar()
+        saved_vpos = vbar.value() if vbar is not None else 0
+
         self.node_list.setUpdatesEnabled(False)
         self.node_list.clear()
 
@@ -333,6 +337,12 @@ class TinyModeWidget(QtWidgets.QWidget):
             self.node_list.setItemWidget(item, row_widget)
 
         self.node_list.setUpdatesEnabled(True)
+
+        if vbar is not None:
+            try:
+                vbar.setValue(min(saved_vpos, vbar.maximum()))
+            except Exception:
+                pass
 
     def _on_node_item_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         if item is None:
@@ -585,6 +595,7 @@ class _NodeRowWidget(QtWidgets.QWidget):
         name_font = self.name_label.font()
         name_font.setBold(True)
         self.name_label.setFont(name_font)
+        self.name_label.setWordWrap(True)
         self.name_label.setTextInteractionFlags(QtCore.Qt.NoTextInteraction)
         layout.addWidget(self.name_label)
 
@@ -620,7 +631,7 @@ class _NodeRowWidget(QtWidgets.QWidget):
         self._node_name = info.name
         self.name_label.setText(display_name)
 
-        tooltip = info.workflow_path or info.workflow_name or ""
+        tooltip = info.name or display_name or info.workflow_path or info.workflow_name or ""
         self.name_label.setToolTip(tooltip)
         self.progress_bar.setToolTip(status_text)
 
