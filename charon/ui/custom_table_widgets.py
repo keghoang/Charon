@@ -89,7 +89,7 @@ class ScriptTableView(QtWidgets.QTableView):
         focusless_style = 'QTableView::item:focus { outline: none; }'
         header_style = """
         QHeaderView {
-            background: #37393f;
+            background: #37383D;
             border: 1px solid #171a1f;
             border-bottom: 0px;
             border-top-left-radius: 8px;
@@ -98,7 +98,7 @@ class ScriptTableView(QtWidgets.QTableView):
             padding: 0px;
         }
         QHeaderView::section {
-            background: #37393f;
+            background: #37383D;
             color: palette(windowText);
             border: none;
             padding: 4px 6px;
@@ -118,7 +118,7 @@ class ScriptTableView(QtWidgets.QTableView):
             padding: 0px;
         }
         QTableCornerButton::section {
-            background: #37393f;
+            background: #37383D;
             border: 1px solid #171a1f;
             border-bottom: 0px;
             border-top-left-radius: 8px;
@@ -448,7 +448,7 @@ class FolderTableView(QtWidgets.QTableView):
         self.horizontalHeader().show()
         header_style = """
         QHeaderView {
-            background: #37393f;
+            background: #37383D;
             border: 1px solid #171a1f;
             border-bottom: 0px;
             border-top-left-radius: 8px;
@@ -457,7 +457,7 @@ class FolderTableView(QtWidgets.QTableView):
             padding: 0px;
         }
         QHeaderView::section {
-            background: #37393f;
+            background: #37383D;
             color: palette(windowText);
             border: none;
             padding: 4px 6px;
@@ -477,7 +477,7 @@ class FolderTableView(QtWidgets.QTableView):
             padding: 0px;
         }
         QTableCornerButton::section {
-            background: #37393f;
+            background: #37383D;
             border: 1px solid #171a1f;
             border-bottom: 0px;
             border-top-left-radius: 8px;
