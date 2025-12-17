@@ -1881,7 +1881,7 @@ QPushButton#NewWorkflowButton:pressed {{
         if layout is not None:
             # Handle QGridLayout specifically to ensure correct placement
             if isinstance(layout, QtWidgets.QGridLayout):
-                layout.addWidget(widget, 1, 2, Qt.AlignRight | Qt.AlignVCenter)
+                layout.addWidget(widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
             else:
                 layout.addWidget(widget)
         widget.setParent(self.normal_widget)
