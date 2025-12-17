@@ -1845,9 +1845,8 @@ class CharonWindow(QtWidgets.QWidget):
     
     def on_bookmarked_scripts_loaded(self, scripts):
         """Handle when bookmarked scripts are loaded"""
-        # Clear parent folder and hide new script button for bookmarks
+        # Clear parent folder for bookmark view
         self.script_panel.parent_folder = None
-        self.script_panel.new_script_button.setVisible(False)
         # Update the script panel with bookmarked scripts
         self.script_panel.on_scripts_loaded(scripts)
         # Update tags from loaded scripts
