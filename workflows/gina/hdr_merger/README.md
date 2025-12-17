@@ -1,4 +1,4 @@
-# HDR Merge Toolkit
+# Hdr Merger
 
 Combines exposure brackets into a single HDR preview.
 

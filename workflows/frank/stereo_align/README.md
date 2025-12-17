@@ -1,4 +1,4 @@
-# Stereo Alignment Helper
+# Stereo Align
 
 Aligns stereo pairs using disparity estimation.
 

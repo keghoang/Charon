@@ -1,4 +1,4 @@
-# Texture Magic Atlas
+# Texture Magic
 
 Builds a texture UDIM atlas and saves a high-res preview.
 

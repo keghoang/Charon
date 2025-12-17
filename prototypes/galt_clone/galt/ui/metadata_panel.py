@@ -389,11 +389,7 @@ class MetadataPanel(QtWidgets.QWidget):
 
         display_name = Path(script_folder).name
         self.charon_title.setText(display_name)
-        raw_display = charon.get("display_name")
-        if raw_display and raw_display != display_name:
-            self.charon_title.setToolTip(raw_display)
-        else:
-            self.charon_title.setToolTip("")
+        self.charon_title.setToolTip("")
 
         description = charon.get("description") or "No description provided."
         self.charon_description.setText(description)

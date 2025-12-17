@@ -1,4 +1,4 @@
-# Camera Match Visualizer
+# Camera Match
 
 Shows lineup of CG renders with the live-action plate for quick QC.
 

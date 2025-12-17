@@ -1,4 +1,4 @@
-# Roto Mask Helper
+# Roto Helper
 
 Smooths roto mattes and outputs sanitized masks for keyers.
 

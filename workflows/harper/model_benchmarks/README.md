@@ -1,4 +1,4 @@
-# Model Benchmark Runner
+# Model Benchmarks
 
 Benchmarks favorite diffusion models on a standard prompt list.
 

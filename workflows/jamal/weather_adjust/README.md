@@ -1,4 +1,4 @@
-# Weather Adjustment Toolkit
+# Weather Adjust
 
 Adds rain and fog overlays to plates for concept previews.
 

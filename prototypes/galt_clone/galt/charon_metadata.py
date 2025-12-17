@@ -6,19 +6,17 @@ following schema:
 
 {
     "workflow_file": "workflow.json",
-    "display_name": "Speed Grade Diffusion",
     "description": "Short summary shown in the metadata pane.",
     "dependencies": [
-        "https://github.com/Example/charon-core"
+        {"name": "charon-core", "repo": "https://github.com/example/charon-core", "ref": "main"}
     ],
     "last_changed": "2025-10-18T16:32:00Z",
     "tags": ["comfy", "grading", "FLUX"]
 }
 
-This module parses the new structure and produces a dictionary that matches the
-legacy Galt expectations so that the existing UI continues to function without
-a full rewrite. The raw Charon metadata is returned under the `charon_meta`
-key for panels that want richer context.
+This module parses the structure and produces a dictionary that the existing UI
+can consume while keeping the raw Charon metadata available under `charon_meta`
+for callers that need direct access.
 """
 
 from __future__ import annotations
@@ -30,17 +28,8 @@ from urllib.parse import urlparse
 
 CHARON_METADATA_FILENAME = ".charon.json"
 
-LEGACY_DEFAULTS: Dict[str, Any] = {
-    "entry": None,
-    "script_type": "python",
-    "run_on_main": False,
-    "mirror_prints": True,
-    "tags": [],
-}
-
 CHARON_DEFAULTS: Dict[str, Any] = {
     "workflow_file": "workflow.json",
-    "display_name": "Untitled Workflow",
     "description": "Describe this workflow.",
     "dependencies": [],
     "last_changed": None,
@@ -48,29 +37,49 @@ CHARON_DEFAULTS: Dict[str, Any] = {
 }
 
 
-def _normalize_dependency_urls(values) -> List[str]:
-    """Return a cleaned list of dependency URLs from mixed legacy formats."""
-    normalized: List[str] = []
+def _normalize_dependency(dep) -> Optional[Dict[str, str]]:
+    """Normalize a dependency entry into a dict with repo/name/ref keys."""
+    repo = ""
+    name = ""
+    ref = ""
+
+    if isinstance(dep, str):
+        repo = dep.strip()
+    elif isinstance(dep, dict):
+        repo = (dep.get("repo") or dep.get("url") or "").strip()
+        name = (dep.get("name") or "").strip()
+        ref = (dep.get("ref") or "").strip()
+    else:
+        return None
+
+    if not repo and not name:
+        return None
+
+    if not name:
+        parsed = urlparse(repo)
+        path = (parsed.path or "").rstrip("/")
+        if path:
+            name = path.split("/")[-1]
+            if name.endswith(".git"):
+                name = name[:-4]
+    result: Dict[str, str] = {}
+    if name:
+        result["name"] = name
+    if repo:
+        result["repo"] = repo
+    if ref:
+        result["ref"] = ref
+    return result or None
+
+
+def _normalize_dependencies(values) -> List[Dict[str, str]]:
+    """Return dependency entries as dictionaries."""
+    normalized: List[Dict[str, str]] = []
     for dep in values or []:
-        candidate = ""
-        if isinstance(dep, str):
-            candidate = dep.strip()
-        elif isinstance(dep, dict):
-            candidate = (dep.get("repo") or dep.get("url") or dep.get("name") or "").strip()
-        if candidate:
-            normalized.append(candidate)
+        normalized_entry = _normalize_dependency(dep)
+        if normalized_entry:
+            normalized.append(normalized_entry)
     return normalized
-
-
-def _derive_dependency_entry(url: str) -> Dict[str, str]:
-    """Derive display metadata for a dependency URL."""
-    parsed = urlparse(url)
-    path = (parsed.path or "").rstrip("/")
-    name = path.split("/")[-1] if path else url
-    if name.endswith(".git"):
-        name = name[:-4]
-    name = name or url
-    return {"repo": url, "name": name}
 
 
 def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
@@ -91,25 +100,24 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
     if not isinstance(raw_meta, dict):
         return None
 
-    raw_dependencies = _normalize_dependency_urls(raw_meta.get("dependencies"))
-    raw_meta["dependencies"] = raw_dependencies
+    normalized_dependencies = _normalize_dependencies(raw_meta.get("dependencies"))
+    stored_meta: Dict[str, Any] = {
+        "workflow_file": raw_meta.get("workflow_file") or "workflow.json",
+        "description": raw_meta.get("description") or "",
+        "dependencies": normalized_dependencies,
+        "last_changed": raw_meta.get("last_changed"),
+        "tags": list(raw_meta.get("tags") or []),
+    }
 
-    metadata: Dict[str, Any] = LEGACY_DEFAULTS.copy()
-    metadata["tags"] = list(raw_meta.get("tags") or [])
-    metadata["charon_meta"] = raw_meta
-
-    # Allow the metadata to opt into main-thread execution if required later.
-    metadata["run_on_main"] = bool(raw_meta.get("run_on_main", metadata["run_on_main"]))
-
-    # Preserve backwards compatibility for other parts of the UI.
-    metadata["entry"] = raw_meta.get("entry")
-
-    # Expose a friendly name used by the script panel.
-    metadata["display_name"] = raw_meta.get("display_name")
-    metadata["description"] = raw_meta.get("description")
-    metadata["workflow_file"] = raw_meta.get("workflow_file")
-    metadata["last_changed"] = raw_meta.get("last_changed")
-    metadata["dependencies"] = [_derive_dependency_entry(url) for url in raw_dependencies]
+    metadata: Dict[str, Any] = {
+        "description": stored_meta["description"],
+        "workflow_file": stored_meta["workflow_file"],
+        "last_changed": stored_meta["last_changed"],
+        "tags": stored_meta["tags"],
+        "dependencies": normalized_dependencies,
+        "charon_meta": stored_meta,
+        "run_on_main": bool(raw_meta.get("run_on_main", False)),
+    }
 
     return metadata
 
@@ -125,7 +133,11 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
     if data:
         filtered = {k: v for k, v in data.items() if v is not None}
         if "dependencies" in filtered:
-            filtered["dependencies"] = _normalize_dependency_urls(filtered["dependencies"])
+            filtered["dependencies"] = _normalize_dependencies(filtered["dependencies"])
+        if "tags" in filtered:
+            filtered["tags"] = list(filtered.get("tags") or [])
+        for legacy_key in ("display_name", "entry", "run_on_main", "script_type", "mirror_prints"):
+            filtered.pop(legacy_key, None)
         payload.update(filtered)
 
     try:

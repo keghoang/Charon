@@ -1,4 +1,4 @@
-# FX Batch Runner
+# Fx Batch
 
 Post-processes a VDB cache, renders a few frames, and stores the sequence.
 

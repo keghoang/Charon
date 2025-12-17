@@ -1,4 +1,4 @@
-# Lookdev Compare Board
+# Lookdev Compare
 
 Generates a contact sheet comparing multiple look presets.
 

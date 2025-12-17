@@ -1,4 +1,4 @@
-# Animation Keyframe Expander
+# Animation Keyframes
 
 Interpolates keyframes into in-between frames using AI tweening.
 

@@ -1,4 +1,4 @@
-# Speed Grade Diffusion
+# Speed Grade
 
 Grades a plate using tone curves and writes a single preview frame.
 

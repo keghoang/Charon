@@ -1,4 +1,4 @@
-# Lighting Suite Batch
+# Lighting Suite
 
 Applies a studio lighting preset to a USD layout and renders a preview.
 
