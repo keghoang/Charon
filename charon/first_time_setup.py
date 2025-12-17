@@ -124,7 +124,7 @@ def ensure_requirements_with_log(parent=None) -> bool:
     missing = [k for k, v in status_map.items() if v != "found"]
 
     log_missing = log_path is None or not log_path.exists()
-    need_setup = log_missing or bool(missing)
+    need_setup = log_missing or bool(missing) or is_force_first_time_setup_enabled()
 
     setup_ran = False
     setup_ok = True
