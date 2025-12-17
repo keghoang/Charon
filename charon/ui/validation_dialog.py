@@ -2648,7 +2648,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         copied_bytes = self._clamp_size(state.copied_bytes)
         total_bytes = self._clamp_size(state.total_bytes)
         percent = max(0, min(int(state.percent), 100))
-        total_display = self._format_bytes_progress(total_bytes) if total_bytes else "unknown size"
+        if total_bytes:
+            last_total = row_info.get("last_progress_total_bytes")
+            if last_total == total_bytes:
+                total_display = row_info.get("last_progress_total_display") or self._format_bytes_progress(total_bytes)
+            else:
+                total_display = self._format_bytes_progress(total_bytes)
+                row_info["last_progress_total_bytes"] = total_bytes
+                row_info["last_progress_total_display"] = total_display
+        else:
+            total_display = row_info.get("last_progress_total_display") or "unknown size"
         prefix = "Copying from Global Repo" if state.kind == "copy" else "Downloading model"
         subtitle = (
             f"{prefix}: {percent}% "
