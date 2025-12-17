@@ -658,18 +658,23 @@ def _normalize_validation_payload(
             for cat in list(raw_paths.keys()) if isinstance(raw_paths, dict) else []:
                 if cat.startswith("custom_nodes") and cat not in model_paths:
                     model_paths[cat] = raw_paths.get(cat) if isinstance(raw_paths.get(cat), list) else []
-            missing_entries = []
+            missing_entries: list[dict] = []
             for entry in data.get("missing_models") or []:
                 if isinstance(entry, dict):
                     missing_entries.append(
                         _normalize_model_missing_entry(entry, models_root, include_resolve=include_resolve)
                     )
             found = data.get("found") if isinstance(data, dict) else []
-            ok_flag = len(missing_entries) == 0
+            unresolved_entries = [
+                entry
+                for entry in missing_entries
+                if str(entry.get("resolve_status") or "").strip().lower() not in {"success", "resolved", "copied"}
+            ]
+            ok_flag = len(unresolved_entries) == 0
             summary = (
                 "All required model files reported by ComfyUI."
                 if ok_flag
-                else f"Missing {len(missing_entries)} model file(s)."
+                else f"Missing {len(unresolved_entries)} model file(s)."
             )
             norm_data = {
                 "models_root": models_root,
