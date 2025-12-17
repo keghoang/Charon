@@ -1,6 +1,6 @@
 from .qt_compat import QtCore, QtGui
 from .metadata_manager import get_charon_config
-from .utilities import is_compatible_with_host, apply_incompatible_opacity, get_software_color_for_metadata
+from .utilities import get_software_color_for_metadata
 from .cache_manager import get_cache_manager
 from .charon_logger import system_debug, log_user_action_detail
 from .network_optimizer import get_batch_reader
@@ -407,16 +407,7 @@ class ScriptListModel(QtCore.QAbstractListModel):
         if role == ForegroundRole:
             # Get the base color using centralized utility
             base_color = get_software_color_for_metadata(item.metadata)
-            
-            # Check if script is compatible with current host
-            is_compatible = is_compatible_with_host(item.metadata, self.host)
-            
-            if is_compatible:
-                return QtGui.QBrush(QtGui.QColor(base_color))
-            else:
-                # Apply opacity to incompatible scripts while preserving base color
-                color = QtGui.QColor(base_color)
-                return QtGui.QBrush(apply_incompatible_opacity(color))
+            return QtGui.QBrush(QtGui.QColor(base_color))
         if role == ScriptListModel.NameRole:
             return item.name
         if role == ScriptListModel.MetadataRole:

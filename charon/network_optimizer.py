@@ -143,56 +143,6 @@ class NetworkBatchReader:
             system_error(f"Error reading {path}: {e}")
             return None
     
-    def batch_check_compatibility(self, folder_path: str, host: str) -> Dict[str, bool]:
-        """
-        Check compatibility for all subfolders at once.
-        
-        Returns:
-            Dict mapping folder_name -> is_compatible
-        """
-        cache_key = f"batch_compat:{folder_path}:{host}"
-        cached = self.cache_manager.get_cached_data(cache_key, max_age_seconds=600)
-        if cached is not None:
-            return cached
-        
-        # Get all metadata first
-        metadata_map = self.batch_read_metadata(folder_path)
-        
-        # Check compatibility for each
-        compat_map = {}
-        for folder_name in os.listdir(folder_path):
-            if not folder_name.startswith('.'):
-                folder_full_path = os.path.join(folder_path, folder_name)
-                if os.path.isdir(folder_full_path):
-                    # Check if any script in folder is compatible
-                    is_compatible = False
-                    for script_name, metadata in metadata_map.items():
-                        if self._is_compatible(metadata, host):
-                            is_compatible = True
-                            break
-                    compat_map[folder_name] = is_compatible
-        
-        # Cache result
-        self.cache_manager.cache_data(cache_key, compat_map, ttl_seconds=600)
-        return compat_map
-    
-    def _is_compatible(self, metadata: Optional[dict], host: str) -> bool:
-        """Check if metadata indicates compatibility with host."""
-        if not metadata:
-            return True  # No metadata = compatible
-        
-        software = metadata.get("software", [])
-        if not software:
-            return True
-        
-        # Check if host matches any software
-        for sw in software:
-            if sw.lower() == host.lower():
-                return True
-        
-        return False
-
-
 # Global instance
 _batch_reader: Optional[NetworkBatchReader] = None
 
