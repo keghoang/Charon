@@ -28,6 +28,7 @@ import re
 import json
 from pathlib import Path
 from datetime import datetime
+import time
 
 
 class _ValidationWorker(QtCore.QObject):

@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import zlib
+import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
 from .conversion_cache import (
@@ -34,6 +35,10 @@ from .utilities import (
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
 MODEL_OUTPUT_EXTENSIONS = {".obj", ".fbx", ".abc", ".gltf", ".glb", ".usd", ".usdz"}
+CAMERA_OUTPUT_EXTENSIONS = {".nukecam"}
+THREE_D_OUTPUT_EXTENSIONS = MODEL_OUTPUT_EXTENSIONS | CAMERA_OUTPUT_EXTENSIONS
+CAMERA_OUTPUT_LABEL = "BUCK_Camera_from_DA3"
+IGNORE_OUTPUT_PREFIX = "charoninput_ignore"
 IMAGE_OUTPUT_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -354,6 +359,16 @@ def _ensure_parameter_bindings(
         _write_parameter_specs(node, updated_specs)
 
     return updated_specs
+
+
+def _is_ignored_output(path: Optional[str]) -> bool:
+    """
+    Determine whether a file should be ignored based on the configured prefix.
+    """
+    if not path:
+        return False
+    base = os.path.basename(str(path)).strip().lower()
+    return base.startswith(IGNORE_OUTPUT_PREFIX)
 
 
 def _apply_parameter_overrides(
@@ -2420,6 +2435,24 @@ def process_charonop_node():
                     for node_id, output_data in outputs_map.items():
                         if not isinstance(output_data, dict):
                             continue
+                        class_type = (prompt_lookup.get(node_id) or {}).get("class_type") or ""
+
+                        def _append_artifact(path: str, kind: str = "output"):
+                            if not path:
+                                return
+                            ext_local = (os.path.splitext(path)[1] or "").lower()
+                            artifacts.append(
+                                {
+                                    "filename": path,
+                                    "subfolder": output_data.get("subfolder") or "",
+                                    "type": output_data.get("type") or "output",
+                                    "extension": ext_local,
+                                    "node_id": node_id,
+                                    "class_type": class_type,
+                                    "kind": kind,
+                                }
+                            )
+
                         for key in ("images", "files", "meshes"):
                             entries = output_data.get(key)
                             if not isinstance(entries, list) or not entries:
@@ -2428,7 +2461,9 @@ def process_charonop_node():
                                 filename = entry.get("filename")
                                 if not filename:
                                     continue
-                                ext = (os.path.splitext(filename)[1] or "").lower()
+                                if _is_ignored_output(filename):
+                                    continue
+                                ext = (entry.get("extension") or os.path.splitext(filename)[1] or "").lower()
                                 artifacts.append(
                                     {
                                         "filename": filename,
@@ -2436,11 +2471,66 @@ def process_charonop_node():
                                         "type": entry.get("type") or "output",
                                         "extension": ext,
                                         "node_id": node_id,
-                                        "class_type": (prompt_lookup.get(node_id) or {}).get("class_type") or "",
+                                        "class_type": class_type,
                                         "kind": key,
                                     }
                                 )
+                        for value in output_data.values():
+                            if isinstance(value, str):
+                                candidate = value.strip()
+                                if _is_ignored_output(candidate):
+                                    continue
+                                ext_local = os.path.splitext(candidate)[1].lower()
+                                if ext_local in CAMERA_OUTPUT_EXTENSIONS:
+                                    _append_artifact(candidate, "camera")
+                                elif ext_local in MODEL_OUTPUT_EXTENSIONS:
+                                    _append_artifact(candidate, "meshes")
+                            elif isinstance(value, list):
+                                for item in value:
+                                    if isinstance(item, str):
+                                        candidate = item.strip()
+                                        if _is_ignored_output(candidate):
+                                            continue
+                                        ext_local = os.path.splitext(candidate)[1].lower()
+                                        if ext_local in CAMERA_OUTPUT_EXTENSIONS:
+                                            _append_artifact(candidate, "camera")
+                                        elif ext_local in MODEL_OUTPUT_EXTENSIONS:
+                                            _append_artifact(candidate, "meshes")
                     return artifacts
+
+                def _discover_outputs_since(timestamp: float, extensions: set) -> List[str]:
+                    """Fallback: scan ComfyUI output directory for recent files with desired extensions."""
+                    candidates: List[str] = []
+                    env = resolve_comfy_environment(comfy_path) if comfy_path else {}
+                    comfy_dir = env.get("comfy_dir") or env.get("base_dir")
+                    search_dirs = []
+                    if comfy_dir:
+                        search_dirs.append(os.path.join(comfy_dir, "output"))
+                        parent = os.path.dirname(comfy_dir)
+                        if parent and parent != comfy_dir:
+                            search_dirs.append(os.path.join(parent, "ComfyUI", "output"))
+                    search_dirs.append(os.path.join(os.getcwd(), "output"))
+                    seen = set()
+                    for folder in search_dirs:
+                        if not folder or folder in seen or not os.path.isdir(folder):
+                            continue
+                        seen.add(folder)
+                        try:
+                            for entry in os.listdir(folder):
+                                if _is_ignored_output(entry):
+                                    continue
+                                if not any(entry.lower().endswith(ext) for ext in extensions):
+                                    continue
+                                path = os.path.join(folder, entry)
+                                try:
+                                    mtime = os.path.getmtime(path)
+                                except Exception:
+                                    mtime = None
+                                if mtime is None or mtime >= (timestamp - 1.0):
+                                    candidates.append(path)
+                        except Exception:
+                            continue
+                    return candidates
 
                 for batch_index in range(batch_count):
                     seed_offset = batch_index * 9973
@@ -2502,6 +2592,25 @@ def process_charonop_node():
                                 if status_str == 'success':
                                     outputs = history_data.get('outputs', {})
                                     artifacts = _collect_output_artifacts(outputs, base_prompt) if outputs else []
+                                    has_camera = any(
+                                        (artifact.get("extension") or "").lower() in CAMERA_OUTPUT_EXTENSIONS
+                                        for artifact in artifacts
+                                    )
+                                    if not has_camera:
+                                        discovered = _discover_outputs_since(start_time, CAMERA_OUTPUT_EXTENSIONS)
+                                        for camera_path in discovered:
+                                            ext_local = (os.path.splitext(camera_path)[1] or "").lower()
+                                            artifacts.append(
+                                                {
+                                                    "filename": camera_path,
+                                                    "subfolder": "",
+                                                    "type": "output",
+                                                    "extension": ext_local,
+                                                    "node_id": "",
+                                                    "class_type": CAMERA_OUTPUT_LABEL,
+                                                    "kind": "camera",
+                                                }
+                                            )
                                     if not artifacts:
                                         raise Exception('ComfyUI did not return an output file')
 
@@ -2516,38 +2625,60 @@ def process_charonop_node():
                                                 'batch_total': batch_count,
                                             },
                                         )
-                                        raw_extension = artifact.get("extension") or ".png"
-                                        category = "3D" if raw_extension.lower() in MODEL_OUTPUT_EXTENSIONS else "2D"
+                                        raw_extension = artifact.get("extension") or ""
+                                        if not raw_extension:
+                                            raw_extension = os.path.splitext(artifact.get("filename") or "")[1] or ".png"
+                                        raw_extension_lower = raw_extension.lower()
+                                        category = (
+                                            "3D" if raw_extension_lower in THREE_D_OUTPUT_EXTENSIONS else "2D"
+                                        )
                                         output_label = (
                                             artifact.get("comfy_node_class")
                                             or artifact.get("class_type")
                                             or "Output"
                                         )
+                                        if (raw_extension_lower in CAMERA_OUTPUT_EXTENSIONS) or (
+                                            artifact.get("kind") == "camera"
+                                        ):
+                                            output_label = CAMERA_OUTPUT_LABEL
                                         output_node_name = output_label
                                         if artifact.get("node_id"):
                                             output_node_name = f"{output_label}_{artifact.get('node_id')}"
                                         allocated_output_path = _allocate_output_path(
                                             charon_node_id,
                                             _resolve_nuke_script_name(),
-                                            raw_extension,
+                                            raw_extension_lower,
                                             user_slug,
                                             workflow_display_name,
                                             category,
                                             output_node_name,
                                         )
                                         log_debug(f'Resolved output path: {allocated_output_path}')
-                                        success = comfy_client.download_file(
-                                            artifact["filename"],
-                                            allocated_output_path,
-                                            subfolder=artifact.get("subfolder", ""),
-                                            file_type=artifact.get("type", "output"),
-                                        )
+                                        source_filename = artifact.get("filename")
+                                        source_is_abs = isinstance(source_filename, str) and os.path.isabs(source_filename)
+                                        source_exists = source_is_abs and os.path.exists(source_filename)
+                                        if source_exists:
+                                            try:
+                                                os.makedirs(os.path.dirname(allocated_output_path), exist_ok=True)
+                                                shutil.copyfile(source_filename, allocated_output_path)
+                                                success = True
+                                                log_debug(f'Copied absolute output {source_filename} -> {allocated_output_path}')
+                                            except Exception as copy_error:
+                                                log_debug(f'Failed to copy absolute output {source_filename}: {copy_error}', 'WARNING')
+                                                success = False
+                                        else:
+                                            success = comfy_client.download_file(
+                                                source_filename,
+                                                allocated_output_path,
+                                                subfolder=artifact.get("subfolder", ""),
+                                                file_type=artifact.get("type", "output"),
+                                            )
                                         if not success:
                                             raise Exception('Failed to download result file from ComfyUI')
 
                                         final_output_path = allocated_output_path
                                         converted_from = None
-                                        if raw_extension.lower() == ".glb":
+                                        if raw_extension_lower == ".glb":
                                             obj_target = os.path.splitext(allocated_output_path)[0] + ".obj"
                                             log_debug(f'Converting GLB to OBJ: {allocated_output_path} -> {obj_target}')
                                             final_output_path = _convert_glb_to_obj(allocated_output_path, obj_target)
@@ -2555,6 +2686,9 @@ def process_charonop_node():
 
                                         elapsed = time.time() - start_time
                                         normalized_output_path = final_output_path.replace('\\', '/')
+                                        if _is_ignored_output(final_output_path):
+                                            log_debug(f'Skipping ignored output: {final_output_path}')
+                                            continue
                                         if category == "2D":
                                             metadata_payload = {
                                                 'charon_node_id': charon_node_id,
@@ -2586,6 +2720,9 @@ def process_charonop_node():
                                         }
                                         if converted_from:
                                             batch_entry['converted_from'] = converted_from.replace('\\', '/')
+                                        if _is_ignored_output(batch_entry.get('original_filename')):
+                                            log_debug(f"Skipped recording ignored output: {batch_entry['original_filename']}")
+                                            continue
                                         batch_outputs.append(batch_entry)
 
                                     if batch_outputs:
@@ -2728,11 +2865,13 @@ def process_charonop_node():
 
                                     def _is_mesh_entry(entry: Dict[str, Any]) -> bool:
                                         output_kind = (entry.get('output_kind') or '').upper()
-                                        if output_kind == '3D':
-                                            return True
                                         kind = (entry.get('comfy_output_kind') or '').lower()
                                         path = entry.get('output_path') or ''
                                         ext = os.path.splitext(str(path))[1].lower()
+                                        if ext in CAMERA_OUTPUT_EXTENSIONS:
+                                            return False
+                                        if output_kind == '3D':
+                                            return True
                                         return kind == 'meshes' or ext in MODEL_OUTPUT_EXTENSIONS
 
                                     def _is_image_entry(entry: Dict[str, Any]) -> bool:
@@ -2748,7 +2887,26 @@ def process_charonop_node():
                                         ext = os.path.splitext(str(path))[1].lower()
                                         return ext in IMAGE_OUTPUT_EXTENSIONS
 
+                                    def _is_camera_entry(entry: Dict[str, Any]) -> bool:
+                                        path = (
+                                            entry.get('output_path')
+                                            or entry.get('download_path')
+                                            or entry.get('original_filename')
+                                            or entry.get('extension')
+                                            or ''
+                                        )
+                                        ext = os.path.splitext(str(path))[1].lower()
+                                        return ext in CAMERA_OUTPUT_EXTENSIONS
+
                                     def _output_label(entry: Dict[str, Any], default_prefix: str = "Output") -> str:
+                                        ext_local = os.path.splitext(
+                                            entry.get('output_path')
+                                            or entry.get('download_path')
+                                            or entry.get('original_filename')
+                                            or ''
+                                        )[1].lower()
+                                        if ext_local in CAMERA_OUTPUT_EXTENSIONS:
+                                            return CAMERA_OUTPUT_LABEL
                                         label = (
                                             entry.get('comfy_node_class')
                                             or entry.get('class_type')
@@ -2821,11 +2979,21 @@ def process_charonop_node():
 
                                     image_entries = [e for e in entries if _is_image_entry(e)]
                                     mesh_entries = [e for e in entries if _is_mesh_entry(e)]
+                                    camera_entries = [e for e in entries if _is_camera_entry(e)]
 
-                                    if not image_entries and not mesh_entries:
+                                    if not image_entries and not mesh_entries and not camera_entries:
                                         log_debug('No output paths available for Read update.', 'WARNING')
                                         cleanup_files()
                                         return
+                                    if camera_entries:
+                                        for camera_entry in camera_entries:
+                                            camera_path = (
+                                                camera_entry.get('output_path')
+                                                or camera_entry.get('download_path')
+                                                or camera_entry.get('original_filename')
+                                            )
+                                            if camera_path:
+                                                log_debug(f'Camera output stored at: {camera_path}')
 
                                     def _ensure_output_label_metadata(read_node, label_text: str):
                                         try:
@@ -3102,6 +3270,83 @@ def process_charonop_node():
                                             mark_read_node(read_node)
                                         except Exception:
                                             pass
+
+                                    if camera_entries:
+                                        parent_norm_local = _normalize_node_id(charon_node_id)
+                                        for camera_entry in camera_entries:
+                                            camera_path = (
+                                                camera_entry.get('output_path')
+                                                or camera_entry.get('download_path')
+                                                or camera_entry.get('original_filename')
+                                                or ''
+                                            )
+                                            camera_path_norm = os.path.normpath(camera_path)
+                                            if not camera_path or not os.path.exists(camera_path_norm):
+                                                log_debug(f'Skipping camera import; file missing: {camera_path}', 'WARNING')
+                                                continue
+
+                                            def _already_imported(target: str) -> bool:
+                                                try:
+                                                    nodes = list(nuke.allNodes())
+                                                except Exception:
+                                                    nodes = []
+                                                for candidate in nodes:
+                                                    try:
+                                                        meta_path = (candidate.metadata('charon/camera_path') or '').strip()
+                                                    except Exception:
+                                                        meta_path = ''
+                                                    if os.path.normpath(meta_path).lower() == os.path.normpath(target).lower():
+                                                        return True
+                                                return False
+
+                                            if _already_imported(camera_path_norm):
+                                                log_debug(f'Camera already imported: {camera_path_norm}')
+                                                continue
+
+                                            try:
+                                                pre_nodes = set(nuke.allNodes())
+                                            except Exception:
+                                                pre_nodes = set()
+                                            try:
+                                                nuke.nodePaste(camera_path_norm)
+                                                log_debug(f'Imported camera from {camera_path_norm}')
+                                            except Exception as paste_error:
+                                                log_debug(f'Failed to import camera file: {paste_error}', 'ERROR')
+                                                continue
+                                            try:
+                                                post_nodes = set(nuke.allNodes())
+                                            except Exception:
+                                                post_nodes = pre_nodes
+                                            new_nodes = list(post_nodes.difference(pre_nodes))
+                                            if not new_nodes:
+                                                log_debug('No new nodes detected after camera paste.', 'WARNING')
+                                                continue
+
+                                            for cam_node in new_nodes:
+                                                try:
+                                                    cam_node.setMetaData('charon/camera_path', camera_path_norm.replace('\\', '/'))
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    cam_node.setMetaData('charon/parent_id', parent_norm_local or '')
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    cam_node.setMetaData('charon/output_label', CAMERA_OUTPUT_LABEL)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    node_name_base = _sanitize_name(CAMERA_OUTPUT_LABEL, 'CharonCamera')
+                                                    cam_node.setName(f'{node_name_base}_{_sanitize_name(parent_norm_local, "cam")}')
+                                                except Exception:
+                                                    try:
+                                                        cam_node.setName('CharonCamera_DA3')
+                                                    except Exception:
+                                                        pass
+                                                try:
+                                                    cam_node['label'].setValue(f'{CAMERA_OUTPUT_LABEL}\\nFile: {os.path.basename(camera_path_norm)}')
+                                                except Exception:
+                                                    pass
 
                                     cleanup_files()
 
