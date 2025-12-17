@@ -3388,14 +3388,17 @@ def process_charonop_node():
                                     log_debug(f"Step 2: Injected view {batch_index} into node {target_coverage_node_id}")
                                     
                                 angle_desc = ""
-                                if batch_index == 0: angle_desc = "0 degrees"
+                                override_prompt = ""
+                                if batch_index == 0: 
+                                    angle_desc = "0 degrees"
+                                    override_prompt = "Align features. Keep everything else the same"
                                 elif batch_index == 1: angle_desc = "90 degrees to the right"
                                 elif batch_index == 2: angle_desc = "180 degrees"
                                 elif batch_index == 3: angle_desc = "90 degrees to the left"
                                 elif batch_index == 4: angle_desc = "to view from top"
                                 elif batch_index == 5: angle_desc = "to view from bottom"
                                 
-                                if angle_desc:
+                                if angle_desc or override_prompt:
                                     # Try to get template from knob
                                     prompt_template = ""
                                     for spec in parameter_specs_local:
@@ -3409,7 +3412,10 @@ def process_charonop_node():
                                     
                                     injected_via_template = False
                                     if prompt_template and "*charon_angle*" in prompt_template:
-                                        final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
+                                        if override_prompt:
+                                            final_prompt = override_prompt
+                                        else:
+                                            final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
                                         log_debug(f"Step 2: Using prompt template: {final_prompt}")
                                         
                                         for nid, ndata in prompt_payload.items():
@@ -3421,22 +3427,26 @@ def process_charonop_node():
                                                     log_debug(f"Step 2: Injected prompt into node {nid} input 'prompt'")
                                     
                                     if not injected_via_template:
-                                        log_debug("Step 2: Template injection failed. Inspecting payload...")
+                                        log_debug(f"Step 2: Attempting to inject angle '{angle_desc}' via token replacement (fallback)...")
                                         for nid, ndata in prompt_payload.items():
                                             inputs = ndata.get('inputs', {})
                                             if isinstance(inputs, dict):
                                                 keys = list(inputs.keys())
-                                                # log_debug(f"Node {nid} ({ndata.get('class_type')}) inputs: {keys}")
                                                 
-                                                # Expanded fallback search
                                                 for key in keys:
                                                     val = inputs[key]
                                                     if isinstance(val, str) and "*charon_angle*" in val:
-                                                        inputs[key] = val.replace("*charon_angle*", angle_desc)
-                                                        log_debug(f"Step 2: Injected angle '{angle_desc}' into node {nid} input {key} (fallback)")
-                                                    elif key in ('text', 'string'): # Try common text input names if template matched but input name differed
+                                                        if override_prompt:
+                                                            inputs[key] = override_prompt
+                                                        else:
+                                                            inputs[key] = val.replace("*charon_angle*", angle_desc)
+                                                        log_debug(f"Step 2: Injected prompt into node {nid} input {key} (fallback)")
+                                                    elif key in ('text', 'string'): 
                                                         if prompt_template and "*charon_angle*" in prompt_template:
-                                                             final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
+                                                             if override_prompt:
+                                                                 final_prompt = override_prompt
+                                                             else:
+                                                                 final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
                                                              inputs[key] = final_prompt
                                                              log_debug(f"Step 2: Injected template into node {nid} input {key} (heuristic)")
 
