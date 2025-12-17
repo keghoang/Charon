@@ -11,9 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import asyncio
+import inspect
+import importlib.util
 import warnings
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -22,10 +25,101 @@ if str(REPO_ROOT) not in sys.path:
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 from charon.node_introspection import (  # noqa: E402
     NodeLibraryUnavailable,
     collect_workflow_widget_bindings,
 )
+
+
+def _detect_comfy_dir() -> Optional[str]:
+    for entry in sys.path:
+        try:
+            candidate = Path(entry)
+        except TypeError:
+            continue
+        if candidate.is_dir() and (candidate / "nodes.py").exists():
+            return str(candidate)
+    return None
+
+
+def _prepare_comfy_utils(comfy_dir: Optional[str]) -> None:
+    if not comfy_dir:
+        return
+    utils_dir = Path(comfy_dir) / "utils"
+    utils_init = utils_dir / "__init__.py"
+    if not utils_init.exists():
+        return
+
+    if "utils" in sys.modules:
+        del sys.modules["utils"]
+
+    spec = importlib.util.spec_from_file_location(
+        "utils",
+        str(utils_init),
+        submodule_search_locations=[str(utils_dir)],
+    )
+    if spec and spec.loader:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["utils"] = module
+        spec.loader.exec_module(module)  # type: ignore[attr-defined]
+
+
+def _ensure_nodes_initialized() -> None:
+    comfy_dir = _detect_comfy_dir()
+    _prepare_comfy_utils(comfy_dir)
+
+    try:
+        import nodes  # type: ignore
+        import server  # type: ignore
+    except ImportError:
+        return
+
+    class _CharonRouteStub:
+        def __getattr__(self, name):
+            def decorator(*args, **kwargs):
+                def passthrough(func):
+                    return func
+                return passthrough
+            return decorator
+
+    class _CharonRouterStub:
+        def add_static(self, *args, **kwargs):
+            return None
+
+    class _CharonAppStub:
+        def __init__(self):
+            self.router = _CharonRouterStub()
+
+        def add_routes(self, *args, **kwargs):
+            return None
+
+    class _CharonPromptServerStub:
+        def __init__(self):
+            self.routes = _CharonRouteStub()
+            self.app = _CharonAppStub()
+            self.supports = []
+
+        def send_sync(self, *args, **kwargs):
+            return None
+
+        def __getattr__(self, _name):
+            def _noop(*args, **kwargs):
+                return None
+            return _noop
+
+    if not hasattr(getattr(server, "PromptServer", object), "instance"):
+        server.PromptServer.instance = _CharonPromptServerStub()
+
+    maybe_coro = nodes.init_extra_nodes(init_custom_nodes=True, init_api_nodes=False)
+    if inspect.iscoroutine(maybe_coro):
+        asyncio.run(maybe_coro)
 
 
 def _load_document(path: str) -> Dict[str, Any]:
@@ -51,6 +145,8 @@ def main() -> int:
     except Exception as exc:  # pragma: no cover - CLI helper
         print(f"[Charon] Failed to load workflow JSON: {exc}", file=sys.stderr)
         return 1
+
+    _ensure_nodes_initialized()
 
     try:
         bindings = collect_workflow_widget_bindings(document)
