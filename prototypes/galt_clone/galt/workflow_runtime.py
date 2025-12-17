@@ -348,6 +348,31 @@ def _find_read_node_by_parent(parent_id):
             return candidate
     return None
 
+def _sanitize_name(value, default='Workflow'):
+    text = str(value).strip() if value else ''
+    if not text:
+        text = default
+    sanitized = ''.join(c if c.isalnum() or c in {'_', '-'} else '_' for c in text)
+    sanitized = sanitized.strip('_') or default
+    return sanitized[:64]
+
+def _resolve_workflow_name(node):
+    candidate = _safe_knob_value(node, 'charon_workflow_name')
+    if candidate:
+        return candidate
+    try:
+        meta_val = node.metadata('charon/workflow_name')
+        if isinstance(meta_val, str) and meta_val.strip():
+            return meta_val
+    except Exception:
+        pass
+    path_candidate = _safe_knob_value(node, 'workflow_path')
+    if path_candidate:
+        base = os.path.basename(path_candidate.strip())
+        if base:
+            return base.rsplit('.', 1)[0]
+    return 'Workflow'
+
 def import_output():
     node = nuke.thisNode()
 
@@ -401,14 +426,18 @@ def import_output():
                     parent_group.end()
                 except Exception:
                     pass
-            target_read_name = f"CharonRead_{parent_id}" if parent_id else "CharonRead"
+            read_base = _sanitize_name(_resolve_workflow_name(node))
+            target_read_name = f"CharonRead_{read_base}"
             try:
                 read_node.setName(target_read_name)
             except Exception:
                 try:
-                    read_node.setName("CharonRead")
+                    read_node.setName(f"CharonRead_{read_base}_{parent_id}")
                 except Exception:
-                    pass
+                    try:
+                        read_node.setName("CharonRead")
+                    except Exception:
+                        pass
         except Exception as exc:
             nuke.message(f'Failed to create Read node: {exc}')
             return

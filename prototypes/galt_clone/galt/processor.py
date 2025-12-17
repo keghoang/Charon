@@ -1029,6 +1029,31 @@ def process_charonop_node():
                 except Exception:
                     pass
 
+        def _sanitize_name(value: str, default: str = "Workflow") -> str:
+            text = (value or "").strip()
+            if not text:
+                text = default
+            sanitized = "".join(c if c.isalnum() or c in {"_", "-"} else "_" for c in text)
+            sanitized = sanitized.strip("_") or default
+            return sanitized[:64]
+
+        def _resolve_workflow_display_name() -> str:
+            candidate = _safe_knob_value(node, 'charon_workflow_name')
+            if candidate:
+                return str(candidate).strip()
+            try:
+                meta_val = node.metadata('charon/workflow_name')
+                if isinstance(meta_val, str) and meta_val.strip():
+                    return meta_val.strip()
+            except Exception:
+                pass
+            path_candidate = _safe_knob_value(node, 'workflow_path')
+            if path_candidate:
+                basename = os.path.basename(str(path_candidate).strip())
+                if basename:
+                    return basename.rsplit(".", 1)[0]
+            return "Workflow"
+
         def ensure_placeholder_read_node():
             placeholder_path = get_placeholder_image_path()
             if not placeholder_path or not charon_node_id:
@@ -1064,14 +1089,18 @@ def process_charonop_node():
                 except Exception:
                     pass
 
-            target_read_name = f"CharonRead_{charon_node_id}"
+            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+            target_read_name = f"CharonRead_{read_base}"
             try:
                 read_node.setName(target_read_name)
             except Exception:
                 try:
-                    read_node.setName("CharonRead")
+                    read_node.setName(f"CharonRead_{read_base}_{charon_node_id}")
                 except Exception:
-                    pass
+                    try:
+                        read_node.setName("CharonRead")
+                    except Exception:
+                        pass
             try:
                 read_node['file'].setValue(placeholder_path.replace("\\", "/"))
             except Exception as assign_error:
@@ -1759,14 +1788,18 @@ def process_charonop_node():
                                             read_node.setXpos(result_data['node_x'])
                                             read_node.setYpos(result_data['node_y'] + 60)
                                             read_node.setSelected(True)
-                                            target_read_name = f"CharonRead_{charon_node_id}"
+                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            target_read_name = f"CharonRead_{read_base}"
                                             try:
                                                 read_node.setName(target_read_name)
                                             except Exception:
                                                 try:
-                                                    read_node.setName("CharonRead")
+                                                    read_node.setName(f"CharonRead_{read_base}_{charon_node_id}")
                                                 except Exception:
-                                                    pass
+                                                    try:
+                                                        read_node.setName("CharonRead")
+                                                    except Exception:
+                                                        pass
                                             log_debug('Created new Read node for output.')
                                         else:
                                             try:
