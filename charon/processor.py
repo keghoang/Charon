@@ -1956,7 +1956,7 @@ def process_charonop_node():
             log_debug('ComfyUI client not available', 'ERROR')
             try:
                 import nuke  # type: ignore
-                nuke.message("Charon is not running. Please launch Charon via Galt first.")
+                nuke.message("ComfyUI is not running or unreachable. Launch ComfyUI from the Charon panel and try again.")
             except Exception:
                 pass
             raise RuntimeError('ComfyUI client is not available')
@@ -2530,6 +2530,29 @@ def process_charonop_node():
                                     except Exception:
                                         reuse_existing = False
 
+                                    def _remove_mismatched_reads(required_class: str):
+                                        try:
+                                            candidates = list(nuke.allNodes("Read")) + list(nuke.allNodes("ReadGeo2"))
+                                        except Exception:
+                                            candidates = []
+                                        for candidate in candidates:
+                                            try:
+                                                parent_val = candidate.metadata('charon/parent_id')
+                                            except Exception:
+                                                parent_val = ""
+                                            if (parent_val or "").strip().lower() != (charon_node_id or "").strip().lower():
+                                                continue
+                                            try:
+                                                current_class = getattr(candidate, "Class", lambda: "")()
+                                            except Exception:
+                                                current_class = ""
+                                            if current_class and current_class != required_class:
+                                                try:
+                                                    nuke.delete(candidate)
+                                                    log_debug(f'Removed outdated CharonRead node ({current_class}) for 3D output.')
+                                                except Exception:
+                                                    pass
+
                                     outputs = []
                                     for entry in entries:
                                         path = entry.get('output_path')
@@ -2541,6 +2564,8 @@ def process_charonop_node():
                                         return
 
                                     required_class = "ReadGeo2" if os.path.splitext(outputs[-1])[1].lower() in MODEL_OUTPUT_EXTENSIONS else "Read"
+                                    if required_class == "ReadGeo2":
+                                        _remove_mismatched_reads(required_class)
 
                                     read_node = find_linked_read_node()
                                     if read_node is not None and not reuse_existing:
