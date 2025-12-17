@@ -52,7 +52,9 @@ def convert_workflow(ui_workflow, comfy_path="", comfy_nodes_module=None):
         external = convert_with_external_python(ui_workflow, comfy_path, strict=True)
         if isinstance(external, dict):
             logger.info("External conversion succeeded (nodes: %s)", len(external))
-            return flatten_set_get_nodes(ui_workflow, external)
+            flattened = flatten_set_get_nodes(ui_workflow, external)
+            _ensure_widget_inputs_preserved(ui_workflow, flattened)
+            return flattened
 
     raise RuntimeError("External ComfyUI converter could not produce a valid workflow.")
 
@@ -103,11 +105,22 @@ script_dir = sys.argv[3]
 comfy_dir = sys.argv[4]
 
 sys.path.insert(0, comfy_dir)
-sys.path.insert(0, script_dir)
 
 # Ensure Comfy's utils package is used
 if "utils" in sys.modules:
     del sys.modules["utils"]
+
+import importlib.util
+
+utils_dir = os.path.join(comfy_dir, "utils")
+utils_init = os.path.join(utils_dir, "__init__.py")
+if os.path.exists(utils_init):
+    utils_spec = importlib.util.spec_from_file_location(
+        "utils", utils_init, submodule_search_locations=[utils_dir]
+    )
+    utils_module = importlib.util.module_from_spec(utils_spec)
+    utils_spec.loader.exec_module(utils_module)
+    sys.modules["utils"] = utils_module
 
 import comfy.options
 comfy.options.enable_args_parsing(False)
@@ -118,7 +131,11 @@ import nodes
 
 nodes.init_extra_nodes(init_custom_nodes=True, init_api_nodes=False)
 
-from workflow_converter import WorkflowConverter
+converter_path = os.path.join(script_dir, "workflow_converter.py")
+spec = importlib.util.spec_from_file_location("workflow_converter", converter_path)
+workflow_converter = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(workflow_converter)
+WorkflowConverter = workflow_converter.WorkflowConverter
 
 with open(input_path, "r", encoding="utf-8") as fp:
     data = json.load(fp)
@@ -225,6 +242,51 @@ def flatten_set_get_nodes(ui_workflow, api_workflow):
         api_workflow.pop(node_id, None)
 
     return api_workflow
+
+
+def _ensure_widget_inputs_preserved(ui_workflow, api_workflow):
+    if not isinstance(ui_workflow, dict) or not isinstance(api_workflow, dict):
+        return
+
+    missing = []
+    for node in ui_workflow.get("nodes", []):
+        node_id = node.get("id")
+        if node_id is None:
+            continue
+        node_id_str = str(node_id)
+        api_node = api_workflow.get(node_id_str)
+        if not api_node:
+            continue
+        widget_values = node.get("widgets_values", [])
+        if not isinstance(widget_values, list) or not widget_values:
+            continue
+        api_inputs = api_node.get("inputs", {})
+        if not isinstance(api_inputs, dict):
+            continue
+
+        scalar_inputs = {
+            key: value
+            for key, value in api_inputs.items()
+            if not (isinstance(value, list) and len(value) == 2)
+        }
+        if not scalar_inputs:
+            missing.append(
+                {
+                    "node_id": node_id_str,
+                    "node_type": api_node.get("class_type") or node.get("type"),
+                    "expected_values": len(widget_values),
+                }
+            )
+
+    if missing:
+        details = ", ".join(
+            f"{item['node_type']} (id {item['node_id']})"
+            for item in missing
+        )
+        raise RuntimeError(
+            f"Converted workflow lost scalar inputs for nodes: {details}. "
+            "Check ComfyUI custom nodes and conversion logs."
+        )
 
 
 def find_link_source(ui_workflow, link_id):
