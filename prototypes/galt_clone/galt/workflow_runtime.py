@@ -15,7 +15,7 @@ from .workflow_analysis import analyze_ui_workflow_inputs, analyze_workflow_inpu
 from .node_factory import create_charon_group_node
 from .paths import get_charon_temp_dir
 from .workflow_pipeline import convert_workflow as _pipeline_convert_workflow
-from .utilities import status_to_tile_color
+from .utilities import status_to_gl_color, status_to_tile_color
 
 
 # NOTE:
@@ -496,6 +496,7 @@ def import_output():
     _assign_read_label(read_node, parent_id, read_id)
 
     tile_color = status_to_tile_color(status_state)
+    gl_color = status_to_gl_color(status_state)
     try:
         node["tile_color"].setValue(tile_color)
     except Exception:
@@ -504,8 +505,21 @@ def import_output():
         read_node["tile_color"].setValue(tile_color)
     except Exception:
         pass
+    if gl_color is not None:
+        try:
+            read_node["gl_color"].setValue(gl_color)
+        except Exception:
+            try:
+                read_node["gl_color"].setValue(list(gl_color))
+            except Exception:
+                pass
+    debug_line = f"Status={status_state or 'Unknown'} | tile=0x{tile_color:08X}"
+    if gl_color is not None:
+        debug_line += " | gl=" + ",".join(f"{channel:.3f}" for channel in gl_color)
     try:
-        read_node["gl_color"].setValue(tile_color)
+        debug_knob = node.knob("charon_color_debug")
+        if debug_knob is not None:
+            debug_knob.setValue(debug_line)
     except Exception:
         pass
 

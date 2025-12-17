@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import uuid
+import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from .conversion_cache import (
@@ -13,10 +14,14 @@ from .conversion_cache import (
     load_cached_conversion,
     write_conversion_cache,
 )
-from .paths import get_default_comfy_launch_path, get_placeholder_image_path
+from .paths import (
+    allocate_charon_output_path,
+    get_default_comfy_launch_path,
+    get_placeholder_image_path,
+)
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from . import preferences
-from .utilities import status_to_tile_color
+from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile_color
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
 _WORKFLOW_CONVERTER_AVAILABLE: Optional[bool] = None
@@ -488,6 +493,159 @@ def log_debug(message, level='INFO'):
     timestamp = time.strftime('%H:%M:%S')
     print(f'[{timestamp}] [CHARONOP] [{level}] {message}')
 
+
+def _inject_png_text_chunk(image_path: str, key: str, text: str) -> None:
+    if not image_path or not os.path.exists(image_path):
+        return
+    try:
+        with open(image_path, 'rb') as handle:
+            data = handle.read()
+    except Exception as exc:
+        log_debug(f'Could not read PNG for metadata injection: {exc}', 'WARNING')
+        return
+
+    if len(data) < 12 or data[:8] != b'\x89PNG\r\n\x1a\n':
+        log_debug('File is not a PNG; skipping metadata injection.', 'WARNING')
+        return
+
+    cursor = 8
+    iend_index = None
+    while cursor + 8 <= len(data):
+        length = int.from_bytes(data[cursor:cursor + 4], 'big')
+        chunk_type = data[cursor + 4:cursor + 8]
+        total_length = 12 + length
+        if cursor + total_length > len(data):
+            break
+        if chunk_type == b'IEND':
+            iend_index = cursor
+            break
+        cursor += total_length
+
+    if iend_index is None:
+        log_debug('Could not locate IEND chunk; skipping metadata injection.', 'WARNING')
+        return
+
+    signature = data[:8]
+    before_iend = data[8:iend_index]
+    after_iend = data[iend_index:]
+
+    try:
+        payload = key.encode('latin-1') + b'\x00' + text.encode('latin-1')
+    except UnicodeEncodeError:
+        payload = key.encode('latin-1', errors='ignore') + b'\x00' + text.encode('ascii', errors='ignore')
+
+    chunk = bytearray()
+    chunk.extend(len(payload).to_bytes(4, 'big'))
+    chunk.extend(b'tEXt')
+    chunk.extend(payload)
+    crc = zlib.crc32(b'tEXt' + payload) & 0xFFFFFFFF
+    chunk.extend(crc.to_bytes(4, 'big'))
+
+    try:
+        with open(image_path, 'wb') as handle:
+            handle.write(signature + before_iend + chunk + after_iend)
+    except Exception as exc:
+        log_debug(f'Failed to write PNG metadata: {exc}', 'WARNING')
+
+
+def embed_png_metadata(image_path: str, metadata: Dict[str, Any]) -> None:
+    if not image_path or not image_path.lower().endswith('.png'):
+        return
+    try:
+        payload = json.dumps(metadata, separators=(',', ':'), ensure_ascii=True)
+    except Exception as exc:
+        log_debug(f'Could not serialize metadata for PNG: {exc}', 'WARNING')
+        return
+    _inject_png_text_chunk(image_path, 'CharonMetadata', payload)
+
+
+def _batch_nav_command(step: int) -> str:
+    return (
+        "import json, nuke\n"
+        "node = nuke.thisNode()\n"
+        "outputs_knob = node.knob('charon_batch_outputs')\n"
+        "index_knob = node.knob('charon_batch_index')\n"
+        "if outputs_knob is None or index_knob is None:\n"
+        "    nuke.message('Batch outputs unavailable.')\n"
+        "    return\n"
+        "try:\n"
+        "    raw = outputs_knob.value()\n"
+        "except Exception:\n"
+        "    raw = ''\n"
+        "try:\n"
+        "    data = json.loads(raw) if raw else []\n"
+        "except Exception:\n"
+        "    data = []\n"
+        "outputs = []\n"
+        "if isinstance(data, list):\n"
+        "    for entry in data:\n"
+        "        if isinstance(entry, str):\n"
+        "            outputs.append(entry)\n"
+        "        elif isinstance(entry, dict):\n"
+        "            path = entry.get('output_path')\n"
+        "            if path:\n"
+        "                outputs.append(path)\n"
+        "if not outputs:\n"
+        "    nuke.message('No batch outputs stored yet.')\n"
+        "    return\n"
+        "try:\n"
+        "    idx = int(index_knob.value())\n"
+        "except Exception:\n"
+        "    idx = 0\n"
+        "idx = max(0, min(len(outputs)-1, idx + ({step})))\n"
+        "index_knob.setValue(idx)\n"
+        "path = outputs[idx]\n"
+        "try:\n"
+        "    node['file'].setValue(path)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "label_knob = node.knob('charon_batch_label')\n"
+        "if label_knob is not None:\n"
+        "    try:\n"
+        "        label_knob.setValue('Batch %d/%d' % (idx + 1, len(outputs)))\n"
+        "    except Exception:\n"
+        "        pass\n"
+    ).format(step=step)
+
+
+SEED_INPUT_KEYS = (
+    'seed',
+    'noise_seed',
+    'control_seed',
+    'seed_control',
+    'seed_noise',
+)
+
+
+def _capture_seed_inputs(prompt: Dict[str, Any]) -> List[Tuple[str, str, int]]:
+    records: List[Tuple[str, str, int]] = []
+    for node_id, node_data in prompt.items():
+        inputs = node_data.get('inputs')
+        if not isinstance(inputs, dict):
+            continue
+        for key in SEED_INPUT_KEYS:
+            value = inputs.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                try:
+                    records.append((node_id, key, int(value)))
+                except Exception:
+                    continue
+    return records
+
+
+def _apply_seed_offset(prompt: Dict[str, Any], records: List[Tuple[str, str, int]], offset: int) -> None:
+    if not offset:
+        return
+    for node_id, key, base_value in records:
+        node_data = prompt.get(node_id)
+        if not isinstance(node_data, dict):
+            continue
+        inputs = node_data.get('inputs')
+        if not isinstance(inputs, dict):
+            continue
+        inputs[key] = (base_value + offset) & 0xFFFFFFFF
+
+
 def process_charonop_node():
     try:
         import nuke  # type: ignore
@@ -688,6 +846,46 @@ def process_charonop_node():
             return node_id
 
         charon_node_id = ensure_charon_node_id()
+        user_slug = get_current_user_slug()
+        def resolve_batch_count() -> int:
+            try:
+                knob = node.knob('charon_batch_count')
+                if knob is not None:
+                    return max(1, int(knob.value()))
+            except Exception:
+                pass
+            return 1
+
+        batch_count = resolve_batch_count()
+        _cached_script_name: Optional[str] = None
+
+        def _resolve_nuke_script_name() -> str:
+            nonlocal _cached_script_name
+            if _cached_script_name is not None:
+                return _cached_script_name
+            script_reference = ""
+            try:
+                root = nuke.root()
+            except Exception:
+                root = None
+            if root is not None:
+                try:
+                    script_reference = root.name()
+                except Exception:
+                    script_reference = ""
+                if not script_reference:
+                    try:
+                        name_knob = root.knob("name")
+                        if name_knob is not None:
+                            script_reference = str(name_knob.value() or "")
+                    except Exception:
+                        script_reference = ""
+            if script_reference:
+                base = os.path.splitext(os.path.basename(script_reference))[0]
+                _cached_script_name = base or "untitled"
+            else:
+                _cached_script_name = "untitled"
+            return _cached_script_name
 
         def ensure_link_anchor_value():
             try:
@@ -799,10 +997,63 @@ def process_charonop_node():
 
         def apply_status_color(state: str, read_node_override=None):
             tile_color = status_to_tile_color(state)
+            gl_color = status_to_gl_color(state)
+            debug_line = f"Status={state or 'Unknown'} | tile=0x{tile_color:08X}"
+            if gl_color is not None:
+                debug_line += " | gl=" + ",".join(f"{channel:.3f}" for channel in gl_color)
+
+            def _apply_to_target(target):
+                if target is None:
+                    return
+                try:
+                    color_knob = target["tile_color"]
+                except Exception:
+                    color_knob = None
+                if color_knob is not None:
+                    try:
+                        color_knob.setValue(tile_color)
+                    except Exception:
+                        pass
+                if gl_color is not None:
+                    try:
+                        gl_knob = target["gl_color"]
+                    except Exception:
+                        gl_knob = None
+                    if gl_knob is not None:
+                        try:
+                            gl_knob.setValue(gl_color)
+                        except Exception:
+                            try:
+                                gl_knob.setValue(list(gl_color))
+                            except Exception:
+                                pass
+
+            def _update_debug(target_node):
+                try:
+                    debug_knob = target_node.knob("charon_color_debug")
+                except Exception:
+                    debug_knob = None
+                if debug_knob is None:
+                    try:
+                        debug_knob = nuke.Text_Knob("charon_color_debug", "Color Debug", "")
+                        debug_knob.setFlag(nuke.NO_ANIMATION)
+                        target_node.addKnob(debug_knob)
+                    except Exception:
+                        debug_knob = None
+                if debug_knob is not None:
+                    try:
+                        debug_knob.setValue(debug_line)
+                    except Exception:
+                        pass
+
+            def _apply_all():
+                _apply_to_target(node)
+                _update_debug(node)
+
             try:
-                node["tile_color"].setValue(tile_color)
+                nuke.executeInMainThread(_apply_all)
             except Exception:
-                pass
+                _apply_all()
 
             targets = []
             if read_node_override is not None:
@@ -813,14 +1064,12 @@ def process_charonop_node():
                     targets.append(candidate)
 
             for target in targets:
+                def _apply_target():
+                    _apply_to_target(target)
                 try:
-                    target["tile_color"].setValue(tile_color)
+                    nuke.executeInMainThread(_apply_target)
                 except Exception:
-                    pass
-                try:
-                    target["gl_color"].setValue(tile_color)
-                except Exception:
-                    pass
+                    _apply_target()
 
         try:
             initial_payload = load_status_payload()
@@ -839,15 +1088,78 @@ def process_charonop_node():
                 parent_text = read_node_parent_id(read_node) or 'N/A'
                 read_id_text = read_node_unique_id(read_node) or 'N/A'
                 label_text = f"Charon Parent: {parent_text}\nRead ID: {read_id_text}"
+        try:
+            label_knob = read_node['label']
+        except Exception:
+            label_knob = None
+        if label_knob is not None:
             try:
-                label_knob = read_node['label']
+                label_knob.setValue(label_text or "")
+            except Exception:
+                pass
+
+        def ensure_batch_navigation_controls(read_node):
+            if read_node is None:
+                return None, None, None
+            try:
+                outputs_knob = read_node.knob('charon_batch_outputs')
+            except Exception:
+                outputs_knob = None
+            if outputs_knob is None:
+                try:
+                    outputs_knob = nuke.Multiline_Eval_String_Knob('charon_batch_outputs', 'Batch Outputs', '')
+                    outputs_knob.setFlag(nuke.NO_ANIMATION)
+                    outputs_knob.setFlag(nuke.INVISIBLE)
+                    read_node.addKnob(outputs_knob)
+                except Exception:
+                    outputs_knob = None
+            try:
+                index_knob = read_node.knob('charon_batch_index')
+            except Exception:
+                index_knob = None
+            if index_knob is None:
+                try:
+                    index_knob = nuke.Int_Knob('charon_batch_index', 'Batch Index', 0)
+                    index_knob.setFlag(nuke.NO_ANIMATION)
+                    index_knob.setFlag(nuke.INVISIBLE)
+                    read_node.addKnob(index_knob)
+                except Exception:
+                    index_knob = None
+            try:
+                label_knob = read_node.knob('charon_batch_label')
             except Exception:
                 label_knob = None
-            if label_knob is not None:
+            if label_knob is None:
                 try:
-                    label_knob.setValue(label_text or "")
+                    label_knob = nuke.Text_Knob('charon_batch_label', 'Batch', 'No batch outputs yet')
+                    read_node.addKnob(label_knob)
                 except Exception:
-                    pass
+                    label_knob = None
+            try:
+                prev_knob = read_node.knob('charon_batch_prev')
+            except Exception:
+                prev_knob = None
+            if prev_knob is None:
+                try:
+                    prev_knob = nuke.PyScript_Knob('charon_batch_prev', 'Prev Batch')
+                    prev_knob.setCommand(_batch_nav_command(-1))
+                    prev_knob.setFlag(nuke.STARTLINE)
+                    read_node.addKnob(prev_knob)
+                except Exception:
+                    prev_knob = None
+            try:
+                next_knob = read_node.knob('charon_batch_next')
+            except Exception:
+                next_knob = None
+            if next_knob is None:
+                try:
+                    next_knob = nuke.PyScript_Knob('charon_batch_next', 'Next Batch')
+                    next_knob.setCommand(_batch_nav_command(1))
+                    next_knob.setFlag(nuke.STARTLINE)
+                    read_node.addKnob(next_knob)
+                except Exception:
+                    next_knob = None
+            return outputs_knob, index_knob, label_knob
 
         def ensure_read_node_info(read_node, read_id: str):
             if read_node is None:
@@ -882,6 +1194,7 @@ def process_charonop_node():
                     info_text.setValue("\n".join(summary))
                 except Exception:
                     pass
+            ensure_batch_navigation_controls(read_node)
 
         def mark_read_node(read_node):
             nonlocal current_node_state
@@ -1021,6 +1334,33 @@ def process_charonop_node():
             if read_id_knob is not None:
                 try:
                     read_id_knob.setValue("")
+                except Exception:
+                    pass
+            try:
+                outputs_knob = read_node.knob('charon_batch_outputs')
+            except Exception:
+                outputs_knob = None
+            if outputs_knob is not None:
+                try:
+                    outputs_knob.setValue("")
+                except Exception:
+                    pass
+            try:
+                index_knob = read_node.knob('charon_batch_index')
+            except Exception:
+                index_knob = None
+            if index_knob is not None:
+                try:
+                    index_knob.setValue(0)
+                except Exception:
+                    pass
+            try:
+                label_knob = read_node.knob('charon_batch_label')
+            except Exception:
+                label_knob = None
+            if label_knob is not None:
+                try:
+                    label_knob.setValue('No batch outputs yet')
                 except Exception:
                     pass
             ensure_read_node_info(read_node, "")
@@ -1397,16 +1737,24 @@ def process_charonop_node():
         def update_progress(progress, status='Processing', error=None, extra=None):
             nonlocal current_node_state
             try:
-                node.knob('charon_progress').setValue(progress)
+                numeric_progress = float(progress)
+            except Exception:
+                numeric_progress = 0.0
+            clamped_progress = max(-1.0, min(numeric_progress, 1.0))
+            if clamped_progress >= 0.999:
+                clamped_progress = 1.0
+
+            try:
+                node.knob('charon_progress').setValue(clamped_progress)
                 node.knob('charon_status').setValue(status)
             except Exception:
                 pass
 
             lifecycle = 'Processing'
             normalized = (status or '').lower()
-            if progress < 0 or normalized.startswith('error'):
+            if clamped_progress < 0 or normalized.startswith('error'):
                 lifecycle = 'Error'
-            elif progress >= 1.0:
+            elif clamped_progress >= 0.999:
                 lifecycle = 'Completed'
 
             current_node_state = lifecycle
@@ -1425,7 +1773,7 @@ def process_charonop_node():
             current_run.update({
                 'status': lifecycle,
                 'message': status,
-                'progress': progress,
+                'progress': clamped_progress,
                 'updated_at': now,
                 'auto_import': auto_import_flag,
             })
@@ -1442,7 +1790,7 @@ def process_charonop_node():
                 'status': status,
                 'state': lifecycle,
                 'message': status,
-                'progress': progress,
+                'progress': clamped_progress,
                 'run_id': current_run_id,
                 'updated_at': now,
                 'current_run': current_run,
@@ -1460,7 +1808,7 @@ def process_charonop_node():
                     'id': current_run_id,
                     'status': lifecycle,
                     'message': status,
-                    'progress': progress,
+                    'progress': clamped_progress,
                     'started_at': current_run.get('started_at', run_started_at),
                     'completed_at': current_run.get('completed_at', now),
                     'error': current_run.get('error'),
@@ -1478,7 +1826,7 @@ def process_charonop_node():
 
             save_status_payload(payload)
 
-            log_debug(f'Updated progress: {progress:.1%} - {status}')
+            log_debug(f'Updated progress: {clamped_progress:.1%} - {status}')
 
         def background_process():
             try:
@@ -1684,93 +2032,164 @@ def process_charonop_node():
                                 assign_to_node(target_id, filename)
                                 break
 
-                update_progress(0.5, 'Submitting workflow')
-                prompt_id = comfy_client.submit_workflow(workflow_copy)
-                if not prompt_id:
-                    save_hint = ''
-                    if converted_prompt_path:
-                        save_hint = f' (converted prompt saved to {converted_prompt_path})'
-                    log_debug(f'ComfyUI did not return a prompt id{save_hint}', 'ERROR')
-                    raise Exception(f'Failed to submit workflow{save_hint}')
-                
-                node.knob('charon_prompt_id').setValue(prompt_id)
-
-                start_time = time.time()
+                base_prompt = copy.deepcopy(workflow_copy)
+                seed_records = _capture_seed_inputs(base_prompt)
+                batch_outputs: List[Dict[str, Any]] = []
                 timeout = 300
-                update_progress(
-                    0.6,
-                    'Processing on ComfyUI',
-                    extra={
-                        'prompt_id': prompt_id,
-                        'prompt_submitted_at': start_time,
-                    },
-                )
-                
-                while time.time() - start_time < timeout:
-                    # Check progress via queue status
-                    if hasattr(comfy_client, 'get_progress_for_prompt'):
-                        progress_val = comfy_client.get_progress_for_prompt(prompt_id)
-                        if progress_val > 0:
-                            # Map progress from 0.6 to 0.9 during execution
-                            mapped_progress = 0.6 + (progress_val * 0.3)
-                            update_progress(
-                                mapped_progress,
-                                f'ComfyUI processing ({progress_val:.1%})',
-                                extra={'prompt_id': prompt_id},
-                            )
-                    
-                    history = comfy_client.get_history(prompt_id)
-                    if history and prompt_id in history:
-                        history_data = history[prompt_id]
-                        status_str = history_data.get('status', {}).get('status_str')
-                        if status_str == 'success':
-                            outputs = history_data.get('outputs', {})
-                            if outputs:
-                                output_filename = None
-                                for node_id, node_data in workflow_copy.items():
-                                    if node_data.get('class_type') == 'SaveImage' and node_id in outputs:
-                                        images = outputs[node_id].get('images', [])
-                                        if images:
-                                            output_filename = images[0].get('filename')
-                                            break
-                                if not output_filename:
-                                    raise Exception('ComfyUI did not return an output filename')
+                per_batch_progress = 0.5 / max(1, batch_count)
+
+                def _progress_for(batch_index: int, local: float) -> float:
+                    local_clamped = max(0.0, min(1.0, local))
+                    base_value = 0.5 + per_batch_progress * batch_index
+                    return min(base_value + per_batch_progress * local_clamped, 1.0)
+
+                for batch_index in range(batch_count):
+                    seed_offset = batch_index * 9973
+                    prompt_payload = copy.deepcopy(base_prompt)
+                    if seed_records:
+                        _apply_seed_offset(prompt_payload, seed_records, seed_offset)
+
+                    batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
+                    update_progress(
+                        _progress_for(batch_index, 0.0),
+                        f'Submitting {batch_label.lower()}',
+                    )
+                    prompt_id = comfy_client.submit_workflow(prompt_payload)
+                    if not prompt_id:
+                        save_hint = ''
+                        if converted_prompt_path:
+                            save_hint = f' (converted prompt saved to {converted_prompt_path})'
+                        log_debug(f'ComfyUI did not return a prompt id{save_hint}', 'ERROR')
+                        raise Exception(f'Failed to submit workflow{save_hint}')
+
+                    try:
+                        node.knob('charon_prompt_id').setValue(prompt_id)
+                    except Exception:
+                        pass
+
+                    start_time = time.time()
+                    update_progress(
+                        _progress_for(batch_index, 0.1),
+                        f'{batch_label}: queued on ComfyUI',
+                        extra={
+                            'prompt_id': prompt_id,
+                            'prompt_submitted_at': start_time,
+                            'batch_index': batch_index + 1,
+                            'batch_total': batch_count,
+                        },
+                    )
+
+                    while time.time() - start_time < timeout:
+                        if hasattr(comfy_client, 'get_progress_for_prompt'):
+                            progress_val = comfy_client.get_progress_for_prompt(prompt_id)
+                            if progress_val > 0:
+                                mapped_progress = _progress_for(batch_index, 0.2 + (progress_val * 0.6))
                                 update_progress(
-                                    0.95,
-                                    'Downloading result',
-                                    extra={'prompt_id': prompt_id},
-                                )
-                                output_dir = os.path.join(temp_root, 'results')
-                                os.makedirs(output_dir, exist_ok=True)
-                                output_path = os.path.join(output_dir, f'comfyui_result_{int(time.time())}.png')
-                                output_path = output_path.replace('\\', '/')
-                                success = comfy_client.download_image(output_filename, output_path)
-                                if not success:
-                                    raise Exception('Failed to download result image from ComfyUI')
-                                elapsed = time.time() - start_time
-                                update_progress(
-                                    1.0,
-                                    'Completed',
+                                    mapped_progress,
+                                    f'{batch_label}: processing',
                                     extra={
-                                        'output_path': output_path,
-                                        'elapsed_time': elapsed,
+                                        'prompt_id': prompt_id,
+                                        'batch_index': batch_index + 1,
+                                        'batch_total': batch_count,
+                                        'comfy_progress': float(progress_val),
                                     },
                                 )
-                                result_data = {
-                                    'success': True,
-                                    'output_path': output_path,
-                                    'node_x': node.xpos(),
-                                    'node_y': node.ypos(),
-                                    'elapsed_time': elapsed
-                                }
-                                with open(result_file, 'w') as fp:
-                                    json.dump(result_data, fp)
-                                return
-                        elif status_str == 'error':
-                            error_msg = history_data.get('status', {}).get('status_message', 'Unknown error')
-                            raise Exception(f'ComfyUI failed: {error_msg}')
-                    time.sleep(1.0)
-                raise Exception('Processing timed out')
+
+                        history = comfy_client.get_history(prompt_id)
+                        if history and prompt_id in history:
+                            history_data = history[prompt_id]
+                            status_str = history_data.get('status', {}).get('status_str')
+                            if status_str == 'success':
+                                outputs = history_data.get('outputs', {})
+                                if outputs:
+                                    output_filename = None
+                                    for node_id, node_data in base_prompt.items():
+                                        if node_data.get('class_type') == 'SaveImage' and node_id in outputs:
+                                            images = outputs[node_id].get('images', [])
+                                            if images:
+                                                output_filename = images[0].get('filename')
+                                                break
+                                    if not output_filename:
+                                        raise Exception('ComfyUI did not return an output filename')
+                                    update_progress(
+                                        _progress_for(batch_index, 0.9),
+                                        f'{batch_label}: downloading result',
+                                        extra={
+                                            'prompt_id': prompt_id,
+                                            'batch_index': batch_index + 1,
+                                            'batch_total': batch_count,
+                                        },
+                                    )
+                                    raw_extension = os.path.splitext(output_filename or "")[1] or ".png"
+                                    allocated_output_path = allocate_charon_output_path(
+                                        charon_node_id,
+                                        _resolve_nuke_script_name(),
+                                        raw_extension,
+                                        user_slug=user_slug,
+                                    )
+                                    log_debug(f'Resolved output path: {allocated_output_path}')
+                                    success = comfy_client.download_image(output_filename, allocated_output_path)
+                                    if not success:
+                                        raise Exception('Failed to download result image from ComfyUI')
+                                    elapsed = time.time() - start_time
+                                    normalized_output_path = allocated_output_path.replace('\\', '/')
+                                    metadata_payload = {
+                                        'charon_node_id': charon_node_id,
+                                        'prompt_id': prompt_id,
+                                        'run_id': current_run_id,
+                                        'script_name': _resolve_nuke_script_name(),
+                                        'user': user_slug,
+                                        'workflow_path': workflow_path or '',
+                                        'timestamp': time.time(),
+                                        'batch_index': batch_index + 1,
+                                        'batch_total': batch_count,
+                                        'seed_offset': seed_offset,
+                                    }
+                                    embed_png_metadata(normalized_output_path, metadata_payload)
+                                    batch_entry = {
+                                        'batch_index': batch_index + 1,
+                                        'batch_total': batch_count,
+                                        'prompt_id': prompt_id,
+                                        'output_path': normalized_output_path,
+                                        'elapsed_time': elapsed,
+                                    }
+                                    batch_outputs.append(batch_entry)
+                                    extra_payload = {
+                                        'output_path': normalized_output_path,
+                                        'elapsed_time': elapsed,
+                                        'prompt_id': prompt_id,
+                                        'batch_index': batch_index + 1,
+                                        'batch_total': batch_count,
+                                        'batch_outputs': batch_outputs.copy(),
+                                    }
+                                    update_progress(
+                                        _progress_for(batch_index, 1.0),
+                                        f'{batch_label}: completed',
+                                        extra=extra_payload,
+                                    )
+                                    break
+                            elif status_str == 'error':
+                                error_msg = history_data.get('status', {}).get('status_message', 'Unknown error')
+                                raise Exception(f'ComfyUI failed: {error_msg}')
+                        time.sleep(1.0)
+                    else:
+                        raise Exception('Processing timed out')
+
+                if not batch_outputs:
+                    raise Exception('No outputs were generated by ComfyUI')
+
+                result_data = {
+                    'success': True,
+                    'outputs': batch_outputs,
+                    'node_x': node.xpos(),
+                    'node_y': node.ypos(),
+                    'batch_total': batch_count,
+                    'output_path': batch_outputs[-1]['output_path'],
+                    'elapsed_time': batch_outputs[-1].get('elapsed_time', 0),
+                }
+                with open(result_file, 'w') as fp:
+                    json.dump(result_data, fp)
+                return
 
             except Exception as exc:
                 message = f'Error: {exc}'
@@ -1795,8 +2214,6 @@ def process_charonop_node():
                         with open(result_file, 'r') as fp:
                             result_data = json.load(fp)
                         if result_data.get('success'):
-                            elapsed = result_data.get('elapsed_time', 0)
-
                             def cleanup_files():
                                 try:
                                     if os.path.exists(result_file):
@@ -1811,8 +2228,15 @@ def process_charonop_node():
                                 except Exception as cleanup_error:
                                     log_debug(f'Could not clean up files: {cleanup_error}', 'WARNING')
 
+                            entries = result_data.get('outputs')
+                            if not isinstance(entries, list) or not entries:
+                                entries = [result_data]
+                            total_batches = result_data.get('batch_total') or len(entries)
+                            node_x = result_data.get('node_x', node.xpos())
+                            node_y = result_data.get('node_y', node.ypos())
+
                             if resolve_auto_import():
-                                def update_or_create_read_node():
+                                def update_or_create_read_nodes():
                                     reuse_existing = True
                                     try:
                                         reuse_knob = node.knob('charon_reuse_output')
@@ -1822,56 +2246,111 @@ def process_charonop_node():
                                         reuse_existing = False
 
                                     read_node = find_linked_read_node()
-                                    reused = False
-                                    placeholder_path = get_placeholder_image_path()
-                                    try:
-                                        if read_node is not None and not reuse_existing:
-                                            unlink_read_node(read_node)
-                                            read_node = None
-                                        if read_node is None:
+                                    if read_node is not None and not reuse_existing:
+                                        unlink_read_node(read_node)
+                                        read_node = None
+
+                                    if read_node is None:
+                                        try:
                                             read_node = nuke.createNode('Read')
-                                            read_node.setXpos(result_data['node_x'])
-                                            read_node.setYpos(result_data['node_y'] + 60)
+                                            read_node.setXpos(node_x)
+                                            read_node.setYpos(node_y + 60)
                                             read_node.setSelected(True)
-                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
-                                            target_read_name = f"CharonRead_{read_base}"
+                                        except Exception as create_error:
+                                            log_debug(f'Failed to create Read node: {create_error}', 'ERROR')
+                                            cleanup_files()
+                                            return
+                                        read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                        target_read_name = f"CharonRead_{read_base}"
+                                        try:
+                                            read_node.setName(target_read_name)
+                                        except Exception:
                                             try:
-                                                read_node.setName(target_read_name)
+                                                read_node.setName(f"CharonRead_{read_base}_{charon_node_id}")
                                             except Exception:
                                                 try:
-                                                    read_node.setName(f"CharonRead_{read_base}_{charon_node_id}")
+                                                    read_node.setName("CharonRead")
                                                 except Exception:
-                                                    try:
-                                                        read_node.setName("CharonRead")
-                                                    except Exception:
-                                                        pass
-                                            log_debug('Created new Read node for output.')
-                                        else:
-                                            try:
-                                                read_node.setSelected(True)
-                                            except Exception:
-                                                pass
-                                            log_debug('Reusing existing Read node for output update.')
-                                            reused = True
-
+                                                    pass
+                                        log_debug('Created new Read node for output.')
+                                    else:
                                         try:
-                                            read_node['file'].setValue(result_data['output_path'])
-                                        except Exception as assign_error:
-                                            log_debug(f'Could not assign output path to Read node: {assign_error}', 'ERROR')
-                                        else:
-                                            action = "updated" if reused else "created"
-                                            log_debug(f'Success! Completed in {elapsed:.1f}s. Read node {action}.')
-                                            log_debug(f'Output file located at: {result_data["output_path"]}')
-                                            mark_read_node(read_node)
-                                    except Exception as exc:
-                                        log_debug(f'Error preparing Read node: {exc}', 'ERROR')
-                                    finally:
-                                        cleanup_files()
+                                            read_node.setSelected(True)
+                                        except Exception:
+                                            pass
+                                        log_debug('Reusing existing Read node for output update.')
 
-                                nuke.executeInMainThread(update_or_create_read_node)
+                                    outputs = []
+                                    for entry in entries:
+                                        path = entry.get('output_path')
+                                        if path:
+                                            outputs.append(path)
+                                    if not outputs:
+                                        log_debug('No output paths available for Read update.', 'WARNING')
+                                        cleanup_files()
+                                        return
+
+                                    try:
+                                        outputs_json = json.dumps(entries)
+                                    except Exception as serialize_error:
+                                        log_debug(f'Could not serialize batch metadata: {serialize_error}', 'WARNING')
+                                        outputs_json = json.dumps([{'output_path': path} for path in outputs])
+
+                                    outputs_knob, index_knob, label_knob = ensure_batch_navigation_controls(read_node)
+                                    default_index = len(outputs) - 1
+                                    if reuse_existing and index_knob is not None:
+                                        try:
+                                            existing_index = int(index_knob.value())
+                                        except Exception:
+                                            existing_index = default_index
+                                        if 0 <= existing_index < len(outputs):
+                                            default_index = existing_index
+
+                                    try:
+                                        read_node['file'].setValue(outputs[default_index])
+                                    except Exception as assign_error:
+                                        log_debug(f'Could not assign output path to Read node: {assign_error}', 'ERROR')
+
+                                    if outputs_knob is not None:
+                                        try:
+                                            outputs_knob.setValue(outputs_json)
+                                        except Exception:
+                                            pass
+                                    if index_knob is not None:
+                                        try:
+                                            index_knob.setValue(default_index)
+                                        except Exception:
+                                            pass
+                                    if label_knob is not None:
+                                        try:
+                                            label_knob.setValue(f'Batch {default_index + 1}/{len(outputs)}')
+                                        except Exception:
+                                            pass
+
+                                    try:
+                                        read_node.setMetaData('charon/batch_outputs', outputs_json)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        write_metadata('charon/batch_outputs', outputs_json)
+                                    except Exception:
+                                        pass
+
+                                    mark_read_node(read_node)
+                                    cleanup_files()
+
+                                nuke.executeInMainThread(update_or_create_read_nodes)
                             else:
                                 log_debug('Auto import disabled; skipping Read node creation.')
-                                log_debug(f'Output file located at: {result_data["output_path"]}')
+                                for idx, entry in enumerate(entries, start=1):
+                                    output_path = entry.get('output_path')
+                                    if output_path:
+                                        batch_label = f'Batch {idx}/{total_batches}' if total_batches > 1 else 'Run'
+                                        log_debug(f'{batch_label} output located at: {output_path}')
+                                try:
+                                    write_metadata('charon/batch_outputs', json.dumps(entries))
+                                except Exception:
+                                    pass
                                 cleanup_files()
                         else:
                             error_msg = result_data.get('error', 'Unknown error')

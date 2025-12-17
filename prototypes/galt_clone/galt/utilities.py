@@ -37,13 +37,38 @@ def hex_to_tile_color(hex_color):
     if len(value) != 6:
         return 0
     try:
-        return int(value, 16)
+        raw = int(value, 16)
     except ValueError:
         return 0
+    # Nuke expects packed colors in 0xRRGGBB00 format.
+    return (raw << 8) & 0xFFFFFFFF
+
+
+def hex_to_gl_color(hex_color):
+    if not hex_color:
+        return None
+    value = hex_color.lstrip("#")
+    if len(value) != 6:
+        return None
+    try:
+        red = int(value[0:2], 16)
+        green = int(value[2:4], 16)
+        blue = int(value[4:6], 16)
+    except ValueError:
+        return None
+    return (
+        red / 255.0,
+        green / 255.0,
+        blue / 255.0,
+    )
 
 
 def status_to_tile_color(state):
     return hex_to_tile_color(resolve_status_color_hex(state))
+
+
+def status_to_gl_color(state):
+    return hex_to_gl_color(resolve_status_color_hex(state))
 
 def md_to_html(md_text, base_path=None):
     """
@@ -818,12 +843,25 @@ def get_metadata_with_fallbacks(script_path: str, current_host: str) -> dict:
     return metadata
 def get_current_user_slug() -> str:
     """Return normalized username used for per-user workflow folders."""
-    raw = (
-        os.getenv("CHARON_USER")
-        or os.getenv("USERNAME")
-        or os.getenv("USER")
-        or getpass.getuser()
-        or "user"
-    )
+    raw = None
+    try:
+        raw = globals().get("USER")
+    except Exception:
+        raw = None
+    if not raw:
+        try:
+            import __main__  # noqa: F401
+        except ImportError:
+            __main__ = None  # type: ignore
+        if __main__ is not None:
+            raw = getattr(__main__, "USER", None)
+    if not raw:
+        raw = (
+            os.getenv("CHARON_USER")
+            or os.getenv("USERNAME")
+            or os.getenv("USER")
+            or getpass.getuser()
+            or "user"
+        )
     slug = re.sub(r"[^\w.-]", "_", str(raw)).strip("_")
     return slug.lower() or "user"
