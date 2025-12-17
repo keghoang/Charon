@@ -683,6 +683,16 @@ class CharonWindow(QtWidgets.QWidget):
         self.project_label.setMinimumWidth(280)
         project_layout.addWidget(self.project_label)
 
+        self.gpu_label = QtWidgets.QLabel(parent)
+        self.gpu_label.setObjectName("charonGpuLabel")
+        self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.gpu_label.setWordWrap(False)
+        gpu_font = QtGui.QFont(self.project_label.font())
+        gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
+        self.gpu_label.setFont(gpu_font)
+        self.gpu_label.setStyleSheet("color: #cfd3dc;")
+        project_layout.addWidget(self.gpu_label)
+
         footer_layout.addWidget(project_container, 1)
 
         footer_layout.addStretch()
@@ -1043,7 +1053,18 @@ QPushButton#NewWorkflowButton:pressed {{
 
     def _refresh_gpu_display(self):
         """Update the footer with detected GPU/VRAM summary."""
-        pass
+        label = getattr(self, "gpu_label", None)
+        if label is None:
+            return
+        if not getattr(self, "_gpu_summary", None):
+            try:
+                self._gpu_summary = self._detect_gpu_summary()
+            except Exception as exc:
+                system_debug(f"GPU detection fallback failed: {exc}")
+                self._gpu_summary = "GPU: Unknown"
+        summary = self._gpu_summary or "GPU: Unknown"
+        label.setText(summary)
+        label.setToolTip(summary)
     
     def _on_keybind_triggered(self, action: str):
         """Handle keybind trigger from keybind manager."""
