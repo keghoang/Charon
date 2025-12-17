@@ -10,6 +10,7 @@ from ..charon_logger import system_info, system_warning, system_error, system_de
 from .. import preferences
 from ..comfy_client import ComfyUIClient
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
+from ..dependency_check import ensure_manager_security_level
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
@@ -241,6 +242,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._restart_pending = False
             if status_changed:
                 system_info("ComfyUI connection established (watcher)")
+                ensure_manager_security_level("weak")
             self.client_changed.emit(self._client)
         else:
             status_changed = self._connected
