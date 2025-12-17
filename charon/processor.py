@@ -3026,6 +3026,7 @@ def process_charonop_node():
                             import nuke
                             rig = nuke.toNode("Charon_Coverage_Rig")
                             if not rig:
+                                log_debug("Step 2: Charon_Coverage_Rig node not found.", "WARNING")
                                 return
                             sheet = None
                             with rig:
@@ -3034,15 +3035,19 @@ def process_charonop_node():
                                     for n in nuke.allNodes("ContactSheet"):
                                         sheet = n
                                         break
-                            if sheet:
-                                views = []
-                                for i in range(sheet.inputs()):
-                                    inp = sheet.input(i)
-                                    if inp:
-                                        # Store node name or reference? Reference is unsafe across threads if deleted.
-                                        # But here we just render it. Keeping reference is usually okay in Nuke Python if node persists.
-                                        views.append({'index': i, 'node': inp, 'group': rig})
-                                setup_result['views'] = views
+                            if not sheet:
+                                log_debug("Step 2: ContactSheet node not found inside rig.", "WARNING")
+                                return
+                                
+                            views = []
+                            log_debug(f"Step 2: ContactSheet inputs count: {sheet.inputs()}")
+                            for i in range(sheet.inputs()):
+                                inp = sheet.input(i)
+                                if inp:
+                                    views.append({'index': i, 'node': inp, 'group': rig})
+                                else:
+                                    log_debug(f"Step 2: ContactSheet input {i} is None.", "WARNING")
+                            setup_result['views'] = views
                         except Exception as e:
                             log_debug(f"Step 2 setup task error: {e}", "WARNING")
 
