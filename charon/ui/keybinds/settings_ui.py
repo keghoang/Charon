@@ -12,7 +12,9 @@ from ..dialogs import HotkeyDialog
 from ...first_time_setup import (
     is_force_first_time_setup_enabled,
     set_force_first_time_setup,
+    run_first_time_setup_if_needed,
 )
+from ...setup_manager import SetupManager
 import os
 
 VALUE_COLUMN_WIDTH = 140  # Fixed width for Settings tab value column
@@ -100,6 +102,12 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.comfy_status_label = QtWidgets.QLabel("")
         self.comfy_status_label.setStyleSheet("color: palette(mid);")
         layout.addWidget(self.comfy_status_label)
+
+        dep_check_btn = QtWidgets.QPushButton("Check Dependencies")
+        dep_check_btn.setToolTip("Verify python environment and required custom nodes")
+        dep_check_btn.clicked.connect(self._check_dependencies)
+        layout.addWidget(dep_check_btn)
+
         layout.addStretch()
 
         self.tab_widget.addTab(widget, "Settings ComfyUI")
@@ -766,6 +774,44 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         
         # Reload the tables to show current state
         self._load_keybinds()
+
+    def _check_dependencies(self):
+        """Manually check dependencies and prompt for setup if missing."""
+        path = self.comfy_path_edit.text().strip()
+        if not path:
+            QtWidgets.QMessageBox.warning(self, "Check Dependencies", "Please set a ComfyUI path first.")
+            return
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            manager = SetupManager(path)
+            status_map = manager.check_dependencies()
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        missing = [k for k, v in status_map.items() if v != "found"]
+        
+        if not missing:
+            QtWidgets.QMessageBox.information(self, "Check Dependencies", "All dependencies verified successfully.")
+            return
+
+        msg = "The following dependencies are missing or incomplete:\n\n"
+        for m in missing:
+            msg += f"- {m}\n"
+        msg += "\nWould you like to run the First-Time Setup wizard to attempt installation?"
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Missing Dependencies",
+            msg,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+
+        if reply == QtWidgets.QMessageBox.Yes:
+            # Force run the setup dialog
+            success = run_first_time_setup_if_needed(parent=self, force=True)
+            if success:
+                QtWidgets.QMessageBox.information(self, "Setup", "Setup completed successfully.")
     
     
 
