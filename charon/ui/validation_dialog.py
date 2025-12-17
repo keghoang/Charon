@@ -709,6 +709,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         root_layout.addWidget(self._stack)
 
         self._populate_sections()
+        self._resume_auto_resolve_if_needed()
         self._update_overall_state()
         self.resize(570, 620)
 
@@ -1062,6 +1063,113 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._stack.setCurrentIndex(target)
         self._refresh_check_rows()
 
+    def _load_auto_resolve_state(self) -> Dict[str, Any]:
+        state = self._payload.get("auto_resolve_state") if isinstance(self._payload, dict) else {}
+        return state if isinstance(state, dict) else {}
+
+    def _mark_installing_state(self) -> None:
+        if not isinstance(self._payload, dict):
+            return
+        self._payload["state"] = "installing"
+        if self._workflow_folder:
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+            except Exception as exc:
+                system_warning(f"Failed to persist installing state: {exc}")
+
+    def _clear_installing_state(self) -> None:
+        if not isinstance(self._payload, dict):
+            return
+        if self._auto_resolve_running:
+            return
+        if self._has_active_transfers():
+            return
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
+            return
+        if self._custom_node_install_queue or self._pending_transfer_queue:
+            return
+        if self._payload.get("state") == "installing":
+            self._payload.pop("state", None)
+            if self._workflow_folder:
+                try:
+                    write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+                except Exception as exc:
+                    system_warning(f"Failed to clear installing state: {exc}")
+
+    def _persist_auto_resolve_state(
+        self,
+        *,
+        running: Optional[bool] = None,
+        queue: Optional[List[Tuple[str, int]]] = None,
+    ) -> None:
+        if not isinstance(self._payload, dict):
+            return
+        state = self._load_auto_resolve_state()
+        if running is not None:
+            state["running"] = bool(running)
+        if queue is not None:
+            snapshot: List[Tuple[str, int]] = []
+            for entry in list(queue):
+                if (
+                    isinstance(entry, (list, tuple))
+                    and len(entry) == 2
+                    and isinstance(entry[0], str)
+                ):
+                    try:
+                        snapshot.append((entry[0], int(entry[1])))
+                    except (TypeError, ValueError):
+                        continue
+            state["queue"] = snapshot
+        self._payload["auto_resolve_state"] = state
+        if running:
+            self._mark_installing_state()
+        elif not running and self._payload.get("state") == "installing":
+            self._clear_installing_state()
+        if self._workflow_folder:
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+            except Exception as exc:
+                system_warning(f"Failed to persist auto-resolve state: {exc}")
+
+    def _resume_auto_resolve_if_needed(self) -> None:
+        state = self._load_auto_resolve_state()
+        if not state.get("running"):
+            return
+        persisted_queue = state.get("queue") if isinstance(state, dict) else None
+        queue: List[Tuple[str, int]] = []
+        if isinstance(persisted_queue, list):
+            for entry in persisted_queue:
+                if (
+                    isinstance(entry, (list, tuple))
+                    and len(entry) == 2
+                    and entry[0] in self.SUPPORTED_KEYS
+                ):
+                    try:
+                        idx = int(entry[1])
+                    except (TypeError, ValueError):
+                        continue
+                    widget_info = self._issue_widgets.get(entry[0]) or {}
+                    rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
+                    row_info = rows.get(idx)
+                    if row_info and not row_info.get("resolved"):
+                        queue.append((entry[0], idx))
+        if not queue:
+            queue = self._build_auto_resolve_queue()
+        if not queue:
+            self._persist_auto_resolve_state(running=False, queue=[])
+            return
+        self._auto_resolve_running = True
+        self._auto_resolve_queue = queue
+        include_first = self._has_active_transfers() or (
+            self._custom_nodes_thread and self._custom_nodes_thread.isRunning()
+        )
+        self._set_auto_resolve_queue_state(queue, include_first=include_first)
+        self._mark_installing_state()
+        if self._auto_resolve_button:
+            self._auto_resolve_button.setText("Resolving...")
+            self._auto_resolve_button.setEnabled(False)
+        QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
+
     def _auto_resolve_all(self) -> None:
         if not self._auto_resolve_button:
             return
@@ -1070,11 +1178,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         queue = self._build_auto_resolve_queue()
         if not queue:
+            self._persist_auto_resolve_state(running=False, queue=[])
             return
 
         self._auto_resolve_running = True
         self._auto_resolve_queue = queue
         self._set_auto_resolve_queue_state(queue)
+        self._persist_auto_resolve_state(running=True, queue=queue)
+        self._mark_installing_state()
         self._auto_resolve_button.setText("Resolving...")
         self._auto_resolve_button.setEnabled(False)
         QtWidgets.QApplication.processEvents()
@@ -1141,7 +1252,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _finalize_auto_resolve_sequence(self) -> None:
         self._auto_resolve_running = False
         self._auto_resolve_queue = []
+        self._persist_auto_resolve_state(running=False, queue=[])
         self._reset_auto_resolve_button()
+        self._clear_installing_state()
         self._update_overall_state()
 
     def _reset_auto_resolve_button(self) -> None:
@@ -1149,10 +1262,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._auto_resolve_button.setText("✨ Auto-resolve All")
             self._auto_resolve_button.setEnabled(True)
 
-    def _set_auto_resolve_queue_state(self, queue: List[Tuple[str, int]]) -> None:
+    def _set_auto_resolve_queue_state(
+        self,
+        queue: List[Tuple[str, int]],
+        *,
+        include_first: bool = False,
+    ) -> None:
         """Visually queue every row so users see all items are in progress."""
         for idx, (issue_key, row_index) in enumerate(queue):
-            if idx == 0:
+            if idx == 0 and not include_first:
                 continue  # First item will start resolving immediately
             widget_info = self._issue_widgets.get(issue_key) or {}
             rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
@@ -1188,6 +1306,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_nodes_worker = worker
         self._custom_nodes_thread = thread
         self._custom_nodes_callback = on_complete
+        self._mark_installing_state()
         worker.moveToThread(thread)
         worker.finished.connect(lambda result: self._on_custom_nodes_worker_finished(result, None))
         worker.failed.connect(lambda message: self._on_custom_nodes_worker_finished(None, message))
@@ -1214,6 +1333,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             callback()
         else:
             self._update_overall_state()
+        self._clear_installing_state()
 
     def _cleanup_custom_nodes_worker(self) -> None:
         thread = self._custom_nodes_thread
@@ -1429,6 +1549,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             "button": button,
             "repo_url": repo_url,
         }
+        self._mark_installing_state()
         worker.moveToThread(thread)
         worker.finished.connect(lambda result: self._on_custom_node_install_finished(result))
         worker.failed.connect(lambda message: self._on_custom_node_install_failed(message))
@@ -1512,6 +1633,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._update_overall_state()
         self._start_next_custom_node_from_queue()
         self._continue_auto_resolve_queue()
+        self._clear_installing_state()
 
     def _on_custom_node_install_failed(self, message: str) -> None:
         context = self._custom_node_row_context or {}
@@ -1526,6 +1648,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._update_overall_state()
         self._start_next_custom_node_from_queue()
         self._continue_auto_resolve_queue()
+        self._clear_installing_state()
 
 
     def _filter_missing_with_resolved(
@@ -2523,6 +2646,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 },
                 row_info=row_info,
             )
+            self._mark_installing_state()
             self._set_issue_row_subtitle(
                 row_info,
                 f"Queued copy from Global Repo to {destination_display}...",
@@ -2561,6 +2685,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._set_issue_row_subtitle(row_info, message)
             return False, message
 
+        self._mark_installing_state()
         self._subscribe_to_transfer(row_info, destination)
         self._handle_transfer_update(row_info, state)
         return None, None
@@ -2602,6 +2727,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 },
                 row_info=row_info,
             )
+            self._mark_installing_state()
             self._set_issue_row_subtitle(
                 row_info,
                 f"Queued download to {destination_display}...",
@@ -2640,6 +2766,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._set_issue_row_subtitle(row_info, message)
             return False, message
 
+        self._mark_installing_state()
         self._subscribe_to_transfer(row_info, destination)
         self._handle_transfer_update(row_info, state)
         return None, None
@@ -2663,6 +2790,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             f"{prefix}: {percent}% "
             f"({self._format_bytes_progress(copied_bytes)} / {total_display})"
         )
+        if subtitle == row_info.get("last_progress_subtitle"):
+            return
+        row_info["last_progress_subtitle"] = subtitle
         issue_row = row_info.get("issue_row")
         button = row_info.get("button")
         if isinstance(issue_row, IssueRow) and not getattr(issue_row, "_is_resolving", False):
@@ -2723,6 +2853,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             except Exception as exc:
                 system_warning(f"Failed to persist resolve status after transfer: {exc}")
         self._continue_auto_resolve_queue()
+        self._clear_installing_state()
 
     def _handle_transfer_error(self, row_info: Dict[str, Any], state: TransferState) -> None:
         message = state.error or "Transfer failed."
@@ -2743,6 +2874,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._update_overall_state()
         if not self._start_next_queued_transfer():
             self._continue_auto_resolve_queue()
+        self._clear_installing_state()
 
     def _handle_transfer_update(self, row_info: Dict[str, Any], state: TransferState) -> None:
         row_info["expected_path"] = state.destination
@@ -3698,6 +3830,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._connection_online = bool(connected)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        if self._auto_resolve_running:
+            self._persist_auto_resolve_state(running=True, queue=self._auto_resolve_queue)
+        else:
+            state = self._load_auto_resolve_state()
+            if state.get("running"):
+                self._persist_auto_resolve_state(running=False, queue=[])
         self._teardown_transfers()
         super().closeEvent(event)
 
@@ -3805,8 +3943,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             size /= 1024.0
             unit_idx += 1
         if unit_idx == 0:
-            return f"{int(size):7d} {units[unit_idx]}"
-        return f"{size:6.1f} {units[unit_idx]}"
+            return f"{int(size)} {units[unit_idx]}"
+        return f"{size:.1f} {units[unit_idx]}"
 
     @staticmethod
     def _clamp_size(value: Any) -> int:

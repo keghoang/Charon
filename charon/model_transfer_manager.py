@@ -37,6 +37,7 @@ class ModelTransferManager:
 
     def __init__(self) -> None:
         self._transfers: Dict[str, TransferState] = {}
+        self._shutdown = False
 
     @classmethod
     def instance(cls) -> "ModelTransferManager":
@@ -106,6 +107,18 @@ class ModelTransferManager:
             file_name=file_name,
         )
 
+    def shutdown(self) -> None:
+        """Signal all transfers to stop and wait briefly for threads to exit."""
+        self._shutdown = True
+        for state in list(self._transfers.values()):
+            thread = state.thread
+            if thread and thread.is_alive():
+                try:
+                    thread.join(timeout=1.0)
+                except Exception:
+                    pass
+        self._transfers.clear()
+
     # ------------------------------------------------------------------ Internals
     def _key(self, destination: str) -> str:
         try:
@@ -125,6 +138,20 @@ class ModelTransferManager:
         destination_display: Optional[str],
         file_name: Optional[str],
     ) -> TransferState:
+        if self._shutdown:
+            state = TransferState(
+                kind=kind,
+                destination=destination,
+                url=url,
+                source=source,
+                resolve_method=resolve_method,
+                workflow_value=workflow_value,
+                destination_display=destination_display,
+                file_name=file_name,
+                in_progress=False,
+                error="Transfer manager shutting down",
+            )
+            return state
         key = self._key(destination)
         state = self._transfers.get(key)
         if state and state.in_progress:
@@ -187,6 +214,11 @@ class ModelTransferManager:
             with open(state.source, "rb") as src, open(temp_path, "wb") as dest_fp:
                 while True:
                     chunk = src.read(chunk_size)
+                    if self._shutdown:
+                        state.in_progress = False
+                        state.error = "Transfer cancelled"
+                        self._emit(state)
+                        return
                     if not chunk:
                         break
                     dest_fp.write(chunk)
@@ -228,6 +260,11 @@ class ModelTransferManager:
                 with open(temp_path, "wb") as dest_fp:
                     while True:
                         chunk = response.read(chunk_size)
+                        if self._shutdown:
+                            state.in_progress = False
+                            state.error = "Transfer cancelled"
+                            self._emit(state)
+                            return
                         if not chunk:
                             break
                         dest_fp.write(chunk)

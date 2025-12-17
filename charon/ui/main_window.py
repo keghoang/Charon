@@ -13,6 +13,7 @@ from .tiny_mode_widget import TinyModeWidget
 from ..folder_loader import FolderListLoader
 from .comfy_connection_widget import ComfyConnectionWidget
 from .scene_nodes_panel import SceneNodesPanel as CharonBoardPanel
+from ..model_transfer_manager import manager as transfer_manager
 
 import threading
 
@@ -385,7 +386,12 @@ class CharonWindow(QtWidgets.QWidget):
             # Clean up the background executor to restore stdout/stderr
             if hasattr(self.execution_engine, 'background_executor'):
                 self.execution_engine.background_executor.cleanup()
-            
+        # Stop any active transfers (downloads/copies)
+        try:
+            transfer_manager.shutdown()
+        except Exception:
+            pass
+        
         super().closeEvent(event)
 
     def setup_ui(self):

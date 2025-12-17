@@ -297,6 +297,12 @@ class ScriptPanel(QtWidgets.QWidget):
         """
         Infer a validation state from a cached payload.
         """
+        auto_state = payload.get("auto_resolve_state") if isinstance(payload, dict) else None
+        if isinstance(auto_state, dict) and auto_state.get("running"):
+            return "installing"
+        state_flag = str(payload.get("state") or "").strip().lower() if isinstance(payload, dict) else ""
+        if state_flag == "installing":
+            return "installing"
         state_value = str(payload.get("state") or "").strip().lower()
         if state_value in {"validated", "needs_resolve", "validating", "idle"}:
             inferred = state_value
@@ -726,6 +732,10 @@ class ScriptPanel(QtWidgets.QWidget):
         state = self.script_model.get_validation_state(script_path)
         if state == "validating":
             return
+        if state == "installing":
+            # Still resolving dependencies; just reopen the payload without restarting validation.
+            self._show_validation_payload(script_path)
+            return
 
         if state == "needs_resolve":
             revalidate = self._show_validation_payload(script_path)
@@ -1017,7 +1027,11 @@ class ScriptPanel(QtWidgets.QWidget):
                         issue["ok"] = True
                 if not issue.get("ok", False):
                     all_ok = False
-            restart_required = restart_required or bool(payload.get("restart_required") or payload.get("requires_restart"))
+        restart_required = restart_required or bool(payload.get("restart_required") or payload.get("requires_restart"))
+        auto_state = payload.get("auto_resolve_state") if isinstance(payload, dict) else None
+        if isinstance(auto_state, dict) and auto_state.get("running"):
+            new_state = "installing"
+        else:
             new_state = "validated" if all_ok and not restart_required else "needs_resolve"
         self.script_model.set_validation_state(script_path, new_state, payload)
         self._write_validation_cache(script_path, new_state, payload)
