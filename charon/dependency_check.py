@@ -165,8 +165,8 @@ def ensure_manager_security_level(
             return
 
         manager_dirs = [
-            os.path.join(comfy_dir, "user", "default", "ComfyUI-Manager"),
             os.path.join(comfy_dir, "user", "__manager"),
+            os.path.join(comfy_dir, "user", "default", "ComfyUI-Manager"),
         ]
         manager_config = None
         for candidate_dir in manager_dirs:
