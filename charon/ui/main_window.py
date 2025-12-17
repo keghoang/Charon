@@ -481,7 +481,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
-        content_layout.setContentsMargins(base_margin, 4, base_margin, 10)
+        content_layout.setContentsMargins(base_margin, 4, base_margin, 6)
         content_layout.setSpacing(6)
 
         # Primary actions row (New Workflow, Refresh, Settings) beneath header
