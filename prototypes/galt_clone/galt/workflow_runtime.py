@@ -236,8 +236,35 @@ def import_output():
         nuke.message(f'Output file not found: {normalized}')
         return
 
+    read_node = None
+    existing_name = ''
     try:
-        read_node = nuke.createNode('Read')
+        read_knob = node.knob('charon_read_node')
+        if read_knob is not None:
+            existing_name = read_knob.value().strip()
+    except Exception:
+        existing_name = ''
+
+    if existing_name:
+        candidate = nuke.toNode(existing_name)
+        if candidate is not None and getattr(candidate, 'Class', lambda: '')() == 'Read':
+            read_node = candidate
+
+    try:
+        if read_node is None:
+            parent_group = node.parent() or nuke.root()
+            try:
+                parent_group.begin()
+                read_node = nuke.createNode('Read', inpanel=False)
+            finally:
+                try:
+                    parent_group.end()
+                except Exception:
+                    pass
+            try:
+                read_node.setName(f\"{node.name()}_Import\")
+            except Exception:
+                pass
     except Exception as exc:
         nuke.message(f'Failed to create Read node: {exc}')
         return
@@ -248,9 +275,20 @@ def import_output():
         nuke.message(f'Could not assign output path to Read node: {normalized}')
         return
 
-    read_node.setXpos(node.xpos() + 200)
-    read_node.setYpos(node.ypos())
+    read_node.setXpos(node.xpos())
+    read_node.setYpos(node.ypos() + 60)
     read_node.setSelected(True)
+
+    try:
+        store_knob = node.knob('charon_read_node')
+        if store_knob is not None:
+            store_knob.setValue(read_node.name())
+    except Exception:
+        pass
+    try:
+        node.setMetaData('charon/read_node', read_node.name())
+    except Exception:
+        pass
 
 import_output()
 """

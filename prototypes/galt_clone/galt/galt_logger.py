@@ -60,12 +60,24 @@ def system_info(message: str) -> None:
 
 def system_debug(message: str) -> None:
     """Log a debug system message (only shown when DEBUG_MODE is True)."""
+    config_module = None
+
     try:
-        from galt import config
-        if config.DEBUG_MODE:
-            _get_system_logger().debug(message)
+        from galt import config as global_config  # type: ignore
+        config_module = global_config
     except ImportError:
-        # Fallback for CLI usage
+        try:
+            from . import config as local_config  # type: ignore
+            config_module = local_config
+        except ImportError:
+            config_module = None
+
+    if config_module is None:
+        # No configuration available; default to emitting for safety.
+        _get_system_logger().debug(message)
+        return
+
+    if getattr(config_module, "DEBUG_MODE", False):
         _get_system_logger().debug(message)
 
 

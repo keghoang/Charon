@@ -655,11 +655,25 @@ class GaltWindow(QtWidgets.QWidget):
         # Bottom footer with ComfyUI controls aligned to the right
         footer_layout = QtWidgets.QHBoxLayout()
         footer_layout.setContentsMargins(4, 0, 4, 4)
+
+        self.debug_toggle_button = QtWidgets.QPushButton(parent)
+        self.debug_toggle_button.setObjectName("charonDebugToggleButton")
+        small_width = int(getattr(config, "UI_SMALL_BUTTON_WIDTH", 60) * 1.2)
+        standard_width = max(getattr(config, "UI_BUTTON_WIDTH", 80), 110)
+        self.debug_toggle_button.setMinimumWidth(small_width)
+        self.debug_toggle_button.setMaximumWidth(standard_width)
+        self.debug_toggle_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed
+        )
+        self.debug_toggle_button.clicked.connect(self._toggle_debug_mode)
+        footer_layout.addWidget(self.debug_toggle_button)
+
         footer_layout.addStretch()
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
         footer_layout.addWidget(self.comfy_connection_widget)
         main_layout.addLayout(footer_layout)
+        self._refresh_debug_toggle_button()
 
         # Initialize and populate folders
         self.current_base = self.global_path
@@ -679,6 +693,9 @@ class GaltWindow(QtWidgets.QWidget):
         self.tiny_mode_widget.share_execution_panel_state(
             self.execution_history_panel
         )
+
+        # Ensure debug toggle matches current configuration after shared components load
+        self._refresh_debug_toggle_button()
         
         # Connect tiny mode signals
         self.tiny_mode_widget.exit_tiny_mode.connect(self.exit_tiny_mode)
@@ -724,6 +741,32 @@ class GaltWindow(QtWidgets.QWidget):
             'open_readme': self.open_selected_script_readme,
             'settings': self.open_settings
         }
+
+    def _toggle_debug_mode(self):
+        """Toggle runtime debug logging and refresh the footer button state."""
+        current = bool(getattr(config, "DEBUG_MODE", False))
+        new_state = not current
+        try:
+            setattr(config, "DEBUG_MODE", new_state)
+        except Exception as exc:
+            system_warning(f"Could not toggle debug mode: {exc}")
+            return
+
+        self._refresh_debug_toggle_button()
+        state_label = "enabled" if new_state else "disabled"
+        system_info(f"Debug logging {state_label}.")
+
+    def _refresh_debug_toggle_button(self):
+        """Ensure the footer debug toggle reflects the current mode."""
+        button = getattr(self, "debug_toggle_button", None)
+        if button is None:
+            return
+
+        is_enabled = bool(getattr(config, "DEBUG_MODE", False))
+        button.setText("Debug: On" if is_enabled else "Debug: Off")
+        button.setToolTip(
+            "Disable verbose logging output" if is_enabled else "Enable verbose logging output"
+        )
     
     def _on_keybind_triggered(self, keybind_type: str, keybind_id: str):
         """Handle keybind trigger from keybind manager."""

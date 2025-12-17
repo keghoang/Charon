@@ -97,7 +97,6 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         with open(charon_path, "r", encoding="utf-8-sig") as handle:
             raw_meta = json.load(handle)
     except Exception:
-        print(f"Failed to read metadata at {charon_path}")
         system_debug(f"Failed to read metadata at {charon_path}")
         return None
 
@@ -125,7 +124,6 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         "charon_meta": stored_meta,
         "run_on_main": bool(raw_meta.get("run_on_main", False)),
     }
-    print(f"Loaded metadata parameters: {normalized_parameters}")
     system_debug(f"Loaded metadata parameters: {normalized_parameters}")
 
     return metadata
@@ -155,10 +153,8 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
         with open(charon_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
     except Exception:
-        print(f"Failed to write metadata at {charon_path}")
         system_debug(f"Failed to write metadata at {charon_path}")
         return None
-    print(f"Wrote metadata parameters: {payload.get('parameters')}")
     system_debug(f"Wrote metadata parameters: {payload.get('parameters')}")
 
     return load_charon_metadata(script_path)

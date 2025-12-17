@@ -107,3 +107,19 @@ def desired_prompt_path(folder_path: str, workflow_path: str, workflow_hash: str
     filename = _default_prompt_name(workflow_path, workflow_hash)
     return conversion_dir / filename
 
+
+def clear_conversion_cache(folder_path: str) -> None:
+    """
+    Remove cached conversion artifacts for the given workflow directory.
+    Safe to call even when the cache is already empty.
+    """
+    conversion_dir = _conversion_dir(folder_path)
+    if not conversion_dir.exists():
+        return
+
+    try:
+        import shutil
+
+        shutil.rmtree(conversion_dir)
+    except OSError:
+        pass

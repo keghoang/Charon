@@ -31,6 +31,7 @@ def create_charon_group_node(
 
     node.begin()
     internal_inputs = []
+    image_fallback_index = None
     for index, input_def in enumerate(inputs):
         input_clone = dict(input_def)
         input_clone["index"] = index
@@ -50,10 +51,18 @@ def create_charon_group_node(
         except Exception:
             pass
         internal_inputs.append(input_node)
+        if (
+            image_fallback_index is None
+            and str(input_clone.get("type", "")).lower() == "image"
+        ):
+            image_fallback_index = len(internal_inputs) - 1
 
     output_node = nuke.nodes.Output()
     if internal_inputs:
-        output_node.setInput(0, internal_inputs[0])
+        target_index = 0
+        if image_fallback_index is not None:
+            target_index = image_fallback_index
+        output_node.setInput(0, internal_inputs[target_index])
     node.end()
 
     parameter_knobs, normalized_parameters = _prepare_parameter_controls(nuke, parameters or [])
@@ -116,18 +125,9 @@ def create_charon_group_node(
         )
         node.addKnob(placeholder)
 
-    auto_import_knob = nuke.Boolean_Knob(
-        "charon_auto_import",
-        "Auto Import Outputs",
-        bool(auto_import_default),
-    )
-    auto_import_knob.setFlag(nuke.NO_ANIMATION)
-    auto_import_knob.setValue(1 if auto_import_default else 0)
-    try:
-        auto_import_knob.setTooltip("When enabled, the resulting image is read into Nuke automatically.")
-    except Exception:
-        pass
-    node.addKnob(auto_import_knob)
+    read_store_knob = nuke.String_Knob("charon_read_node", "Read Node", "")
+    _hide_knob(read_store_knob, nuke)
+    node.addKnob(read_store_knob)
 
     info_lines = ["Inputs Required:"]
     for input_def in inputs:
@@ -142,6 +142,20 @@ def create_charon_group_node(
     process_knob = nuke.PyScript_Knob("process", "Process with ComfyUI")
     process_knob.setCommand(process_script)
     node.addKnob(process_knob)
+
+    reuse_knob = nuke.Boolean_Knob(
+        "charon_reuse_output",
+        "Update future iteration in the same Read node",
+        False,
+    )
+    reuse_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        reuse_knob.setTooltip(
+            "When enabled, successful runs update the last Read node instead of creating a new one."
+        )
+    except Exception:
+        pass
+    node.addKnob(reuse_knob)
 
     status_payload = {
         "status": "Ready",
