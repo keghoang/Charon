@@ -271,11 +271,12 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         else:
             button.setEnabled(True)
             button.setCursor(QtCore.Qt.PointingHandCursor)
-            button.setText("Launch ComfyUI")
             if state == "checking":
+                button.setText("Checking...")
                 self._stop_button_blink()
                 self._apply_button_style(button, "#f08c00", "#d9480f", hover="#f59f00")
             else:
+                button.setText("Press to Launch")
                 self._start_button_blink()
 
     def _apply_button_style(
