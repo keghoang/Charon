@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import config
+from . import preferences
 from .galt_logger import system_debug, system_warning, system_error
 from .metadata_manager import load_workflow_data, get_galt_config
 from .utilities import get_current_user_slug
@@ -117,7 +118,12 @@ def convert_workflow(ui_workflow: Dict[str, Any], comfy_path: str) -> Dict[str, 
     return converted
 
 
-def spawn_charon_node(workflow_bundle: Dict[str, Any], *, nuke_module=None, auto_import=True):
+def spawn_charon_node(
+    workflow_bundle: Dict[str, Any],
+    *,
+    nuke_module=None,
+    auto_import: Optional[bool] = None,
+):
     """Create a CharonOp group node in Nuke using the supplied workflow bundle."""
     if not isinstance(workflow_bundle, dict):
         raise ValueError("workflow_bundle must be a dictionary.")
@@ -154,6 +160,9 @@ def spawn_charon_node(workflow_bundle: Dict[str, Any], *, nuke_module=None, auto
     else:
         nuke = nuke_module
 
+    if auto_import is None:
+        auto_import = preferences.get_auto_import_default()
+
     node, _ = create_charon_group_node(
         nuke=nuke,
         workflow_name=workflow_name,
@@ -163,6 +172,7 @@ def spawn_charon_node(workflow_bundle: Dict[str, Any], *, nuke_module=None, auto
         process_script=process_script,
         menu_script=menu_script,
         workflow_path=workflow_path,
+        auto_import_default=auto_import,
     )
 
     try:
