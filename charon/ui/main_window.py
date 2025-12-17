@@ -1128,6 +1128,11 @@ class CharonWindow(QtWidgets.QWidget):
         # Script panel
         self.script_panel = ScriptPanel()
         self.script_panel.set_host(self.host)
+        
+        # Ensure ScriptPanel reflects the initial 3D mode state
+        if hasattr(self, 'mode_3d_button'):
+            self.script_panel.set_3d_mode(self.mode_3d_button.isChecked())
+            
         self.script_panel.script_deselected.connect(self.on_script_deselected)
         self.script_panel.bookmark_requested.connect(self.on_bookmark_requested)
 
