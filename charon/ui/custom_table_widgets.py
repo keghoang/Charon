@@ -27,6 +27,7 @@ class ScriptTableView(QtWidgets.QTableView):
     script_show_raw_validation_payload = QtCore.Signal(str)
     script_revalidate = QtCore.Signal(str)
     script_override_validation = QtCore.Signal(str)
+    uploadModelsRequested = QtCore.Signal(str)
     mousePressed = QtCore.Signal()
     mouseReleased = QtCore.Signal()
     createScriptInCurrentFolder = QtCore.Signal()
@@ -348,6 +349,10 @@ class ScriptTableView(QtWidgets.QTableView):
 
             reset_cache_action = menu.addAction("Reset Local Cache")
             reset_cache_action.triggered.connect(lambda: self._reset_local_cache(script_path))
+
+            menu.addSeparator()
+            upload_models_action = menu.addAction("Upload Models")
+            upload_models_action.triggered.connect(lambda: self.uploadModelsRequested.emit(script_path))
 
             exec_menu(menu, event.globalPos())
             return

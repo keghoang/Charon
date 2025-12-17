@@ -12,10 +12,11 @@ from ..charon_logger import system_debug
 from ..cache_manager import get_cache_manager
 from ..metadata_manager import invalidate_metadata_path
 from .. import config, preferences
-from ..comfy_validation import validate_comfy_environment
-from ..paths import get_default_comfy_launch_path
+from ..comfy_validation import validate_comfy_environment, _validate_models
+from ..paths import get_default_comfy_launch_path, resolve_comfy_environment
 from .validation_dialog import ValidationResolveDialog
 from ..dependency_check import ensure_manager_security_level
+from .model_upload_dialog import ModelUploadDialog
 from ..workflow_local_store import (
     clear_validation_artifacts,
     write_validation_raw,
@@ -257,6 +258,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.script_show_validation_payload.connect(self._handle_script_show_payload_request)
         self.script_view.script_show_raw_validation_payload.connect(self._handle_script_show_raw_payload_request)
         self.script_view.script_override_validation.connect(self._handle_override_validation)
+        self.script_view.uploadModelsRequested.connect(self._handle_upload_models_request)
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
@@ -804,6 +806,88 @@ class ScriptPanel(QtWidgets.QWidget):
             return
 
         self._start_validation(script_path, bundle)
+
+    def _handle_upload_models_request(self, script_path: str):
+        """Scan the workflow for local models and offer to upload them."""
+        if not script_path:
+            return
+
+        comfy_path = self._resolve_comfy_path()
+        if not comfy_path:
+            QtWidgets.QMessageBox.warning(self, "Upload Models", "ComfyUI path not configured. Cannot resolve model paths.")
+            return
+
+        env_info = resolve_comfy_environment(comfy_path)
+        if not env_info.get("python_exe"):
+            QtWidgets.QMessageBox.warning(self, "Upload Models", "ComfyUI environment invalid.")
+            return
+
+        # Load workflow bundle
+        bundle = self._load_workflow_bundle_safe(script_path)
+        if not bundle:
+            return
+            
+        workflow_data = bundle.get("workflow")
+        if not workflow_data:
+            QtWidgets.QMessageBox.warning(self, "Upload Models", "No workflow data found in bundle.")
+            return
+
+        # Show busy cursor
+        QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            # Resolve models using ComfyUI validator
+            # We construct a minimal bundle for validation context
+            validation_bundle = {"workflow": workflow_data, "folder": os.path.dirname(script_path)}
+            issue = _validate_models(env_info, validation_bundle)
+            
+            if not issue.ok and not issue.data.get("found"):
+                 QtWidgets.QMessageBox.information(self, "Upload Models", "No local models found to upload.")
+                 return
+
+            # Extract found models and their categories
+            found_paths = issue.data.get("found") or []
+            resolver_data = issue.data.get("resolver") or {}
+            
+            # Map paths back to categories using the resolver output list
+            path_to_category = {}
+            resolved_list = resolver_data.get("resolved") or []
+            for entry in resolved_list:
+                if not isinstance(entry, dict):
+                    continue
+                path = entry.get("path")
+                category = entry.get("category")
+                if path and category:
+                    path_to_category[os.path.normpath(path)] = category
+
+            models_to_process = []
+            for path in found_paths:
+                norm_path = os.path.normpath(path)
+                category = path_to_category.get(norm_path)
+                # If category missing, try to infer from path relative to models root
+                if not category:
+                    models_root = issue.data.get("models_root")
+                    if models_root and norm_path.startswith(os.path.normpath(models_root)):
+                        try:
+                            rel = os.path.relpath(norm_path, models_root)
+                            dirname = os.path.dirname(rel)
+                            if dirname and not dirname.startswith(".."):
+                                category = dirname
+                        except ValueError:
+                            pass
+                
+                models_to_process.append((path, category or ""))
+
+            if not models_to_process:
+                 QtWidgets.QMessageBox.information(self, "Upload Models", "No models found.")
+                 return
+
+            dialog = ModelUploadDialog(models_to_process, parent=self)
+            exec_dialog(dialog)
+
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Upload Models", f"Error scanning models: {exc}")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
     def _handle_override_validation(self, script_path: str):
         """Force validation state to passed for a workflow."""
