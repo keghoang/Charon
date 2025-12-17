@@ -14,7 +14,7 @@ from ..metadata_manager import invalidate_metadata_path
 from .. import config, preferences
 from ..comfy_validation import validate_comfy_environment
 from ..paths import get_default_comfy_launch_path
-from .validation_dialog import ValidationResolveDialog
+from .validation_dialog import ValidationPrototypeDialog, ValidationResolveDialog
 from ..workflow_local_store import (
     clear_ui_validation_status,
     clear_validation_artifacts,
@@ -245,6 +245,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.script_run.connect(self._handle_script_run_request)
         self.script_view.script_validate.connect(self._handle_script_validate_request)
         self.script_view.script_show_validation_payload.connect(self._handle_script_show_payload_request)
+        self.script_view.script_show_validation_prototype.connect(self._handle_script_show_validation_prototype)
         self.script_view.script_show_raw_validation_payload.connect(self._handle_script_show_raw_payload_request)
         self.script_view.script_override_validation.connect(self._handle_override_validation)
         
@@ -920,6 +921,8 @@ class ScriptPanel(QtWidgets.QWidget):
         main_window = self.window()
         connection_widget = getattr(main_window, "comfy_connection_widget", None)
         if connection_widget is not None:
+            if hasattr(dialog, "attach_connection_widget"):
+                dialog.attach_connection_widget(connection_widget)
             dialog.comfy_restart_requested.connect(connection_widget.handle_external_restart_request)
         exec_dialog(dialog)
 
@@ -1026,6 +1029,14 @@ class ScriptPanel(QtWidgets.QWidget):
             return
         if self._show_validation_payload(script_path):
             self._handle_script_revalidate_request(script_path)
+
+    def _handle_script_show_validation_prototype(self, script_path: str) -> None:
+        """Display the static prototype for the revamped validation result window."""
+        if not script_path:
+            return
+        workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
+        dialog = ValidationPrototypeDialog(workflow_name=workflow_name, parent=self)
+        exec_dialog(dialog)
 
     def _handle_script_show_raw_payload_request(self, script_path: str) -> None:
         """Show the raw validation payload."""
