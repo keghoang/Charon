@@ -7,7 +7,6 @@ from typing import List, Optional
 from ..qt_compat import QtWidgets, QtGui, QtCore
 from ..charon_logger import system_error, system_info
 from .. import preferences
-from ..comfy_client import ComfyUIClient
 from ..comfy_restart import send_shutdown_signal
 from ..dependency_check import PREF_DEPENDENCIES_VERIFIED
 from pathlib import Path
@@ -554,11 +553,8 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         super().closeEvent(event)
 
     def _is_comfy_running(self) -> bool:
-        try:
-            client = ComfyUIClient()
-            return bool(client.test_connection())
-        except Exception:
-            return False
+        # Check disabled to prevent crashes in Nuke host environment
+        return False
 
     def _send_shutdown_signal(self) -> bool:
         return send_shutdown_signal("http://127.0.0.1:8188")
