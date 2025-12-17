@@ -1087,6 +1087,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         self._auto_resolve_running = True
         self._auto_resolve_queue = queue
+        self._set_auto_resolve_queue_state(queue)
         self._auto_resolve_button.setText("Resolving...")
         self._auto_resolve_button.setEnabled(False)
         QtWidgets.QApplication.processEvents()
@@ -1148,6 +1149,31 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if self._auto_resolve_button:
             self._auto_resolve_button.setText("✨ Auto-resolve All")
             self._auto_resolve_button.setEnabled(True)
+
+    def _set_auto_resolve_queue_state(self, queue: List[Tuple[str, int]]) -> None:
+        """Visually queue every row so users see all items are in progress."""
+        for idx, (issue_key, row_index) in enumerate(queue):
+            if idx == 0:
+                continue  # First item will start resolving immediately
+            widget_info = self._issue_widgets.get(issue_key) or {}
+            rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
+            row_info = rows.get(row_index) or {}
+            if row_info.get("resolved"):
+                continue
+            self._mark_row_in_queue(row_info)
+
+    def _mark_row_in_queue(self, row_info: Dict[str, Any]) -> None:
+        issue_row = row_info.get("issue_row")
+        button: Optional[QtWidgets.QPushButton] = row_info.get("button")
+        # Update the IssueRow button if present.
+        row_button = getattr(issue_row, "btn_resolve", None)
+        if isinstance(row_button, QtWidgets.QPushButton):
+            row_button.setText("In Queue")
+            row_button.setEnabled(False)
+        # Update any alternate button reference.
+        if button and button is not row_button:
+            button.setText("In Queue")
+            button.setEnabled(False)
 
     def _start_custom_nodes_worker(
         self,
