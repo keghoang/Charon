@@ -1832,6 +1832,19 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         method_detail = row_info.get("resolve_method") or note or display_text
         row_info["resolve_method"] = method_detail
         issue_row = row_info.get("issue_row")
+        if issue_row is None:
+            models_widget = self._issue_widgets.get("models") or {}
+            rows_mapping = models_widget.get("rows") or {}
+            target_idx = row_info.get("reference_index")
+            for row_data in rows_mapping.values():
+                if not isinstance(row_data, dict):
+                    continue
+                if row_data.get("issue_row"):
+                    if target_idx is None or row_data.get("reference_index") == target_idx:
+                        issue_row = row_data.get("issue_row")
+                        row_data.setdefault("issue_row", issue_row)
+                        row_info["issue_row"] = issue_row
+                        break
         if isinstance(issue_row, IssueRow):
             # Force subtitle to update immediately so resolve_method shows without reopening.
             issue_row.mark_as_successful(
