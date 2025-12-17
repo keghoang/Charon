@@ -40,7 +40,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._build_ui()
 
         self._watch_timer = QtCore.QTimer(self)
-        self._watch_timer.setInterval(5000)
+        self._watch_timer.setInterval(2500)
         self._watch_timer.timeout.connect(self._check_connection)
 
         if self._comfy_path:
@@ -247,7 +247,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             button.setCursor(QtCore.Qt.ArrowCursor)
             button.setText("Running")
             self._apply_button_style(button, "#37b24d", "#2f9e44", disabled=True)
-        elif self._launch_in_progress or state in {"launching", "checking"}:
+        elif self._launch_in_progress or state == "launching":
             self._stop_button_blink()
             button.setEnabled(False)
             button.setCursor(QtCore.Qt.ArrowCursor)
@@ -256,7 +256,10 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         else:
             button.setEnabled(True)
             button.setCursor(QtCore.Qt.PointingHandCursor)
-            button.setText("Press to Launch")
+            if state == "checking":
+                button.setText("Checking...")
+            else:
+                button.setText("Press to Launch")
             self._start_button_blink()
 
     def _apply_button_style(
