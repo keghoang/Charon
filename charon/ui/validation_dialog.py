@@ -25,7 +25,7 @@ from ..workflow_local_store import append_validation_resolve_entry
 
 
 SUCCESS_COLOR = "#228B22"
-VALIDATION_COLUMN_WIDTHS = (120, 80, 160, 80)
+VALIDATION_COLUMN_WIDTHS = (260, 100)
 ACTION_BUTTON_WIDTH = 90
 MODEL_CATEGORY_PREFIXES = {
     "diffusion_models",
@@ -361,18 +361,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         frame_layout.addWidget(summary_label)
 
         table = QtWidgets.QTableWidget(frame)
-        table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Node", "Status", "Package", "Action"])
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Name", "Action"])
         table.verticalHeader().setVisible(False)
         table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
         table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setStretchLastSection(False)
-        for column in range(4):
-            mode = (
-                QtWidgets.QHeaderView.ResizeMode.Fixed
-                if column in (2, 3)
-                else QtWidgets.QHeaderView.ResizeMode.Interactive
-            )
+        for column in range(2):
+            mode = QtWidgets.QHeaderView.ResizeMode.Fixed if column == 1 else QtWidgets.QHeaderView.ResizeMode.Interactive
             table.horizontalHeader().setSectionResizeMode(column, mode)
         table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setTextElideMode(QtCore.Qt.TextElideMode.ElideMiddle)
@@ -680,10 +676,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     ) -> Dict[int, Dict[str, Any]]:
         required = data.get("required") or []
         missing_entries = data.get("missing") or []
-        dependencies = self._load_dependencies()
         repo_lookup = data.get("node_repos") or {}
         package_overrides = data.get("node_packages") or {}
         aux_repos = data.get("aux_repos") or {}
+        node_meta = data.get("node_meta") or {}
 
         self._ensure_custom_node_package_map()
 
@@ -719,75 +715,67 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         if not filtered_required:
             table.setRowCount(1)
-            table.setColumnHidden(3, True)
+            table.setColumnHidden(1, True)
             placeholder = QtWidgets.QTableWidgetItem("No custom node data reported.")
             placeholder.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             table.setItem(0, 0, placeholder)
-            table.setSpan(0, 0, 1, 4)
+            table.setSpan(0, 0, 1, 2)
             return {}
 
-        # Group rows by package to avoid duplicate install prompts. One button per package.
-        table.setColumnHidden(3, False)
+        table.setColumnHidden(1, False)
+
         groups: Dict[str, Dict[str, Any]] = {}
         for node_type, package_name in filtered_required:
             node_key_lower = node_type.lower()
             repo_url = repo_lookup.get(node_key_lower) or ""
-            repo_display = package_overrides.get(node_key_lower) or self._repo_display_name(repo_url)
+            meta_info = node_meta.get(node_key_lower) or {}
+            repo_display = (
+                meta_info.get("package_display")
+                or package_overrides.get(node_key_lower)
+                or self._repo_display_name(repo_url)
+            )
             pkg_entry = groups.setdefault(
                 package_name,
                 {
                     "nodes": [],
                     "repo_url": repo_url,
                     "repo_display": repo_display,
+                    "author": meta_info.get("author") or "",
+                    "last_update": meta_info.get("last_update") or "",
                 },
             )
-            # Prefer a repo if any node has one.
             if repo_url and not pkg_entry.get("repo_url"):
                 pkg_entry["repo_url"] = repo_url
                 pkg_entry["repo_display"] = repo_display
+            if not pkg_entry.get("author") and meta_info.get("author"):
+                pkg_entry["author"] = meta_info["author"]
+            if not pkg_entry.get("last_update") and meta_info.get("last_update"):
+                pkg_entry["last_update"] = meta_info["last_update"]
             pkg_entry["nodes"].append(node_type)
 
-        # Sort packages alphabetically for stable display.
         ordered_packages = sorted(groups.keys(), key=lambda x: x.lower())
-        total_rows = sum(len(info["nodes"]) + 1 for info in groups.values())  # header + nodes per package
-        table.setRowCount(total_rows)
+        table.setRowCount(len(ordered_packages))
 
         row_mapping: Dict[int, Dict[str, Any]] = {}
         row = 0
         for package_name in ordered_packages:
             info = groups[package_name]
-            package_nodes = info["nodes"]
             repo_url = info.get("repo_url") or ""
             repo_display = info.get("repo_display") or self._repo_display_name(repo_url)
-            package_display = package_name or repo_display or "Unknown package"
-            node_count = len(package_nodes)
-            missing_nodes = [n for n in package_nodes if n.lower() in missing_set]
-            status_value = "Missing" if missing_nodes else "Found"
+            package_display = repo_display or package_name or "Unknown package"
+            missing_nodes = [n for n in info["nodes"] if n.lower() in missing_set]
+            author_value = info.get("author") or ""
+            last_update_value = info.get("last_update") or ""
 
-            # Package header row
-            header_text = f"{package_display} ({node_count} node{'s' if node_count != 1 else ''})"
-            header_item = QtWidgets.QTableWidgetItem(header_text)
-            header_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
-            header_item.setToolTip(repo_url or package_display)
-            header_item.setForeground(QtGui.QBrush(QtGui.QColor("#228B22")))
-            header_item.setFont(QtGui.QFont(header_item.font().family(), weight=QtGui.QFont.Weight.Bold))
-            table.setItem(row, 0, header_item)
-
-            status_item = QtWidgets.QTableWidgetItem(status_value.title())
-            self._apply_status_style(status_item, status_value)
-            table.setItem(row, 1, status_item)
-
-            package_item = QtWidgets.QTableWidgetItem(repo_display or package_display)
-            package_item.setToolTip(repo_url or package_display)
-            if status_value == "Missing":
-                package_item.setText(f"{package_display} (not installed)")
-                package_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
+            name_item = QtWidgets.QTableWidgetItem(package_display)
+            name_item.setToolTip(repo_url or package_display)
+            if missing_nodes:
+                name_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
             else:
-                package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
-            table.setItem(row, 2, package_item)
+                name_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
+            table.setItem(row, 0, name_item)
 
-            header_row = row
-            if status_value == "Missing":
+            if missing_nodes:
                 button = QtWidgets.QPushButton("Resolve")
                 button.setFixedHeight(24)
                 button.setMaximumWidth(ACTION_BUTTON_WIDTH)
@@ -809,112 +797,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     " }"
                 )
                 button.clicked.connect(lambda _checked=False, r=row: self._handle_custom_node_auto_resolve(r))
-                table.setCellWidget(row, 3, button)
+                table.setCellWidget(row, 1, button)
                 row_mapping[row] = {
                     "node_name": ", ".join(missing_nodes) or package_display,
                     "package_name": package_display,
                     "manager_repo": repo_url,
                     "manager_repo_display": repo_display or package_display,
-                    "status_item": status_item,
-                    "package_item": package_item,
+                    "status_item": name_item,
+                    "package_item": name_item,
                     "button": button,
                     "dependency": None,
                     "resolved": False,
-                    "package_rows": [],
                     "missing_nodes": missing_nodes,
                 }
             else:
                 placeholder_widget = QtWidgets.QWidget()
-                table.setCellWidget(row, 3, placeholder_widget)
+                table.setCellWidget(row, 1, placeholder_widget)
             row += 1
-
-            # Node rows (informational, no buttons)
-            for node_type in package_nodes:
-                node_key = node_type.lower()
-                node_item = QtWidgets.QTableWidgetItem(f"  • {node_type}" if node_type else "Unknown Node")
-                node_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
-                node_item.setToolTip(node_type or "Unknown Node")
-                table.setItem(row, 0, node_item)
-
-                node_status = "Missing" if node_key in missing_set else "Found"
-                node_status_item = QtWidgets.QTableWidgetItem(node_status.title())
-                self._apply_status_style(node_status_item, node_status)
-                table.setItem(row, 1, node_status_item)
-
-                spacer_pkg = QtWidgets.QTableWidgetItem("")
-                spacer_pkg.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
-                table.setItem(row, 2, spacer_pkg)
-
-                placeholder_widget = QtWidgets.QWidget()
-                table.setCellWidget(row, 3, placeholder_widget)
-
-                # Track node rows for bulk updates when package resolves.
-                if status_value == "Missing":
-                    row_mapping[header_row]["package_rows"].append(row)
-                row += 1
-            status_value = "Available"
-            dependency = None
-
-            node_item = QtWidgets.QTableWidgetItem(node_type or "Unknown Node")
-            node_item.setToolTip(node_type or "Unknown Node")
-            table.setItem(row, 0, node_item)
-
-            status_item = QtWidgets.QTableWidgetItem(status_value.title())
-            self._apply_status_style(status_item, status_value)
-            table.setItem(row, 1, status_item)
-
-            package_item = QtWidgets.QTableWidgetItem(package_display)
-            package_item.setToolTip(package_display)
-
-            if node_key in missing_set:
-                status_value = "Missing"
-                status_item.setText(status_value.title())
-                self._apply_status_style(status_item, status_value)
-                package_item.setText(f"{package_display} (not installed)")
-                package_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
-                dependency = self._match_dependency_for_package(package_name, node_type, dependencies)
-            else:
-                package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
-
-            table.setItem(row, 2, package_item)
-
-            if status_value == "Missing":
-                button = QtWidgets.QPushButton("Resolve")
-                button.setFixedHeight(24)
-                button.setMaximumWidth(ACTION_BUTTON_WIDTH)
-                button.setStyleSheet(
-                    "QPushButton {"
-                    " background-color: #B22222;"
-                    " color: white;"
-                    " border: none;"
-                    " border-radius: 4px;"
-                    " padding: 2px 8px;"
-                    " }"
-                    "QPushButton:hover {"
-                    " background-color: #9B1C1C;"
-                    " }"
-                    "QPushButton:disabled {"
-                    " background-color: #228B22;"
-                    " color: white;"
-                    " border-radius: 4px;"
-                    " }"
-                )
-                button.clicked.connect(lambda _checked=False, r=row: self._handle_custom_node_auto_resolve(r))
-                table.setCellWidget(row, 3, button)
-                row_mapping[row] = {
-                    "node_name": node_type,
-                    "package_name": package_name,
-                     "manager_repo": repo_url,
-                     "manager_repo_display": repo_display or package_display,
-                    "status_item": status_item,
-                    "package_item": package_item,
-                    "button": button,
-                    "dependency": dependency,
-                    "resolved": False,
-                }
-            else:
-                placeholder_widget = QtWidgets.QWidget()
-                table.setCellWidget(row, 3, placeholder_widget)
 
         table.resizeRowsToContents()
         return row_mapping
