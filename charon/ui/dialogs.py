@@ -948,41 +948,47 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
         nodes_to_expand: List[QtWidgets.QTreeWidgetItem] = []
 
-        for node in candidates:
-            node_item = QtWidgets.QTreeWidgetItem(self.input_mapping_tree, [node.name])
-            node_item.setFlags(QtCore.Qt.ItemIsEnabled)
-            node_should_expand = False
+        self.input_mapping_tree.blockSignals(True)
+        try:
+            for node in candidates:
+                node_item = QtWidgets.QTreeWidgetItem(self.input_mapping_tree, [node.name])
+                node_item.setFlags(QtCore.Qt.ItemIsEnabled)
+                node_should_expand = False
 
-            for attribute in node.attributes:
-                attr_item = QtWidgets.QTreeWidgetItem(node_item, [attribute.label])
-                flags = (attr_item.flags() | QtCore.Qt.ItemIsUserCheckable) & ~QtCore.Qt.ItemIsSelectable
-                attr_item.setFlags(flags)
-                if self._is_parameter_selected(node.node_id, attribute.key, attribute.aliases):
-                    attr_item.setCheckState(0, QtCore.Qt.CheckState.Checked)
-                    node_should_expand = True
-                else:
-                    attr_item.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
-                attr_item.setToolTip(0, attribute.preview or "No default assigned")
-                attr_item.setData(
-                    0,
-                    QtCore.Qt.ItemDataRole.UserRole,
-                    {
-                        "node_id": node.node_id,
-                        "attribute_key": attribute.key,
-                        "node_name": node.name,
-                        "group": node.name,
-                        "label": attribute.label,
-                        "preview": attribute.preview,
-                        "value": attribute.value,
-                        "value_type": attribute.value_type,
-                        "aliases": attribute.aliases,
-                        "node_default": attribute.node_default,
-                        "choices": attribute.choices,
-                    },
-                )
+                for attribute in node.attributes:
+                    attr_item = QtWidgets.QTreeWidgetItem(node_item, [attribute.label])
+                    flags = (attr_item.flags() | QtCore.Qt.ItemIsUserCheckable) & ~QtCore.Qt.ItemIsSelectable
+                    attr_item.setFlags(flags)
+                    
+                    attr_item.setData(
+                        0,
+                        QtCore.Qt.ItemDataRole.UserRole,
+                        {
+                            "node_id": node.node_id,
+                            "attribute_key": attribute.key,
+                            "node_name": node.name,
+                            "group": node.name,
+                            "label": attribute.label,
+                            "preview": attribute.preview,
+                            "value": attribute.value,
+                            "value_type": attribute.value_type,
+                            "aliases": attribute.aliases,
+                            "node_default": attribute.node_default,
+                            "choices": attribute.choices,
+                        },
+                    )
+                    attr_item.setToolTip(0, attribute.preview or "No default assigned")
 
-            if node_should_expand:
-                nodes_to_expand.append(node_item)
+                    if self._is_parameter_selected(node.node_id, attribute.key, attribute.aliases):
+                        attr_item.setCheckState(0, QtCore.Qt.CheckState.Checked)
+                        node_should_expand = True
+                    else:
+                        attr_item.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
+
+                if node_should_expand:
+                    nodes_to_expand.append(node_item)
+        finally:
+            self.input_mapping_tree.blockSignals(False)
 
         self._refresh_parameter_highlights()
         self.input_mapping_tree.collapseAll()
