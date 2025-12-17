@@ -56,11 +56,7 @@ class ScriptItem:
             prefix += "▶ "
         
         # Build the name with readme indicator
-        name_part = self.name
-        if self.has_readme():
-            name_part += " [r]"
-        
-        return f"{prefix}{name_part}"
+        return f"{prefix}{self.name}"
 
 
 class BaseScriptLoader(QtCore.QThread):
