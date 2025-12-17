@@ -678,22 +678,7 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.setSpacing(4)
         footer_layout.setVerticalSpacing(5)
 
-        # Row 0 Left: Resource Widget
-        self.resource_widget = ResourceWidget(parent)
-        footer_layout.addWidget(self.resource_widget, 0, 0, Qt.AlignLeft | Qt.AlignTop)
-
-        # Row 0 Right: Comfy Connection
-        self.comfy_connection_widget = ComfyConnectionWidget(parent)
-        self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
-        self.comfy_connection_widget.connection_status_changed.connect(
-            self.script_panel.update_comfy_connection_status
-        )
-        self.script_panel.update_comfy_connection_status(
-            self.comfy_connection_widget.is_connected()
-        )
-        footer_layout.addWidget(self.comfy_connection_widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
-        
-        # Row 1 Left: GPU Label
+        # Row 0 Left: GPU Label
         self.gpu_label = QtWidgets.QLabel(parent)
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -704,8 +689,23 @@ class CharonWindow(QtWidgets.QWidget):
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
         
-        footer_layout.addWidget(self.gpu_label, 1, 0, Qt.AlignLeft | Qt.AlignTop)
+        footer_layout.addWidget(self.gpu_label, 0, 0, Qt.AlignLeft | Qt.AlignBottom)
 
+        # Row 1 Left: Resource Widget
+        self.resource_widget = ResourceWidget(parent)
+        footer_layout.addWidget(self.resource_widget, 1, 0, Qt.AlignLeft | Qt.AlignTop)
+
+        # Row 1 Right: Comfy Connection
+        self.comfy_connection_widget = ComfyConnectionWidget(parent)
+        self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
+        self.comfy_connection_widget.connection_status_changed.connect(
+            self.script_panel.update_comfy_connection_status
+        )
+        self.script_panel.update_comfy_connection_status(
+            self.comfy_connection_widget.is_connected()
+        )
+        footer_layout.addWidget(self.comfy_connection_widget, 1, 2, Qt.AlignRight | Qt.AlignVCenter)
+        
         # Spacer Column (Row 0-1, Col 1)
         footer_layout.setColumnStretch(1, 1)
         
