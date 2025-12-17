@@ -36,6 +36,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.setWindowTitle("Settings")
         self.setWindowFlag(WindowContextHelpButtonHint, False)
         self.setWindowFlag(WindowCloseButtonHint, True)
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         
         # Create UI
         self._create_ui()
