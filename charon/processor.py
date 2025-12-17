@@ -25,7 +25,12 @@ from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from .comfy_client import ComfyUIClient
 from . import config, preferences
 from .node_factory import reset_charon_node_state
-from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile_color
+from .utilities import (
+    get_current_user_slug,
+    status_to_gl_color,
+    status_to_tile_color,
+    resolve_status_color_hex,
+)
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
 MODEL_OUTPUT_EXTENSIONS = {".obj", ".fbx", ".abc", ".gltf", ".glb", ".usd", ".usdz"}
@@ -1260,6 +1265,10 @@ def process_charonop_node():
                                 gl_knob.setValue(list(gl_color))
                             except Exception:
                                 pass
+                try:
+                    ensure_read_node_info(target, read_node_unique_id(target), state)
+                except Exception:
+                    pass
 
             def _update_debug(target_node):
                 try:
@@ -1416,7 +1425,7 @@ def process_charonop_node():
                     next_knob = None
             return outputs_knob, index_knob, label_knob
 
-        def ensure_read_node_info(read_node, read_id: str):
+        def ensure_read_node_info(read_node, read_id: str, state: Optional[str] = None):
             if read_node is None:
                 return
             try:
@@ -1440,10 +1449,15 @@ def process_charonop_node():
                 except Exception:
                     info_text = None
             parent_display = read_node_parent_id(read_node) or 'N/A'
+            status_display = state or current_node_state
+            color_hex = resolve_status_color_hex(status_display)
             summary = [
                 f"Parent ID: {parent_display}",
                 f"Read Node ID: {read_id or 'N/A'}",
             ]
+            summary.append(f"Status: {status_display or 'N/A'}")
+            if color_hex:
+                summary.append(f"Color: {color_hex.upper()}")
             if info_text is not None:
                 try:
                     info_text.setValue("\n".join(summary))
@@ -1501,7 +1515,7 @@ def process_charonop_node():
                     read_id_knob.setValue(read_id)
                 except Exception:
                     pass
-            ensure_read_node_info(read_node, read_id)
+            ensure_read_node_info(read_node, read_id, current_node_state)
             assign_read_label(read_node)
             apply_status_color(current_node_state, read_node)
 
@@ -1624,7 +1638,7 @@ def process_charonop_node():
                     label_knob.setValue('No batch outputs yet')
                 except Exception:
                     pass
-            ensure_read_node_info(read_node, "")
+            ensure_read_node_info(read_node, "", current_node_state)
             assign_read_label(read_node, "")
             try:
                 knob = node.knob('charon_read_node_id')
@@ -2942,7 +2956,7 @@ def process_charonop_node():
                                         except Exception:
                                             pass
                                         try:
-                                            ensure_read_node_info(read_node, read_id_mesh)
+                                            ensure_read_node_info(read_node, read_id_mesh, current_node_state)
                                         except Exception:
                                             pass
 
