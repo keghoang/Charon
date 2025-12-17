@@ -8,6 +8,8 @@ from .custom_table_widgets import ScriptTableView
 from ..charon_metadata import write_charon_metadata
 from ..workflow_runtime import load_workflow_bundle, spawn_charon_node
 from ..utilities import get_current_user_slug
+from ..cache_manager import get_cache_manager
+from ..metadata_manager import invalidate_metadata_path
 from .. import config
 import os
 import shutil
@@ -788,6 +790,15 @@ class ScriptPanel(QtWidgets.QWidget):
                 f"Failed to save workflow metadata: {exc}"
             )
             return
+
+        # Invalidate caches so the new workflow appears immediately
+        try:
+            invalidate_metadata_path(target_folder)
+            cache_manager = get_cache_manager()
+            cache_manager.invalidate_folder(user_folder)
+            cache_manager.invalidate_folder(target_folder)
+        except Exception:
+            pass
 
         # Optionally author a simple README if description was provided
         description = updated_meta.get("description", "").strip()

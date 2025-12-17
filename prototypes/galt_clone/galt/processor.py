@@ -7,6 +7,12 @@ import time
 import uuid
 from typing import Optional, Tuple
 
+from .conversion_cache import (
+    compute_workflow_hash,
+    desired_prompt_path,
+    load_cached_conversion,
+    write_conversion_cache,
+)
 from .paths import get_default_comfy_launch_path
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
 
@@ -352,27 +358,22 @@ def process_charonop_node():
         os.makedirs(temp_dir, exist_ok=True)
 
         converted_prompt_path = None
+        workflow_folder = ''
+        candidate_paths = [workflow_path]
+        try:
+            meta_path = node.metadata('charon/workflow_path')
+            if meta_path and meta_path not in candidate_paths:
+                candidate_paths.append(meta_path)
+        except Exception:
+            pass
 
-        def persist_converted_prompt(prompt_payload):
-            nonlocal converted_prompt_path
-            target_dir = os.path.dirname(workflow_path) if workflow_path else ''
-            if not target_dir:
-                target_dir = os.path.join(temp_root, 'debug')
-            try:
-                os.makedirs(target_dir, exist_ok=True)
-                if workflow_path:
-                    base_name = os.path.splitext(os.path.basename(workflow_path))[0]
-                else:
-                    base_name = (node.name() or f'charon_{current_run_id}').replace(' ', '_')
-                filename = f"{base_name}_converted_export.json"
-                converted_prompt_path = os.path.join(target_dir, filename)
-                with open(converted_prompt_path, 'w', encoding='utf-8') as handle:
-                    json.dump(prompt_payload, handle, indent=2)
-                converted_prompt_path = converted_prompt_path.replace('\\', '/')
-                log_debug(f"Saved converted workflow to {converted_prompt_path}")
-            except Exception as exc:
-                converted_prompt_path = None
-                log_debug(f'Failed to save converted workflow: {exc}', 'WARNING')
+        for candidate in candidate_paths:
+            if not candidate:
+                continue
+            folder_candidate = candidate if os.path.isdir(candidate) else os.path.dirname(candidate)
+            if folder_candidate and os.path.isdir(folder_candidate):
+                workflow_folder = folder_candidate
+                break
 
         connected_inputs = {}
         total_inputs = node.inputs()
@@ -533,27 +534,89 @@ def process_charonop_node():
             try:
                 update_progress(0.05, 'Starting processing')
                 conversion_extra = {}
+                workflow_hash = compute_workflow_hash(workflow_data) if needs_conversion else None
+                cache_hit = None
+
+                if needs_conversion and workflow_hash and workflow_folder:
+                    try:
+                        cache_hit = load_cached_conversion(workflow_folder, workflow_hash)
+                    except Exception as exc:
+                        log_debug(f'Conversion cache read failed: {exc}', 'WARNING')
+                        cache_hit = None
+
+                prompt_data = workflow_data
 
                 if needs_conversion:
-                    update_progress(0.1, 'Converting workflow')
-                    if not comfy_path:
-                        raise RuntimeError(
-                            'ComfyUI path is not configured. Open the prototype and set the launch path.'
-                        )
-                    try:
-                        converted_prompt = runtime_convert_workflow(workflow_data, comfy_path)
-                        persist_converted_prompt(converted_prompt)
-                        if converted_prompt_path:
-                            conversion_extra['converted_prompt_path'] = converted_prompt_path
-                    except Exception as exc:
-                        log_debug(f'Workflow conversion failed: {exc}', 'ERROR')
-                        raise
-                    if not is_api_prompt(converted_prompt):
-                        raise Exception('Converted workflow is invalid')
-                    prompt_data = converted_prompt
-                else:
-                    prompt_data = workflow_data
-                
+                    if cache_hit:
+                        try:
+                            with open(cache_hit['prompt_path'], 'r', encoding='utf-8') as handle:
+                                prompt_data = json.load(handle)
+                            converted_prompt_path = cache_hit['prompt_path'].replace('\\', '/')
+                            conversion_extra.update({
+                                'converted_prompt_path': converted_prompt_path,
+                                'conversion_cached': True,
+                            })
+                            update_progress(0.1, 'Using cached conversion', extra=conversion_extra)
+                        except Exception as exc:
+                            log_debug(f'Failed to read cached conversion: {exc}', 'WARNING')
+                            cache_hit = None
+                            converted_prompt_path = None
+
+                    if not cache_hit:
+                        update_progress(0.1, 'Converting workflow')
+                        if not comfy_path:
+                            raise RuntimeError(
+                                'ComfyUI path is not configured. Open the prototype and set the launch path.'
+                            )
+                        try:
+                            converted_prompt = runtime_convert_workflow(workflow_data, comfy_path)
+                        except Exception as exc:
+                            log_debug(f'Workflow conversion failed: {exc}', 'ERROR')
+                            raise
+                        if not is_api_prompt(converted_prompt):
+                            raise Exception('Converted workflow is invalid')
+                        prompt_data = converted_prompt
+
+                        if workflow_hash and workflow_folder:
+                            try:
+                                target_path = desired_prompt_path(workflow_folder, workflow_path or '', workflow_hash)
+                                target_path.parent.mkdir(parents=True, exist_ok=True)
+                                with open(target_path, 'w', encoding='utf-8') as handle:
+                                    json.dump(converted_prompt, handle, indent=2)
+                                stored_path = write_conversion_cache(
+                                    workflow_folder,
+                                    workflow_path or '',
+                                    workflow_hash,
+                                    str(target_path),
+                                )
+                                converted_prompt_path = stored_path.replace('\\', '/')
+                            except Exception as exc:
+                                log_debug(f'Failed to cache converted workflow: {exc}', 'WARNING')
+                                debug_dir = os.path.join(temp_root, 'debug')
+                                os.makedirs(debug_dir, exist_ok=True)
+                                fallback_path = os.path.join(
+                                    debug_dir,
+                                    f'converted_{current_run_id}.json',
+                                )
+                                with open(fallback_path, 'w', encoding='utf-8') as handle:
+                                    json.dump(converted_prompt, handle, indent=2)
+                                converted_prompt_path = fallback_path.replace('\\', '/')
+                        else:
+                            debug_dir = os.path.join(temp_root, 'debug')
+                            os.makedirs(debug_dir, exist_ok=True)
+                            fallback_path = os.path.join(
+                                debug_dir,
+                                f'converted_{current_run_id}.json',
+                            )
+                            with open(fallback_path, 'w', encoding='utf-8') as handle:
+                                json.dump(converted_prompt, handle, indent=2)
+                            converted_prompt_path = fallback_path.replace('\\', '/')
+
+                        conversion_extra.update({
+                            'converted_prompt_path': converted_prompt_path,
+                            'conversion_cached': False,
+                        })
+
                 update_progress(0.2, 'Uploading images', extra=conversion_extra or None)
 
                 workflow_copy = copy.deepcopy(prompt_data)

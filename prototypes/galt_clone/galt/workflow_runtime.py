@@ -128,9 +128,9 @@ def spawn_charon_node(workflow_bundle: Dict[str, Any], *, nuke_module=None, auto
 
     metadata = workflow_bundle.get("metadata") or {}
     folder = workflow_bundle.get("folder") or ""
-    workflow_name = metadata.get("charon_meta", {}).get("workflow_file")
+    workflow_name = Path(folder).name or ""
     if not workflow_name:
-        workflow_name = Path(folder).name or "Workflow"
+        workflow_name = metadata.get("charon_meta", {}).get("workflow_file") or "Workflow"
 
     workflow_path = workflow_bundle.get("workflow_path")
 
