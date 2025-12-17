@@ -24,6 +24,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     connection_status_changed = QtCore.Signal(bool)
     client_changed = QtCore.Signal(object)
+    restart_state_changed = QtCore.Signal(bool)
 
     _connection_check_finished = QtCore.Signal(bool, object, bool)
 
@@ -235,6 +236,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self.client_changed.emit(None)
 
     def _set_status(self, state: str, connected: bool) -> None:
+        previous_state = self._last_status_state
         self._last_status_state = state or self._last_status_state
         mapping = {
             "online": ("Running", "#51cf66"),
@@ -267,6 +269,11 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self.connection_status_changed.emit(connected)
         elif label_text != previous_text:
             self.launch_button.update()
+
+        if state == "restarting" and previous_state != "restarting":
+            self.restart_state_changed.emit(True)
+        elif previous_state == "restarting" and state != "restarting":
+            self.restart_state_changed.emit(False)
 
         self._update_launch_button(state, connected)
 

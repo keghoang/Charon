@@ -2794,10 +2794,38 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 widget.connection_status_changed.connect(self._handle_connection_status_changed)  # type: ignore[attr-defined]
             except Exception:
                 pass
+        if hasattr(widget, "restart_state_changed"):
+            try:
+                widget.restart_state_changed.connect(self._handle_restart_state_changed)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def _handle_connection_status_changed(self, connected: bool) -> None:
         if connected and self._restart_required:
             self._on_restart_completed()
+
+    def _handle_restart_state_changed(self, restarting: bool) -> None:
+        if restarting:
+            self._restart_required = True
+            self._restart_in_progress = True
+            btn = getattr(self, "_restart_button", None)
+            if btn is not None:
+                btn.show()
+                btn.setEnabled(False)
+                btn.setText("Restarting")
+            self._start_restart_animation()
+        else:
+            self._restart_in_progress = False
+            if self._restart_required:
+                self._stop_restart_animation()
+                btn = getattr(self, "_restart_button", None)
+                if btn is not None:
+                    btn.show()
+                    btn.setEnabled(True)
+                    btn.setText("Press to Restart ComfyUI to finish resolving")
+            else:
+                self._on_restart_completed()
+        self._update_overall_state()
 
     def _on_restart_completed(self) -> None:
         self._restart_required = False
