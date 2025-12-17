@@ -9,6 +9,8 @@ from ..charon_logger import system_info, system_warning, system_error
 from .. import preferences
 from ..comfy_client import ComfyUIClient
 from ..paths import extend_sys_path_with_comfy
+import urllib.request
+import urllib.error
 
 class ComfyConnectionWidget(QtWidgets.QWidget):
     """Compact footer widget that monitors and configures ComfyUI connectivity."""
@@ -42,13 +44,13 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
         self._watch_timer = QtCore.QTimer(self)
         self._watch_timer.setInterval(2500)
-        self._watch_timer.timeout.connect(self._check_connection)
+        self._watch_timer.timeout.connect(self._check_connection_trigger)
 
         if self._comfy_path:
             extend_sys_path_with_comfy(self._comfy_path)
             self._watch_timer.start()
             self._set_status("checking", False)
-            QtCore.QTimer.singleShot(0, self._check_connection)
+            QtCore.QTimer.singleShot(0, self._check_connection_trigger)
         else:
             self._set_status("path_required", False)
             QtCore.QTimer.singleShot(0, self._prompt_for_path)
@@ -76,6 +78,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.launch_button.setCursor(QtCore.Qt.PointingHandCursor)
         self.launch_button.clicked.connect(self._launch_comfyui)
         self.launch_button.setMinimumWidth(64)
+        self.launch_button.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.launch_button.customContextMenuRequested.connect(self._show_launch_context_menu)
         layout.addWidget(self.launch_button)
 
         self.separator_label = QtWidgets.QLabel("|")
@@ -144,7 +148,12 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         extend_sys_path_with_comfy(path)
         if not self._watch_timer.isActive():
             self._watch_timer.start()
-        self._check_connection(manual=True)
+        self._check_connection_trigger(manual=True)
+
+    def _check_connection_trigger(self, manual: bool = False) -> None:
+        if self._check_in_progress:
+            return
+        self._check_connection(manual=manual)
 
     # ----------------------------------------------------------- Connection
     def _check_connection(self, manual: bool = False) -> None:
@@ -262,11 +271,12 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         else:
             button.setEnabled(True)
             button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.setText("Launch ComfyUI")
             if state == "checking":
-                button.setText("Checking...")
+                self._stop_button_blink()
+                self._apply_button_style(button, "#f08c00", "#d9480f", hover="#f59f00")
             else:
-                button.setText("Press to Launch")
-            self._start_button_blink()
+                self._start_button_blink()
 
     def _apply_button_style(
         self,
@@ -405,6 +415,52 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         except Exception as exc:  # pragma: no cover - subprocess errors
             QtWidgets.QMessageBox.critical(self, "Launch ComfyUI", f"Failed to launch ComfyUI:\n{exc}")
             system_error(f"Failed to launch ComfyUI from {path}: {exc}")
+
+    def _show_launch_context_menu(self, pos: QtCore.QPoint) -> None:
+        button = getattr(self, "launch_button", None)
+        if button is None:
+            return
+
+        menu = QtWidgets.QMenu(button)
+        terminate_action = menu.addAction("Terminate ComfyUI")
+        terminate_action.setEnabled(self._connected or self._launch_in_progress)
+        terminate_action.triggered.connect(self._terminate_comfyui)
+        menu.exec_(button.mapToGlobal(pos))
+
+    def _terminate_comfyui(self) -> None:
+        if not (self._connected or self._launch_in_progress):
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Terminate ComfyUI",
+            "Send a shutdown signal to ComfyUI?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        success = False
+        try:
+            req = urllib.request.Request(f"{self._DEFAULT_URL}/system/shutdown", method="POST")
+            with urllib.request.urlopen(req, timeout=5):
+                success = True
+        except Exception as exc:
+            system_warning(f"ComfyUI shutdown request failed: {exc}")
+
+        if success:
+            system_info("Sent ComfyUI shutdown request.")
+            self._launch_in_progress = False
+            self._set_status("checking", False)
+            QtCore.QTimer.singleShot(1500, self._check_connection_trigger)
+        else:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Terminate ComfyUI",
+                "Could not send shutdown signal to ComfyUI.\n"
+                "Please close the ComfyUI window manually.",
+            )
 
     # ------------------------------------------------------------ Qt Events
     def eventFilter(self, obj, event):
