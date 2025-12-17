@@ -444,6 +444,9 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
             self.btn_next.setText("Retry")
             _debug_log("blocked setup: ComfyUI detected running before installation")
             return
+        
+        self.install_status_label.clear()
+        self.install_status_label.setVisible(False)
 
         if not self.comfy_path:
             QtWidgets.QMessageBox.warning(
@@ -491,9 +494,11 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
                 first, rest = message.split("\n", 1)
                 self.install_desc.setText(first.strip())
                 self.install_status_label.setText(rest.strip())
+                self.install_status_label.setVisible(True)
             else:
                 self.install_desc.setText(message.strip())
-            self.install_status_label.setVisible(True)
+                self.install_status_label.clear()
+                self.install_status_label.setVisible(False)
         if not self.progress_timer.isActive():
             self.progress_timer.start()
         if self.progress_val == 0 and self.progress_target > 0:
