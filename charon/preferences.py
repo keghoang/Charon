@@ -1,4 +1,5 @@
 import json
+import json
 import os
 from typing import Any, Dict, Optional, Tuple
 
@@ -110,5 +111,18 @@ def set_preference(
     prefs = load_preferences(filename=filename, parent=parent)
     prefs[key] = value
     save_preferences(prefs, filename=filename, parent=parent)
+
+
+def get_preferences_root(
+    *,
+    parent: Optional[object] = None,
+    ensure_dir: bool = False,
+) -> str:
+    root, missing = _resolve_plugin_dir()
+    if missing:
+        _notify_missing(parent)
+    if ensure_dir:
+        os.makedirs(root, exist_ok=True)
+    return root
 
 

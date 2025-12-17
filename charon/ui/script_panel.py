@@ -10,11 +10,40 @@ from ..workflow_runtime import load_workflow_bundle, spawn_charon_node
 from ..utilities import get_current_user_slug
 from ..cache_manager import get_cache_manager
 from ..metadata_manager import invalidate_metadata_path
-from .. import config
+from .. import config, preferences
+from ..comfy_validation import validate_comfy_environment
+from ..paths import get_default_comfy_launch_path
 import os
 import shutil
 import re
+import json
+import hashlib
 from datetime import datetime
+
+
+class _ValidationWorker(QtCore.QObject):
+    finished = QtCore.Signal(str, bool, dict)
+    failed = QtCore.Signal(str, str)
+
+    def __init__(self, script_path: str, comfy_path: str, workflow_bundle: dict):
+        super().__init__()
+        self._script_path = script_path
+        self._comfy_path = comfy_path
+        self._workflow_bundle = workflow_bundle
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            result = validate_comfy_environment(
+                self._comfy_path,
+                workflow_bundle=self._workflow_bundle,
+                use_cache=False,
+                force=True,
+            )
+            payload = result.to_dict()
+            self.finished.emit(self._script_path, bool(result.ok), payload)
+        except Exception as exc:  # pragma: no cover - defensive path
+            self.failed.emit(self._script_path, str(exc))
 
 
 class ScriptPanel(QtWidgets.QWidget):
@@ -46,6 +75,13 @@ class ScriptPanel(QtWidgets.QWidget):
         self._all_scripts = []  # Store all scripts before filtering
         self._user_slug = get_current_user_slug()
         self._last_workflow_data = None  # Cache last loaded workflow payload
+        self._validation_threads = {}
+        self._validation_workers = {}
+        self._validation_timer = QtCore.QTimer(self)
+        self._validation_timer.setInterval(300)
+        self._validation_timer.timeout.connect(self._on_validation_timer_tick)
+        self._validation_cache_root = self._ensure_validation_cache_root()
+        self._validation_cache = {}
         
         # Setup the UI
         self.layout = QtWidgets.QVBoxLayout(self)
@@ -159,6 +195,7 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Connect the script_run signal from the table view
         self.script_view.script_run.connect(self._handle_script_run_request)
+        self.script_view.script_validate.connect(self._handle_script_validate_request)
         
         # Connect the new metadata signals
         self.script_view.createMetadataRequested.connect(self.create_metadata_requested)
@@ -186,6 +223,81 @@ class ScriptPanel(QtWidgets.QWidget):
         self.folder_loader = workflow_model.FolderLoader(self)
         self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
     
+    def _ensure_validation_cache_root(self) -> str:
+        root = preferences.get_preferences_root(parent=self, ensure_dir=True)
+        cache_root = os.path.join(root, "validation_cache")
+        os.makedirs(cache_root, exist_ok=True)
+        return cache_root
+
+    def _normalize_script_path(self, script_path: str) -> str:
+        return os.path.normpath(script_path or "").lower()
+
+    def _cache_dir_for_script(self, script_path: str) -> str:
+        normalized = self._normalize_script_path(script_path)
+        workflow_name = os.path.basename(script_path.rstrip(os.sep)) if script_path else "workflow"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", workflow_name or "workflow")
+        digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:10]
+        return os.path.join(self._validation_cache_root, f"{safe_name}_{digest}")
+
+    def _status_path_for_script(self, script_path: str) -> str:
+        return os.path.join(self._cache_dir_for_script(script_path), "status.json")
+
+    def _read_validation_cache(self, script_path: str):
+        status_path = self._status_path_for_script(script_path)
+        if not os.path.exists(status_path):
+            return None
+        try:
+            with open(status_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict) and isinstance(payload.get("state"), str):
+                return payload
+        except Exception:
+            pass
+        return None
+
+    def _write_validation_cache(self, script_path: str, state: str, payload) -> None:
+        status_path = self._status_path_for_script(script_path)
+        os.makedirs(os.path.dirname(status_path), exist_ok=True)
+        data = {
+            "state": state,
+            "payload": payload,
+        }
+        try:
+            with open(status_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+        except Exception:
+            pass
+        normalized = self._normalize_script_path(script_path)
+        self._validation_cache[normalized] = data
+
+    def _clear_validation_cache(self, script_path: str) -> None:
+        status_path = self._status_path_for_script(script_path)
+        cache_dir = os.path.dirname(status_path)
+        try:
+            if os.path.exists(status_path):
+                os.remove(status_path)
+        except Exception:
+            pass
+        try:
+            if os.path.isdir(cache_dir) and not os.listdir(cache_dir):
+                os.rmdir(cache_dir)
+        except Exception:
+            pass
+        normalized = self._normalize_script_path(script_path)
+        self._validation_cache.pop(normalized, None)
+
+    def _apply_cached_validation_states(self, scripts) -> None:
+        for script in scripts:
+            cached = self._read_validation_cache(script.path)
+            if not cached:
+                continue
+            state = cached.get("state")
+            payload = cached.get("payload")
+            if isinstance(state, str):
+                self.script_model.set_validation_state(script.path, state, payload)
+                normalized = self._normalize_script_path(script.path)
+                self._validation_cache[normalized] = cached
+
     def set_host(self, host):
         """Set the host software after initialization"""
         self.host = host
@@ -328,6 +440,9 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Apply tag filter if any
         self._apply_tag_filter()
+
+        # Apply cached validation states after model refresh
+        self._apply_cached_validation_states(self._all_scripts)
         
         # Force a visual refresh to ensure colors are applied
         self.script_view.viewport().update()
@@ -551,6 +666,155 @@ class ScriptPanel(QtWidgets.QWidget):
         if hasattr(self, 'flash_script_execution'):
             self.flash_script_execution(script_path)
 
+    def _handle_script_validate_request(self, script_path: str):
+        """Trigger or inspect validation for the selected workflow."""
+        if not script_path:
+            return
+
+        state = self.script_model.get_validation_state(script_path)
+        if state == "validating":
+            return
+
+        if state == "needs_resolve":
+            revalidate = self._show_validation_payload(script_path)
+            if revalidate:
+                bundle = self._load_workflow_bundle_safe(script_path)
+                if bundle:
+                    self._start_validation(script_path, bundle)
+            return
+        if state == "validated":
+            return
+
+        bundle = self._load_workflow_bundle_safe(script_path)
+        if not bundle:
+            return
+
+        self._start_validation(script_path, bundle)
+
+    def _load_workflow_bundle_safe(self, script_path: str):
+        try:
+            return load_workflow_bundle(script_path)
+        except FileNotFoundError as exc:
+            QtWidgets.QMessageBox.critical(self, "Workflow Missing", str(exc))
+        except ValueError as exc:
+            QtWidgets.QMessageBox.critical(self, "Workflow Invalid", str(exc))
+        except Exception as exc:  # pragma: no cover - defensive path
+            QtWidgets.QMessageBox.critical(self, "Workflow Error", str(exc))
+        return None
+
+    def _resolve_comfy_path(self) -> str:
+        comfy_path = preferences.get_preference("comfyui_launch_path", "")
+        comfy_path = (comfy_path or "").strip()
+        if not comfy_path:
+            comfy_path = get_default_comfy_launch_path()
+        return (comfy_path or "").strip()
+
+    def _start_validation(self, script_path: str, workflow_bundle: dict) -> None:
+        comfy_path = self._resolve_comfy_path()
+        if not comfy_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "ComfyUI Path Required",
+                "Set the ComfyUI launch path in preferences before validating.",
+            )
+            return
+        if not os.path.exists(comfy_path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "ComfyUI Path Missing",
+                f"The configured ComfyUI launch path does not exist:\n{comfy_path}",
+            )
+            return
+
+        # Avoid launching duplicate validators for the same workflow
+        if self.script_model.get_validation_state(script_path) == "validating":
+            return
+
+        self.script_model.set_validation_state(script_path, "validating")
+        if not self._validation_timer.isActive():
+            self._validation_timer.start()
+
+        worker = _ValidationWorker(script_path, comfy_path, workflow_bundle)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_validation_finished)
+        worker.failed.connect(self._on_validation_failed)
+        worker.finished.connect(lambda *_: thread.quit())
+        worker.failed.connect(lambda *_: thread.quit())
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._validation_workers[script_path] = worker
+        self._validation_threads[script_path] = thread
+        thread.start()
+
+    @QtCore.Slot(str, bool, dict)
+    def _on_validation_finished(self, script_path: str, ok: bool, payload: dict) -> None:
+        self._cleanup_validation_worker(script_path)
+        state = "validated" if ok else "needs_resolve"
+        self.script_model.set_validation_state(script_path, state, payload)
+        self._write_validation_cache(script_path, state, payload)
+        if not self.script_model.has_active_validation():
+            self._validation_timer.stop()
+
+    @QtCore.Slot(str, str)
+    def _on_validation_failed(self, script_path: str, error_message: str) -> None:
+        self._cleanup_validation_worker(script_path)
+        self.script_model.set_validation_state(script_path, "idle")
+        self._clear_validation_cache(script_path)
+        if not self.script_model.has_active_validation():
+            self._validation_timer.stop()
+        QtWidgets.QMessageBox.critical(self, "Validation Failed", error_message)
+
+    def _cleanup_validation_worker(self, script_path: str) -> None:
+        thread = self._validation_threads.pop(script_path, None)
+        self._validation_workers.pop(script_path, None)
+        if thread is not None and thread.isRunning():
+            thread.quit()
+            thread.wait(1000)
+
+    def _on_validation_timer_tick(self) -> None:
+        updated = self.script_model.advance_validation_animation()
+        if not updated and not self.script_model.has_active_validation():
+            self._validation_timer.stop()
+
+    def _show_validation_payload(self, script_path: str) -> bool:
+        payload = self.script_model.get_validation_payload(script_path)
+        if payload is None:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Validation",
+                "No validation details are available yet for this workflow.",
+            )
+            return False
+
+        if isinstance(payload, str):
+            payload_text = payload
+        else:
+            try:
+                payload_text = json.dumps(payload, indent=2)
+            except TypeError:
+                payload_text = str(payload)
+
+        dialog = QtWidgets.QDialog(self)
+        workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
+        dialog.setWindowTitle(f"Validation Result - {workflow_name}")
+        dialog_layout = QtWidgets.QVBoxLayout(dialog)
+
+        text_widget = QtWidgets.QPlainTextEdit(dialog)
+        text_widget.setReadOnly(True)
+        text_widget.setPlainText(payload_text)
+        dialog_layout.addWidget(text_widget)
+
+        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close, parent=dialog)
+        revalidate_button = button_box.addButton("Revalidate", QtWidgets.QDialogButtonBox.ActionRole)
+        revalidate_button.clicked.connect(lambda: dialog.done(1))
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        dialog.resize(720, 540)
+        exec_dialog(dialog)
+        return dialog.result() == 1
 
     def on_script_run(self, index):
         if not index.isValid():
