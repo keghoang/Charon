@@ -121,7 +121,7 @@ class WindowManager:
             parent_window = WindowManager._get_host_main_window(host)
             if parent_window:
                 window.setParent(parent_window)
-                system_info(f"Set {host} main window as parent")
+                system_debug(f"Set {host} main window as parent")
             else:
                 system_warning(f"Failed to get {host} main window for parenting")
         

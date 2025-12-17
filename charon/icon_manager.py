@@ -79,7 +79,7 @@ class IconManager:
             
             system_debug(f"Loaded icon for {software_key}: {self.icon_size.width()}x{self.icon_size.height()}")
         
-        system_info(f"Loaded {len([v for v in self.icon_cache.values() if v is not None])} software icons")
+        system_debug(f"Loaded {len([v for v in self.icon_cache.values() if v is not None])} software icons")
     
     def get_icon(self, software: str) -> Optional[QtGui.QPixmap]:
         """
