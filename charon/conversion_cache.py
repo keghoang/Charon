@@ -13,7 +13,7 @@ LEGACY_CACHE_FOLDER_NAME = "_API_conversion"
 
 
 def _conversion_dir(folder_path: str) -> Path:
-    base = Path(folder_path)
+    base = _normalize_folder_path(folder_path)
     new_dir = base / CACHE_FOLDER_NAME
     legacy_dir = base / LEGACY_CACHE_FOLDER_NAME
     if legacy_dir.exists() and not new_dir.exists():
@@ -22,6 +22,28 @@ def _conversion_dir(folder_path: str) -> Path:
         except OSError:
             return legacy_dir
     return new_dir
+
+
+def _normalize_folder_path(folder_path: str) -> Path:
+    """
+    Return a safe base path for caching.
+
+    Handles drive-only inputs like ``C:`` by anchoring them to the drive root,
+    ensuring paths like ``C:.charon_cache`` are avoided.
+    """
+    try:
+        base = Path(folder_path).expanduser()
+    except Exception:
+        return Path.cwd()
+
+    if base.drive and not base.root:
+        # Normalize `C:` -> `C:\` to avoid relative drive paths.
+        base = Path(base.drive + os.sep)
+
+    try:
+        return base.resolve()
+    except Exception:
+        return Path(os.path.abspath(str(base)))
 
 
 def _log_path(folder_path: str) -> Path:
