@@ -15,12 +15,16 @@ from .custom_widgets import create_tag_badge
 from datetime import datetime, timezone, timedelta
 
 try:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except Exception:  # pragma: no cover - Python < 3.9 fallback
     ZoneInfo = None
+    ZoneInfoNotFoundError = Exception  # type: ignore
 
 if ZoneInfo:
-    EASTERN_TIMEZONE = ZoneInfo("America/New_York")
+    try:
+        EASTERN_TIMEZONE = ZoneInfo("America/New_York")
+    except ZoneInfoNotFoundError:
+        EASTERN_TIMEZONE = timezone(timedelta(hours=-5))
 else:  # pragma: no cover - fallback for environments without zoneinfo
     EASTERN_TIMEZONE = timezone(timedelta(hours=-5))
 
