@@ -683,6 +683,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         dependencies = self._load_dependencies()
         repo_lookup = data.get("node_repos") or {}
         package_overrides = data.get("node_packages") or {}
+        aux_repos = data.get("aux_repos") or {}
 
         self._ensure_custom_node_package_map()
 
@@ -692,7 +693,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             node_type = str(node_name).strip()
             if not node_type:
                 continue
-            package_name = self._package_for_node_type(node_type) or "Unknown package"
+            node_key_lower = node_type.lower()
+            inferred_package = repo_lookup.get(node_key_lower) or aux_repos.get(node_key_lower) or ""
+            package_name = self._package_for_node_type(node_type) or inferred_package or "Unknown package"
             if package_name.lower() == "comfy-core":
                 skip_nodes.add(node_type.lower())
                 continue
@@ -714,8 +717,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if isinstance(item, str) and item.strip()
         }
 
-        row_count = len(filtered_required)
-        if row_count == 0:
+        if not filtered_required:
             table.setRowCount(1)
             table.setColumnHidden(3, True)
             placeholder = QtWidgets.QTableWidgetItem("No custom node data reported.")
@@ -724,15 +726,132 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             table.setSpan(0, 0, 1, 4)
             return {}
 
+        # Group rows by package to avoid duplicate install prompts. One button per package.
         table.setColumnHidden(3, False)
-        table.setRowCount(row_count)
+        groups: Dict[str, Dict[str, Any]] = {}
+        for node_type, package_name in filtered_required:
+            node_key_lower = node_type.lower()
+            repo_url = repo_lookup.get(node_key_lower) or ""
+            repo_display = package_overrides.get(node_key_lower) or self._repo_display_name(repo_url)
+            pkg_entry = groups.setdefault(
+                package_name,
+                {
+                    "nodes": [],
+                    "repo_url": repo_url,
+                    "repo_display": repo_display,
+                },
+            )
+            # Prefer a repo if any node has one.
+            if repo_url and not pkg_entry.get("repo_url"):
+                pkg_entry["repo_url"] = repo_url
+                pkg_entry["repo_display"] = repo_display
+            pkg_entry["nodes"].append(node_type)
+
+        # Sort packages alphabetically for stable display.
+        ordered_packages = sorted(groups.keys(), key=lambda x: x.lower())
+        total_rows = sum(len(info["nodes"]) + 1 for info in groups.values())  # header + nodes per package
+        table.setRowCount(total_rows)
 
         row_mapping: Dict[int, Dict[str, Any]] = {}
-        for row, (node_type, package_name) in enumerate(filtered_required):
-            node_key = node_type.lower()
-            repo_url = repo_lookup.get(node_key) or ""
-            repo_display = package_overrides.get(node_key) or self._repo_display_name(repo_url)
+        row = 0
+        for package_name in ordered_packages:
+            info = groups[package_name]
+            package_nodes = info["nodes"]
+            repo_url = info.get("repo_url") or ""
+            repo_display = info.get("repo_display") or self._repo_display_name(repo_url)
             package_display = package_name or repo_display or "Unknown package"
+            node_count = len(package_nodes)
+            missing_nodes = [n for n in package_nodes if n.lower() in missing_set]
+            status_value = "Missing" if missing_nodes else "Found"
+
+            # Package header row
+            header_text = f"{package_display} ({node_count} node{'s' if node_count != 1 else ''})"
+            header_item = QtWidgets.QTableWidgetItem(header_text)
+            header_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            header_item.setToolTip(repo_url or package_display)
+            header_item.setForeground(QtGui.QBrush(QtGui.QColor("#228B22")))
+            header_item.setFont(QtGui.QFont(header_item.font().family(), weight=QtGui.QFont.Weight.Bold))
+            table.setItem(row, 0, header_item)
+
+            status_item = QtWidgets.QTableWidgetItem(status_value.title())
+            self._apply_status_style(status_item, status_value)
+            table.setItem(row, 1, status_item)
+
+            package_item = QtWidgets.QTableWidgetItem(repo_display or package_display)
+            package_item.setToolTip(repo_url or package_display)
+            if status_value == "Missing":
+                package_item.setText(f"{package_display} (not installed)")
+                package_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
+            else:
+                package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
+            table.setItem(row, 2, package_item)
+
+            header_row = row
+            if status_value == "Missing":
+                button = QtWidgets.QPushButton("Resolve")
+                button.setFixedHeight(24)
+                button.setMaximumWidth(ACTION_BUTTON_WIDTH)
+                button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #B22222;"
+                    " color: white;"
+                    " border: none;"
+                    " border-radius: 4px;"
+                    " padding: 2px 8px;"
+                    " }"
+                    "QPushButton:hover {"
+                    " background-color: #9B1C1C;"
+                    " }"
+                    "QPushButton:disabled {"
+                    " background-color: #228B22;"
+                    " color: white;"
+                    " border-radius: 4px;"
+                    " }"
+                )
+                button.clicked.connect(lambda _checked=False, r=row: self._handle_custom_node_auto_resolve(r))
+                table.setCellWidget(row, 3, button)
+                row_mapping[row] = {
+                    "node_name": ", ".join(missing_nodes) or package_display,
+                    "package_name": package_display,
+                    "manager_repo": repo_url,
+                    "manager_repo_display": repo_display or package_display,
+                    "status_item": status_item,
+                    "package_item": package_item,
+                    "button": button,
+                    "dependency": None,
+                    "resolved": False,
+                    "package_rows": [],
+                    "missing_nodes": missing_nodes,
+                }
+            else:
+                placeholder_widget = QtWidgets.QWidget()
+                table.setCellWidget(row, 3, placeholder_widget)
+            row += 1
+
+            # Node rows (informational, no buttons)
+            for node_type in package_nodes:
+                node_key = node_type.lower()
+                node_item = QtWidgets.QTableWidgetItem(f"  • {node_type}" if node_type else "Unknown Node")
+                node_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+                node_item.setToolTip(node_type or "Unknown Node")
+                table.setItem(row, 0, node_item)
+
+                node_status = "Missing" if node_key in missing_set else "Found"
+                node_status_item = QtWidgets.QTableWidgetItem(node_status.title())
+                self._apply_status_style(node_status_item, node_status)
+                table.setItem(row, 1, node_status_item)
+
+                spacer_pkg = QtWidgets.QTableWidgetItem("")
+                spacer_pkg.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+                table.setItem(row, 2, spacer_pkg)
+
+                placeholder_widget = QtWidgets.QWidget()
+                table.setCellWidget(row, 3, placeholder_widget)
+
+                # Track node rows for bulk updates when package resolves.
+                if status_value == "Missing":
+                    row_mapping[header_row]["package_rows"].append(row)
+                row += 1
             status_value = "Available"
             dependency = None
 
@@ -1533,6 +1652,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         dialog.setText(message)
         overrides = self._metadata_dependency_overrides()
         override_button = None
+        url_button = dialog.addButton(
+            "Install via URL...",
+            QtWidgets.QMessageBox.ButtonRole.ActionRole,
+        )
         ok_button = dialog.addButton(QtWidgets.QMessageBox.StandardButton.Ok)
         if overrides:
             override_button = dialog.addButton(
@@ -1546,11 +1669,47 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             selected = self._prompt_dependency_override(package_display, overrides)
             if selected and self._install_dependency_from_metadata(row_info, selected):
                 return True
+        if dialog.clickedButton() == url_button:
+            if self._prompt_and_install_repo_url(package_display, row_info):
+                return True
 
         self._append_issue_note(
             "custom_nodes",
             f"Manual install required for {package_display}. Install under custom_nodes and restart ComfyUI.",
         )
+        return False
+
+    def _prompt_and_install_repo_url(self, package_display: str, row_info: Dict[str, Any]) -> bool:
+        """Ask user for a repo URL and attempt installation via Manager."""
+        repo_url, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Install Custom Node",
+            f"Enter the Git URL for {package_display}:",
+            QtWidgets.QLineEdit.Normal,
+            "",
+        )
+        if not ok or not repo_url.strip():
+            return False
+
+        from ..validation_resolver import install_custom_nodes_via_manager
+
+        install_result = install_custom_nodes_via_manager(
+            self._comfy_path,
+            [repo_url.strip()],
+            mode="local",
+        )
+        resolved = bool(install_result.resolved)
+        note = "; ".join(install_result.resolved or install_result.failed or install_result.notes or [])
+        if note:
+            self._append_issue_note("custom_nodes", note)
+        if resolved:
+            return True
+        if install_result.failed:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Install Failed",
+                "\n".join(install_result.failed),
+            )
         return False
 
     def _notify_manual_download(
@@ -1636,7 +1795,40 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if button:
             button.setEnabled(False)
         try:
-            if not self._resolve_custom_node_entry(row, row_info) and button:
+            if self._resolve_custom_node_entry(row, row_info):
+                # Mark all rows from the same package as resolved to avoid duplicate installs.
+                package_row = row
+                row_info["resolved"] = True
+                other_rows = row_info.get("package_rows") or []
+                for r_idx in [package_row] + other_rows:
+                    table = self._issue_widgets.get("custom_nodes", {}).get("table")
+                    if not table:
+                        continue
+                    # Status column update
+                    status_item = table.item(r_idx, 1)
+                    if isinstance(status_item, QtWidgets.QTableWidgetItem):
+                        status_item.setText("Resolved")
+                        self._apply_status_style(status_item, "Resolved")
+                    # Package column update (header row only)
+                    if r_idx == package_row:
+                        pkg_item = table.item(r_idx, 2)
+                        if isinstance(pkg_item, QtWidgets.QTableWidgetItem):
+                            pkg_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
+                    # Disable any buttons (header row)
+                    cell_button = table.cellWidget(r_idx, 3)
+                    if isinstance(cell_button, QtWidgets.QPushButton):
+                        cell_button.setText("Resolved")
+                        cell_button.setEnabled(False)
+                        cell_button.setStyleSheet(
+                            "QPushButton {"
+                            " background-color: #228B22;"
+                            " color: white;"
+                            " border-radius: 4px;"
+                            " padding: 2px 8px;"
+                            " }"
+                        )
+                self._refresh_custom_nodes_issue_status()
+            elif button:
                 button.setEnabled(True)
         except Exception as exc:  # pragma: no cover - defensive guard
             if button:
