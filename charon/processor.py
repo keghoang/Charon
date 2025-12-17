@@ -3387,27 +3387,22 @@ def process_charonop_node():
                                     t_inputs['image'] = view_upload
                                     log_debug(f"Step 2: Injected view {batch_index} into node {target_coverage_node_id}")
                                     
-                                # Inject dynamic prompt
-                                prompt_text = ""
-                                if batch_index == 0:
-                                    prompt_text = "Keep the painting unchanged. Change the lighting to even and flat with no shadow"
-                                elif batch_index == 1:
-                                    prompt_text = "Rotate the painting 90 degrees to the right. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
-                                elif batch_index == 2:
-                                    prompt_text = "Rotate the painting 180 degrees. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
-                                elif batch_index == 3:
-                                    prompt_text = "Rotate the painting 90 degrees to the left. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
-                                elif batch_index == 4:
-                                    prompt_text = "Rotate the painting to view from top. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
-                                elif batch_index == 5:
-                                    prompt_text = "Rotate the painting to view from bottom. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
+                                angle_desc = ""
+                                if batch_index == 0: angle_desc = "0 degrees"
+                                elif batch_index == 1: angle_desc = "90 degrees to the right"
+                                elif batch_index == 2: angle_desc = "180 degrees"
+                                elif batch_index == 3: angle_desc = "90 degrees to the left"
+                                elif batch_index == 4: angle_desc = "to view from top"
+                                elif batch_index == 5: angle_desc = "to view from bottom"
                                 
-                                if prompt_text:
+                                if angle_desc:
                                     for nid, ndata in prompt_payload.items():
                                         inputs = ndata.get('inputs')
-                                        if isinstance(inputs, dict) and 'prompt' in inputs:
-                                            inputs['prompt'] = prompt_text
-                                            log_debug(f"Step 2: Injected prompt for view {batch_index} into node {nid}")
+                                        if isinstance(inputs, dict):
+                                            for key, val in inputs.items():
+                                                if isinstance(val, str) and "*charon_angle*" in val:
+                                                    inputs[key] = val.replace("*charon_angle*", angle_desc)
+                                                    log_debug(f"Step 2: Injected angle '{angle_desc}' into node {nid} input {key}")
 
                         except Exception as render_err:
                             log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
