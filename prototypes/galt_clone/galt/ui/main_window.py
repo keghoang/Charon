@@ -31,7 +31,7 @@ except ImportError:
         UI_NAVIGATION_DELAY_MS = 50
     config = FallbackConfig()
 from ..metadata_manager import clear_metadata_cache, get_galt_config, get_folder_tags
-from ..script_model import GlobalIndexLoader
+from ..workflow_model import GlobalIndexLoader
 from ..settings import user_settings_db
 from ..utilities import is_compatible_with_host
 from ..execution.result import ExecutionStatus
@@ -1713,7 +1713,7 @@ class GaltWindow(QtWidgets.QWidget):
         """Load bookmarked scripts using the BookmarkLoader"""
         # Create bookmark loader if it doesn't exist
         if not hasattr(self, 'bookmark_loader'):
-            from galt.script_model import BookmarkLoader
+            from galt.workflow_model import BookmarkLoader
             self.bookmark_loader = BookmarkLoader(self)
             self.bookmark_loader.scripts_loaded.connect(
                 self.on_bookmarked_scripts_loaded,

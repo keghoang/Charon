@@ -69,7 +69,7 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
         painter.drawRoundedRect(button_rect, 6, 6)
 
         painter.setPen(text_color)
-        painter.drawText(button_rect, QtCore.Qt.AlignCenter, 'Go')
+        painter.drawText(button_rect, QtCore.Qt.AlignCenter, 'Grab')
         painter.restore()
 
     def editorEvent(self, event, model, option, index):

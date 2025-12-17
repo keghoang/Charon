@@ -21,7 +21,7 @@ except ImportError:
 from ..script_validator import ScriptValidator
 from ..utilities import create_script_sort_key, apply_incompatible_opacity
 from ..metadata_manager import get_galt_config
-from ..script_model import ScriptItem
+from ..workflow_model import ScriptItem
 
 
 class BookmarksListModel(QtCore.QAbstractListModel):
