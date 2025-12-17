@@ -45,6 +45,7 @@ This directory contains comprehensive architecture and design documentation for 
 - **Tag System**: Batched updates prevent UI flicker during tag operations
 - **Hotkey Cleanup**: Automatic purge of missing scripts on startup and refresh
 - **Comfy Footer**: Connection widget presents live "Checking / Running / Launching" states, with a context menu to send a graceful shutdown to ComfyUI.
+- **Tiny Mode Polish**: Progress bars initialize at their final width with rounded cards to avoid the entry-time snap and provide clearer grouping.
 
 ### Project Information
 - **PROJECT_STRUCTURE.md** - Complete project file organization

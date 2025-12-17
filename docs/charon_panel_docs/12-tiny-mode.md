@@ -8,6 +8,7 @@ Tiny Mode now mirrors CharonBoard in a compact floating surface. Artists can lea
 - Runs as a lightweight floating window that updates every two seconds.
 - All actions live in the right-click context menu; the surface itself stays clutter-free.
 - Shares the main panel's ComfyUI footer so connection status and launch controls remain handy.
+- Progress bars are sized with the final layout before first paint to prevent the width snap on entry, and cards use rounded corners for clearer separation.
 
 ## Activation
 ### Global Hotkey
@@ -19,6 +20,7 @@ Tiny Mode now mirrors CharonBoard in a compact floating surface. Artists can lea
 - Width/height defaults come from `config.TINY_MODE_*` constants.
 - Geometry is stored separately from the full panel so regular resizing does not affect Tiny Mode.
 - Host-specific window flags (always-on-top, tool window, etc.) still apply based on settings.
+- The stacked widget switches to Tiny Mode after the window is resized/centered, keeping the progress bars stable on first render.
 
 ## UI Elements
 1. **CharonOp List** - each entry shows the node name (prefix stripped) with an inline progress bar and status text.
@@ -45,6 +47,7 @@ Right click anywhere inside the window to access actions. Double-clicking a node
 - Updates continue while the widget is shown or hidden; entering Tiny Mode simply swaps the stacked widget.
 - The context actions reuse the same filesystem hints as the full CharonBoard (temp results, workflow paths, etc.).
 - The ComfyUI footer widget migrates between the normal panel and Tiny Mode, so there is only one connection watcher and launch control instance.
+- The row widget caches its chunk color to avoid redundant stylesheet resets; progress bars default to "Ready" text and rounded caps so they do not flash empty on first render.
 
 ## Best Practices
 - Keep Tiny Mode on a secondary monitor for at-a-glance feedback during long conversions.
