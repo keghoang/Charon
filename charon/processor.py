@@ -2774,6 +2774,7 @@ def process_charonop_node():
                 return 0, 0
 
         def background_process():
+            nonlocal batch_count
             try:
                 update_progress(0.05, 'Starting processing')
                 conversion_extra = {}
