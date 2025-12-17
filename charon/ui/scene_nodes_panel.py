@@ -15,11 +15,12 @@ from .. import scene_nodes_runtime as runtime
 class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
     """Render table progress cells with lightweight progress bars."""
 
-    BASE_COLOR_EVEN = QtGui.QColor("#2c2c2c")
-    BASE_COLOR_ODD = QtGui.QColor("#343434")
-    SELECTION_COLOR = QtGui.QColor("#3d566f")
-    TEXT_COLOR = QtGui.QColor("#f4f4f4")
-    BORDER_COLOR = QtGui.QColor("#4a4a4a")
+    BASE_COLOR_EVEN = QtGui.QColor("#262a2e")
+    BASE_COLOR_ODD = QtGui.QColor("#1f2226")
+    SELECTION_COLOR = QtGui.QColor("#84a8de")
+    TEXT_COLOR = QtGui.QColor("#f4f4f5")
+    SELECTED_TEXT_COLOR = QtGui.QColor("#0f1114")
+    BORDER_COLOR = QtGui.QColor("#171a1f")
     ERROR_COLOR = QtGui.QColor("#c94d4d")
     COMPLETE_COLOR = QtGui.QColor("#3d995b")
     ACTIVE_COLOR = QtGui.QColor("#d0a23f")
@@ -34,8 +35,9 @@ class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
         progress, status, state = progress_data
         painter.save()
 
+        is_selected = bool(option.state & QtWidgets.QStyle.State_Selected)
         base_color = self.BASE_COLOR_ODD if index.row() % 2 else self.BASE_COLOR_EVEN
-        painter.fillRect(option.rect, self.SELECTION_COLOR if option.state & QtWidgets.QStyle.State_Selected else base_color)
+        painter.fillRect(option.rect, self.SELECTION_COLOR if is_selected else base_color)
 
         rect = option.rect.adjusted(4, 6, -4, -6)
         painter.setPen(QtGui.QPen(self.BORDER_COLOR, 1))
@@ -57,7 +59,7 @@ class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
         fill_rect = QtCore.QRect(bar_rect.left(), bar_rect.top(), max(0, bar_width), bar_rect.height())
         painter.fillRect(fill_rect, fill_color)
 
-        painter.setPen(self.TEXT_COLOR)
+        painter.setPen(self.SELECTED_TEXT_COLOR if is_selected else self.TEXT_COLOR)
         painter.drawText(rect, Qt.AlignCenter, status)
         painter.restore()
 
@@ -97,25 +99,49 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["CharonOp", "Status", "Workflow", "Actions"])
         self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.table.setFocusPolicy(Qt.NoFocus)
         self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #2c2c2c;
-                alternate-background-color: #343434;
-                color: #e2e2e2;
-                gridline-color: #3d3d3d;
-                border: 1px solid #3d3d3d;
-                selection-background-color: #3d566f;
-                selection-color: #f0f0f0;
+            QHeaderView {
+                background: #37383D;
+                border: 1px solid #171a1f;
+                border-bottom: 0px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin: 0px;
+                padding: 0px;
             }
             QHeaderView::section {
-                background-color: #373737;
-                color: #d3d3d3;
-                padding: 6px 4px;
-                border: 1px solid #3d3d3d;
+                background: #37383D;
+                color: palette(windowText);
+                border: none;
+                padding: 4px 6px;
+                font-weight: bold;
+                margin: 0px;
+            }
+            QTableWidget {
+                background: #262a2e;
+                alternate-background-color: #1f2226;
+                color: #f4f4f5;
+                selection-background-color: #84a8de;
+                selection-color: #0f1114;
+                border: 1px solid #171a1f;
+                border-radius: 8px;
+                padding: 0px;
+            }
+            QTableWidget::item:focus {
+                outline: none;
+            }
+            QTableCornerButton::section {
+                background: #37383D;
+                border: 1px solid #171a1f;
+                border-bottom: 0px;
+                border-top-left-radius: 8px;
+                margin: 0px;
+                padding: 0px;
             }
         """)
         delegate = _ProgressDelegate(self.table)
@@ -124,6 +150,8 @@ class SceneNodesPanel(QtWidgets.QWidget):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        header.setHighlightSections(False)
+        header.setFixedHeight(30)
         header.resizeSection(0, 200)
         header.resizeSection(1, 180)
         header.resizeSection(2, 160)
@@ -131,7 +159,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         vertical_header = self.table.verticalHeader()
         if vertical_header:
             vertical_header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
-            vertical_header.setDefaultSectionSize(32)
+            vertical_header.setDefaultSectionSize(30)
             vertical_header.hide()
 
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
