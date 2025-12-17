@@ -1,6 +1,7 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, UserRole, UniqueConnection, WindowModal, exec_dialog
 from typing import Optional, Tuple
 import os, sys, time
+from pathlib import Path
 
 from .folder_panel import FolderPanel
 from .script_panel import ScriptPanel
@@ -37,6 +38,9 @@ from ..execution.result import ExecutionStatus
 from ..galt_logger import system_info, system_debug, system_warning, system_error
 from ..icon_manager import get_icon_manager
 
+
+BANNER_IMAGE_PATH = Path(__file__).resolve().parent.parent / "resources" / "banner.png"
+BANNER_MAX_HEIGHT = 80
 
 class GaltWindow(QtWidgets.QWidget):
     def __init__(self, global_path=None, local_path=None, host="None", parent=None, startup_mode="normal"):
@@ -349,6 +353,24 @@ class GaltWindow(QtWidgets.QWidget):
         main_layout.setContentsMargins(config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS, 
                                       config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS)
         main_layout.setSpacing(config.UI_ELEMENT_SPACING)
+
+        self.banner_label = None
+        if BANNER_IMAGE_PATH.exists():
+            banner_pixmap = QtGui.QPixmap(str(BANNER_IMAGE_PATH))
+            if not banner_pixmap.isNull():
+                if banner_pixmap.height() > BANNER_MAX_HEIGHT:
+                    banner_pixmap = banner_pixmap.scaledToHeight(
+                        BANNER_MAX_HEIGHT,
+                        QtCore.Qt.TransformationMode.SmoothTransformation,
+                    )
+                self.banner_label = QtWidgets.QLabel()
+                self.banner_label.setObjectName("CharonBanner")
+                self.banner_label.setAlignment(Qt.AlignCenter)
+                self.banner_label.setPixmap(banner_pixmap)
+                self.banner_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+                self.banner_label.setFixedHeight(banner_pixmap.height())
+                main_layout.addWidget(self.banner_label)
+                main_layout.addSpacing(config.UI_ELEMENT_SPACING)
 
         # Add user info and buttons to the top row
         refresh_layout = QtWidgets.QHBoxLayout()

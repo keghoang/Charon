@@ -1,12 +1,14 @@
 {
-    "workflow_file": "workflow.json",
-    "display_name": "rgb2x_albedo_GET",
-    "description": "Generate Albedo from any images",
-    "dependencies": [],
-    "last_changed": "2025-10-20T21:12:38Z",
-    "tags": [
-        "SDXL",
-        "comfy",
-        "test"
-    ]
+  "workflow_file": "workflow.json",
+  "display_name": "rgb2x_albedo_GET",
+  "description": "Generate Albedo from any images",
+  "dependencies": [
+    "https://github.com/toyxyz/ComfyUI_rgbx_Wrapper"
+  ],
+  "last_changed": "2025-10-21T15:58:58Z",
+  "tags": [
+    "SDXL",
+    "comfy",
+    "test"
+  ]
 }

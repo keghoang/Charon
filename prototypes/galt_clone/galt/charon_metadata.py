@@ -9,8 +9,7 @@ following schema:
     "display_name": "Speed Grade Diffusion",
     "description": "Short summary shown in the metadata pane.",
     "dependencies": [
-        {"name": "charon-core", "repo": "https://...", "ref": "main"},
-        ...
+        "https://github.com/Example/charon-core"
     ],
     "last_changed": "2025-10-18T16:32:00Z",
     "tags": ["comfy", "grading", "FLUX"]
@@ -26,7 +25,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 CHARON_METADATA_FILENAME = ".charon.json"
 
@@ -49,6 +49,31 @@ CHARON_DEFAULTS: Dict[str, Any] = {
 }
 
 
+def _normalize_dependency_urls(values) -> List[str]:
+    """Return a cleaned list of dependency URLs from mixed legacy formats."""
+    normalized: List[str] = []
+    for dep in values or []:
+        candidate = ""
+        if isinstance(dep, str):
+            candidate = dep.strip()
+        elif isinstance(dep, dict):
+            candidate = (dep.get("repo") or dep.get("url") or dep.get("name") or "").strip()
+        if candidate:
+            normalized.append(candidate)
+    return normalized
+
+
+def _derive_dependency_entry(url: str) -> Dict[str, str]:
+    """Derive display metadata for a dependency URL."""
+    parsed = urlparse(url)
+    path = (parsed.path or "").rstrip("/")
+    name = path.split("/")[-1] if path else url
+    if name.endswith(".git"):
+        name = name[:-4]
+    name = name or url
+    return {"repo": url, "name": name}
+
+
 def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
     """
     Load `.charon.json` if present, producing a dict compatible with the
@@ -67,6 +92,9 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
     if not isinstance(raw_meta, dict):
         return None
 
+    raw_dependencies = _normalize_dependency_urls(raw_meta.get("dependencies"))
+    raw_meta["dependencies"] = raw_dependencies
+
     metadata: Dict[str, Any] = LEGACY_DEFAULTS.copy()
     metadata["tags"] = list(raw_meta.get("tags") or [])
     metadata["charon_meta"] = raw_meta
@@ -82,7 +110,7 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
     metadata["description"] = raw_meta.get("description")
     metadata["workflow_file"] = raw_meta.get("workflow_file")
     metadata["last_changed"] = raw_meta.get("last_changed")
-    metadata["dependencies"] = raw_meta.get("dependencies", [])
+    metadata["dependencies"] = [_derive_dependency_entry(url) for url in raw_dependencies]
 
     return metadata
 
@@ -96,7 +124,10 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
     charon_path = os.path.join(script_path, CHARON_METADATA_FILENAME)
     payload: Dict[str, Any] = CHARON_DEFAULTS.copy()
     if data:
-        payload.update({k: v for k, v in data.items() if v is not None})
+        filtered = {k: v for k, v in data.items() if v is not None}
+        if "dependencies" in filtered:
+            filtered["dependencies"] = _normalize_dependency_urls(filtered["dependencies"])
+        payload.update(filtered)
 
     try:
         with open(charon_path, "w", encoding="utf-8") as handle:
