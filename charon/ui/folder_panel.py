@@ -115,7 +115,13 @@ class FolderPanel(QtWidgets.QWidget):
     def apply_compatibility(self, compatibility_map):
         """Update compatibility while preserving selection."""
         selected = self.get_selected_folder()
+        current_index = self.folder_view.currentIndex()
         self.folder_model.update_compatibility(compatibility_map)
+        # If the current selection is still valid, avoid re-emitting
+        if selected and current_index.isValid():
+            current = self.folder_model.get_folder_at_row(current_index.row())
+            if current and getattr(current, "original_name", None) == selected:
+                return
         if selected:
             self.select_folder(selected)
 
