@@ -243,7 +243,7 @@ class SetupManager:
             if git_path:
                 tasks.append(( 
                     "Cloning ComfyUI-Manager...",
-                    [git_path, "clone", "https://github.com/Comfy-Org/ComfyUI-Manager", self.manager_dir]
+                    [git_path, "clone", "--depth", "1", "https://github.com/Comfy-Org/ComfyUI-Manager", self.manager_dir]
                 ))
             else:
                 tasks.append(("Downloading ComfyUI-Manager (ZIP)...", None)) # Special handler for zip
@@ -259,7 +259,7 @@ class SetupManager:
             if git_path:
                 tasks.append(( 
                     "Cloning ComfyUI-KJNodes...",
-                    [git_path, "clone", "https://github.com/kijai/ComfyUI-KJNodes", self.kjnodes_dir]
+                    [git_path, "clone", "--depth", "1", "https://github.com/kijai/ComfyUI-KJNodes", self.kjnodes_dir]
                 ))
             else:
                 tasks.append(("Downloading ComfyUI-KJNodes (ZIP)...", None))
