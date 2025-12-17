@@ -119,6 +119,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._workflow_folder = self._workflow_bundle.get("folder") or None
 
         self._load_cached_resolutions()
+        self._custom_node_package_map: Optional[Dict[str, str]] = None
 
         self._build_ui()
 
@@ -169,6 +170,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         key = str(issue.get("key") or "")
         if key == "models":
             return self._create_models_issue_widget(issue)
+        if key == "custom_nodes":
+            return self._create_custom_nodes_issue_widget(issue)
         return self._create_generic_issue_widget(issue)
 
     def _create_generic_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
@@ -295,6 +298,66 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             "rows": row_mapping,
         }
         self._refresh_models_issue_status()
+        return frame
+
+    def _create_custom_nodes_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
+        key = str(issue.get("key") or "")
+        label = str(issue.get("label") or "Custom Nodes")
+        ok = bool(issue.get("ok"))
+
+        frame = QtWidgets.QFrame(self)
+        frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        frame_layout = QtWidgets.QVBoxLayout(frame)
+        frame_layout.setContentsMargins(10, 10, 10, 10)
+        frame_layout.setSpacing(6)
+
+        header_layout = QtWidgets.QHBoxLayout()
+        status_label = QtWidgets.QLabel("\u2713 Passed" if ok else "\u2717 Failed")
+        status_label.setStyleSheet(f"font-weight: bold; color: {'#228B22' if ok else '#B22222'};")
+        title_label = QtWidgets.QLabel(label)
+        title_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(status_label)
+        header_layout.addWidget(title_label)
+        header_layout.addStretch(1)
+        frame_layout.addLayout(header_layout)
+
+        summary_label = QtWidgets.QLabel(issue.get("summary") or "")
+        summary_label.setWordWrap(True)
+        frame_layout.addWidget(summary_label)
+
+        table = QtWidgets.QTableWidget(frame)
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Node", "Package", "Status", "Action"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        table.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        table.verticalHeader().setDefaultSectionSize(26)
+        table.setStyleSheet(
+            "QTableWidget { font-size: 12px; }"
+            "QPushButton { padding: 2px 8px; font-size: 11px; }"
+        )
+        table.setColumnWidth(2, 90)
+        table.setColumnWidth(3, 160)
+        frame_layout.addWidget(table)
+
+        data = issue.get("data") or {}
+        row_mapping = self._populate_custom_nodes_table(table, data)
+
+        self._issue_lookup[key] = issue
+        self._issue_widgets[key] = {
+            "frame": frame,
+            "status_label": status_label,
+            "summary_label": summary_label,
+            "table": table,
+            "rows": row_mapping,
+        }
+        self._refresh_custom_nodes_issue_status()
         return frame
 
     def _load_cached_resolutions(self) -> None:
@@ -541,6 +604,101 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         table.resizeRowsToContents()
         return row_mapping
 
+    def _populate_custom_nodes_table(
+        self,
+        table: QtWidgets.QTableWidget,
+        data: Dict[str, Any],
+    ) -> Dict[int, Dict[str, Any]]:
+        required = data.get("required") or []
+        missing_entries = data.get("missing") or []
+        missing_set = {
+            str(item).strip()
+            for item in missing_entries
+            if isinstance(item, str) and item.strip()
+        }
+        dependencies = self._load_dependencies()
+
+        self._ensure_custom_node_package_map()
+        row_count = len(required)
+        if row_count == 0:
+            table.setRowCount(1)
+            table.setColumnHidden(3, True)
+            placeholder = QtWidgets.QTableWidgetItem("No custom node data reported.")
+            placeholder.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            table.setItem(0, 0, placeholder)
+            table.setSpan(0, 0, 1, 3)
+            return {}
+
+        table.setColumnHidden(3, False)
+        table.setRowCount(row_count)
+
+        row_mapping: Dict[int, Dict[str, Any]] = {}
+        for row, node_name in enumerate(required):
+            node_type = str(node_name).strip()
+            package_name = self._package_for_node_type(node_type) or "Unknown package"
+            package_display = package_name
+            status_value = "Available"
+            dependency = None
+
+            package_item = QtWidgets.QTableWidgetItem(package_display)
+            package_item.setToolTip(package_display)
+
+            if node_type in missing_set:
+                status_value = "Missing"
+                package_item.setText(f"{package_display} (not installed)")
+                package_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
+                dependency = self._match_dependency_for_package(package_name, node_type, dependencies)
+            else:
+                package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
+
+            node_item = QtWidgets.QTableWidgetItem(node_type or "Unknown Node")
+            node_item.setToolTip(node_type or "Unknown Node")
+            table.setItem(row, 0, node_item)
+            table.setItem(row, 1, package_item)
+
+            status_item = QtWidgets.QTableWidgetItem(status_value.title())
+            self._apply_status_style(status_item, status_value)
+            table.setItem(row, 2, status_item)
+
+            if status_value == "Missing":
+                button = QtWidgets.QPushButton("Resolve")
+                button.setFixedHeight(24)
+                button.setMaximumWidth(140)
+                button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #B22222;"
+                    " color: white;"
+                    " border: none;"
+                    " border-radius: 4px;"
+                    " padding: 2px 8px;"
+                    " }"
+                    "QPushButton:hover {"
+                    " background-color: #9B1C1C;"
+                    " }"
+                    "QPushButton:disabled {"
+                    " background-color: #228B22;"
+                    " color: white;"
+                    " border-radius: 4px;"
+                    " }"
+                )
+                button.clicked.connect(lambda _checked=False, r=row: self._handle_custom_node_auto_resolve(r))
+                table.setCellWidget(row, 3, button)
+                row_mapping[row] = {
+                    "node_name": node_type,
+                    "package_name": package_name,
+                    "status_item": status_item,
+                    "package_item": package_item,
+                    "button": button,
+                    "dependency": dependency,
+                    "resolved": False,
+                }
+            else:
+                placeholder_widget = QtWidgets.QWidget()
+                table.setCellWidget(row, 3, placeholder_widget)
+
+        table.resizeRowsToContents()
+        return row_mapping
+
     def _refresh_models_issue_status(self) -> None:
         issue = self._issue_lookup.get("models")
         widget_info = self._issue_widgets.get("models")
@@ -562,6 +720,39 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 status_label.setStyleSheet("font-weight: bold; color: #228B22;")
             issue["summary"] = "All required model files located."
             issue["details"] = []
+
+    def _refresh_custom_nodes_issue_status(self) -> None:
+        issue = self._issue_lookup.get("custom_nodes")
+        widget_info = self._issue_widgets.get("custom_nodes")
+        if not issue or not widget_info:
+            return
+
+        data = issue.get("data") or {}
+        missing = data.get("missing") or []
+        status_label = widget_info.get("status_label")
+        summary_label = widget_info.get("summary_label")
+
+        if missing:
+            issue["ok"] = False
+            if isinstance(status_label, QtWidgets.QLabel):
+                status_label.setText("\u2717 Failed")
+                status_label.setStyleSheet("font-weight: bold; color: #B22222;")
+            summary_text = f"Missing {len(missing)} custom node type(s)."
+        else:
+            issue["ok"] = True
+            if isinstance(status_label, QtWidgets.QLabel):
+                status_label.setText("\u2713 Passed")
+                status_label.setStyleSheet("font-weight: bold; color: #228B22;")
+            summary_text = "All required custom nodes installed."
+
+        if isinstance(summary_label, QtWidgets.QLabel):
+            summary_label.setText(summary_text)
+            if missing:
+                summary_label.setStyleSheet("")
+            else:
+                summary_label.setStyleSheet("font-weight: bold;")
+        issue["summary"] = summary_text
+
 
     def _persist_resolved_cache(self) -> None:
         if not self._workflow_folder:
@@ -641,12 +832,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             "missing": "#B22222",
             "resolved": SUCCESS_COLOR,
             "copied": SUCCESS_COLOR,
+            "available": SUCCESS_COLOR,
+            "installed": SUCCESS_COLOR,
         }
         text = {
             "found": "Found",
             "missing": "Missing",
             "resolved": "Resolved",
             "copied": "Copied",
+            "available": "Available",
+            "installed": "Installed",
         }.get(status, item.text())
         item.setText(text)
         color = color_map.get(status)
@@ -952,6 +1147,71 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     for entry in resolver_invalid
                     if not (isinstance(entry, dict) and entry.get("index") == ref_index)
                 ]
+    def _ensure_custom_node_package_map(self) -> None:
+        if self._custom_node_package_map is not None:
+            return
+        mapping: Dict[str, str] = {}
+        workflow = (self._workflow_bundle or {}).get("workflow")
+        if isinstance(workflow, dict):
+            nodes = workflow.get("nodes")
+            if isinstance(nodes, list):
+                for node in nodes:
+                    node_type = str(node.get("type") or "").strip().lower()
+                    props = node.get("properties") or {}
+                    package = str(props.get("cnr_id") or "").strip()
+                    if node_type and package and node_type not in mapping:
+                        mapping[node_type] = package
+        self._custom_node_package_map = mapping
+
+    def _package_for_node_type(self, node_type: str) -> str:
+        if not node_type:
+            return ""
+        self._ensure_custom_node_package_map()
+        lookup = self._custom_node_package_map or {}
+        return lookup.get(node_type.lower(), "")
+
+    def _match_dependency_for_package(
+        self,
+        package_name: str,
+        node_name: str,
+        dependencies: Optional[Iterable[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        deps = dependencies if dependencies is not None else self._load_dependencies()
+        if not deps:
+            return None
+        package_key = (package_name or "").lower()
+        node_key = (node_name or "").lower()
+        for dep in deps:
+            if not isinstance(dep, dict):
+                continue
+            name = str(dep.get("name") or "").strip().lower()
+            repo = str(dep.get("repo") or "").strip().lower()
+            candidates = [value for value in (name, repo) if value]
+            if package_key and any(package_key in value for value in candidates):
+                return dep
+            if node_key and any(node_key in value for value in candidates):
+                return dep
+        return None
+
+    def _notify_custom_node_manual_install(self, node_name: str, package_name: str) -> None:
+        package_display = package_name or node_name or "the required package"
+        message = (
+            f"Could not locate an installation repository for <b>{package_display}</b>.<br>"
+            "Install the package manually under <b>custom_nodes</b> in your ComfyUI directory, "
+            "restart ComfyUI, then click Resolve again."
+        )
+        dialog = QtWidgets.QMessageBox(self)
+        dialog.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        dialog.setWindowTitle("Manual Installation Required")
+        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        dialog.setText(message)
+        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        dialog.exec()
+        self._append_issue_note(
+            "custom_nodes",
+            f"Manual install required for {package_display}. Install under custom_nodes and restart ComfyUI.",
+        )
+
     def _notify_manual_download(
         self,
         file_name: str,
@@ -1022,6 +1282,25 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if button:
                 button.setEnabled(True)
             QtWidgets.QMessageBox.warning(self, "Auto Resolve Failed", str(exc))
+
+    def _handle_custom_node_auto_resolve(self, row: int) -> None:
+        widget_info = self._issue_widgets.get("custom_nodes")
+        if not widget_info:
+            return
+        rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
+        row_info = rows.get(row)
+        if not row_info or row_info.get("resolved"):
+            return
+        button: Optional[QtWidgets.QPushButton] = row_info.get("button")
+        if button:
+            button.setEnabled(False)
+        try:
+            if not self._resolve_custom_node_entry(row, row_info) and button:
+                button.setEnabled(True)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            if button:
+                button.setEnabled(True)
+            QtWidgets.QMessageBox.warning(self, "Custom Node Resolve Failed", str(exc))
 
     def _resolve_model_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
         reference = row_info.get("reference") or {}
@@ -1100,6 +1379,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     success, message = self._copy_shared_model(selected, expected_path)
                     if success:
                         note = f"Downloaded {file_name} to {destination_display}."
+                        notified_manual = True
                         self._mark_model_resolved(
                             row,
                             "Resolved",
@@ -1123,6 +1403,107 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 return True
             self._notify_manual_download(file_name, models_root, expected_path)
         return False
+
+    def _resolve_custom_node_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
+        node_name = str(row_info.get("node_name") or "").strip()
+        package_name = str(row_info.get("package_name") or "").strip()
+        dependency = row_info.get("dependency")
+
+        if dependency and isinstance(dependency, dict):
+            repo = dependency.get("repo") or ""
+            dep_display = dependency.get("name") or package_name or node_name or "Dependency"
+            prompt = (
+                f"A recommended Git repository was found for <b>{dep_display}</b>:<br>"
+                f"<span style='color:#228B22;'>{repo or 'Repository URL unavailable'}</span><br><br>"
+                "Install it into your custom_nodes folder?"
+            )
+            dialog = QtWidgets.QMessageBox(self)
+            dialog.setIcon(QtWidgets.QMessageBox.Icon.Question)
+            dialog.setWindowTitle("Install Custom Node")
+            dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
+            dialog.setText(prompt)
+            dialog.setStandardButtons(
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+            )
+            dialog.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
+            if dialog.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
+                return False
+
+            result = resolve_missing_custom_nodes(
+                {"missing": [node_name] if node_name else []},
+                self._comfy_path,
+                dependencies=[dependency],
+            )
+            if result.failed:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Installation Failed",
+                    result.failed[0] if result.failed else "Could not install the dependency.",
+                )
+                return False
+
+            note = ""
+            if result.resolved:
+                note = result.resolved[0]
+            elif result.skipped:
+                note = result.skipped[0]
+            if not note:
+                note = (
+                    f"{dep_display} installed. Restart ComfyUI to load the new node."
+                )
+
+            self._mark_custom_node_resolved(row_info, note)
+            row_info["dependency"] = None
+            QtWidgets.QMessageBox.information(
+                self,
+                "Installation Complete",
+                (
+                    f"{dep_display} has been cloned into your ComfyUI custom_nodes directory.\n"
+                    "Restart ComfyUI to load the new node."
+                ),
+            )
+            return True
+
+        self._notify_custom_node_manual_install(node_name, package_name)
+        return False
+
+    def _mark_custom_node_resolved(self, row_info: Dict[str, Any], note: Optional[str] = None) -> None:
+        status_item = row_info.get("status_item")
+        if isinstance(status_item, QtWidgets.QTableWidgetItem):
+            self._apply_status_style(status_item, "Resolved")
+
+        package_item = row_info.get("package_item")
+        package_name = row_info.get("package_name") or "Installed"
+        if isinstance(package_item, QtWidgets.QTableWidgetItem):
+            package_item.setText(f"{package_name} (installed)")
+            package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
+
+        button = row_info.get("button")
+        if isinstance(button, QtWidgets.QPushButton):
+            button.setText("Resolved")
+            button.setEnabled(False)
+            button.setStyleSheet(
+                "QPushButton {"
+                " background-color: #228B22;"
+                " color: white;"
+                " border-radius: 4px;"
+                " padding: 2px 8px;"
+                " }"
+            )
+
+        row_info["resolved"] = True
+
+        node_name = row_info.get("node_name")
+        issue = self._issue_lookup.get("custom_nodes")
+        if issue:
+            data = issue.get("data") or {}
+            missing = data.get("missing") or []
+            data["missing"] = [entry for entry in missing if entry != node_name]
+
+        if note:
+            self._append_issue_note("custom_nodes", note)
+
+        self._refresh_custom_nodes_issue_status()
         return False
 
     def _report_resolution(self, issue_key: str, result: ResolutionResult) -> None:
