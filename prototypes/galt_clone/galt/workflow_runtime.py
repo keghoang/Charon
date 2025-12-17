@@ -149,7 +149,17 @@ def spawn_charon_node(
 
     temp_dir = get_charon_temp_dir()
     process_script = _build_processor_script()
-    menu_script = _build_menu_script(temp_dir)
+    import_script = _build_import_output_script()
+
+    charon_meta = metadata.get("charon_meta") or {}
+    raw_parameters = (
+        charon_meta.get("parameters")
+        or metadata.get("parameters")
+        or []
+    )
+    parameter_specs = [
+        dict(spec) for spec in raw_parameters if isinstance(spec, dict)
+    ]
 
     if nuke_module is None:
         try:
@@ -170,8 +180,9 @@ def spawn_charon_node(
         inputs=inputs,
         temp_dir=temp_dir,
         process_script=process_script,
-        menu_script=menu_script,
+        import_script=import_script,
         workflow_path=workflow_path,
+        parameters=parameter_specs,
         auto_import_default=auto_import,
     )
 
@@ -207,53 +218,39 @@ def _build_processor_script() -> str:
     )
 
 
-def _build_menu_script(temp_root: str) -> str:
-    return f"""# CharonOp Menu Script
+def _build_import_output_script() -> str:
+    return """# CharonOp Import Output
 import os
-import json
-import time
+import nuke
 
-def show_info():
+def import_output():
     node = nuke.thisNode()
-    data = node.knob('workflow_data').value()
-    mapping = node.knob('input_mapping').value()
-    print('Workflow nodes:', len(json.loads(data)) if data else 0)
-    if mapping:
-        inputs = json.loads(mapping)
-        print('Inputs:')
-        for item in inputs:
-            print(' -', item.get('name'), ':', item.get('description'))
+    knob = node.knob('charon_last_output')
+    output_path = knob.value().strip() if knob else ''
+    if not output_path:
+        nuke.message('No output available yet.')
+        return
 
-def monitor_status():
-    node = nuke.thisNode()
-    payload_raw = None
+    normalized = os.path.normpath(output_path)
+    if not os.path.exists(normalized):
+        nuke.message(f'Output file not found: {normalized}')
+        return
+
     try:
-        payload_raw = node.metadata('charon/status_payload')
-    except Exception:
-        payload_raw = None
-    if not payload_raw:
-        try:
-            knob = node.knob('charon_status_payload')
-            if knob:
-                payload_raw = knob.value()
-        except Exception:
-            payload_raw = None
-    print('Status:', node.knob('charon_status').value())
-    if payload_raw:
-        try:
-            payload = json.loads(payload_raw)
-            print('Payload:')
-            print(json.dumps(payload, indent=2))
-        except Exception:
-            print('Payload (raw):', payload_raw)
-    else:
-        print('Payload: <empty>')
-    result_dir = os.path.join({json.dumps(temp_root)}, 'results')
-    print('Result files:', os.listdir(result_dir) if os.path.exists(result_dir) else [])
+        read_node = nuke.createNode('Read')
+    except Exception as exc:
+        nuke.message(f'Failed to create Read node: {exc}')
+        return
 
-menu = nuke.choice('CharonOp Menu', 'Choose Option', ['Show Workflow Info', 'Monitor Status'])
-if menu == 0:
-    show_info()
-else:
-    monitor_status()
+    try:
+        read_node['file'].setValue(normalized)
+    except Exception:
+        nuke.message(f'Could not assign output path to Read node: {normalized}')
+        return
+
+    read_node.setXpos(node.xpos() + 200)
+    read_node.setYpos(node.ypos())
+    read_node.setSelected(True)
+
+import_output()
 """

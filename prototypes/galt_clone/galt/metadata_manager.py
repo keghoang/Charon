@@ -181,14 +181,19 @@ def update_galt_config(script_path, new_config):
         payload["dependencies"] = new_config["dependencies"]
     if "tags" in new_config and new_config["tags"] is not None:
         payload["tags"] = new_config["tags"]
+    if "parameters" in new_config and new_config["parameters"] is not None:
+        payload["parameters"] = new_config["parameters"]
 
     if not payload.get("workflow_file"):
         payload["workflow_file"] = "workflow.json"
 
+    print(f"[Charon] update_galt_config payload for {script_path}: {payload}")
     metadata = write_charon_metadata(script_path, payload)
     if metadata:
+        print(f"[Charon] update_galt_config wrote metadata with parameters: {metadata.get('parameters')}")
         invalidate_metadata_path(script_path)
         return True
+    print(f"[Charon] update_galt_config failed for {script_path}")
     return False
 
 
@@ -230,3 +235,5 @@ def load_workflow_data(script_path):
         "metadata": metadata,
         "workflow": workflow_payload,
     }
+
+

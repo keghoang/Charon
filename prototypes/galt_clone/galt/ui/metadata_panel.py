@@ -10,6 +10,7 @@ from ..metadata_manager import (
     invalidate_metadata_path,
 )
 from ..charon_metadata import write_charon_metadata
+from ..galt_logger import system_debug
 from .dialogs import CharonMetadataDialog
 from .custom_widgets import create_tag_badge
 from datetime import datetime, timezone, timedelta
@@ -355,8 +356,10 @@ class MetadataPanel(QtWidgets.QWidget):
             "description": "",
             "dependencies": [],
             "tags": [],
+            "parameters": [],
         }
-        dialog = CharonMetadataDialog(initial_meta, parent=self)
+        dest_json = os.path.join(self.script_folder, initial_meta["workflow_file"])
+        dialog = CharonMetadataDialog(initial_meta, workflow_path=dest_json, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             return
 
@@ -364,6 +367,7 @@ class MetadataPanel(QtWidgets.QWidget):
         updates.update(dialog.get_metadata() or {})
         if not updates.get("workflow_file"):
             updates["workflow_file"] = initial_meta["workflow_file"]
+        system_debug(f"Creating metadata with parameters: {updates.get('parameters')}")
 
         if write_charon_metadata(self.script_folder, updates) is None:
             QtWidgets.QMessageBox.warning(self, "Create Failed", "Could not write workflow metadata.")
@@ -452,7 +456,10 @@ class MetadataPanel(QtWidgets.QWidget):
     def _edit_charon_metadata(self, conf):
         charon_meta = conf.get("charon_meta", {}).copy()
         charon_meta.setdefault("workflow_file", conf.get("workflow_file") or "workflow.json")
-        dialog = CharonMetadataDialog(charon_meta, parent=self)
+        charon_meta.setdefault("parameters", conf.get("parameters") or [])
+        workflow_file = charon_meta.get("workflow_file") or conf.get("workflow_file") or "workflow.json"
+        workflow_path = os.path.join(self.script_folder, workflow_file)
+        dialog = CharonMetadataDialog(charon_meta, workflow_path=workflow_path, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             return
 
@@ -462,6 +469,7 @@ class MetadataPanel(QtWidgets.QWidget):
         if not updated_meta.get("workflow_file"):
             updated_meta["workflow_file"] = charon_meta.get("workflow_file") or "workflow.json"
         updated_meta["last_changed"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        system_debug(f"Updating metadata parameters: {updated_meta.get('parameters')}")
 
         old_tags = conf.get("tags", [])
         new_tags = updated_meta.get("tags", [])

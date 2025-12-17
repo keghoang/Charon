@@ -13,8 +13,9 @@ def create_charon_group_node(
     inputs,
     temp_dir,
     process_script,
-    menu_script=None,
     workflow_path=None,
+    parameters=None,
+    import_script=None,
     auto_import_default=True,
 ):
     inputs = list(inputs or [])
@@ -55,37 +56,65 @@ def create_charon_group_node(
         output_node.setInput(0, internal_inputs[0])
     node.end()
 
+    parameter_knobs, normalized_parameters = _prepare_parameter_controls(nuke, parameters or [])
+
     workflow_knob = nuke.Text_Knob("workflow_data", "Workflow Data", json.dumps(workflow_data))
+    _hide_knob(workflow_knob, nuke)
     node.addKnob(workflow_knob)
 
     inputs_knob = nuke.Text_Knob("input_mapping", "Input Mapping", json.dumps(inputs))
+    _hide_knob(inputs_knob, nuke)
     node.addKnob(inputs_knob)
 
+    parameters_knob = nuke.Text_Knob("charon_parameters", "Parameter Mapping", json.dumps(normalized_parameters))
+    _hide_knob(parameters_knob, nuke)
+    node.addKnob(parameters_knob)
+
     temp_knob = nuke.String_Knob("charon_temp_dir", "Temp Directory", temp_dir)
-    temp_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        temp_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
+    _hide_knob(temp_knob, nuke)
     node.addKnob(temp_knob)
 
     status_knob = nuke.String_Knob("charon_status", "Status", "Ready")
-    status_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        status_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
+    _hide_knob(status_knob, nuke)
     node.addKnob(status_knob)
 
     progress_knob = nuke.Double_Knob("charon_progress", "Progress")
-    progress_knob.setFlag(nuke.NO_ANIMATION)
     progress_knob.setRange(0.0, 1.0)
     progress_knob.setValue(0.0)
-    try:
-        progress_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
+    _hide_knob(progress_knob, nuke)
     node.addKnob(progress_knob)
+
+    prompt_id_knob = nuke.String_Knob("charon_prompt_id", "Prompt ID", "")
+    _hide_knob(prompt_id_knob, nuke)
+    node.addKnob(prompt_id_knob)
+
+    prompt_path_knob = nuke.String_Knob("charon_prompt_path", "Prompt Path", "")
+    _hide_knob(prompt_path_knob, nuke)
+    node.addKnob(prompt_path_knob)
+
+    last_output_knob = nuke.String_Knob("charon_last_output", "Last Output Path", "")
+    _hide_knob(last_output_knob, nuke)
+    node.addKnob(last_output_knob)
+
+    workflow_name_knob = nuke.String_Knob("charon_workflow_name", "Workflow Name", workflow_name)
+    _hide_knob(workflow_name_knob, nuke)
+    node.addKnob(workflow_name_knob)
+
+    path_value = workflow_path or ""
+    path_knob = nuke.String_Knob("workflow_path", "Workflow Path", path_value)
+    _hide_knob(path_knob, nuke)
+    node.addKnob(path_knob)
+
+    if parameter_knobs:
+        for knob in parameter_knobs:
+            node.addKnob(knob)
+    else:
+        placeholder = nuke.Text_Knob(
+            "charon_param_placeholder",
+            "",
+            "No exposed parameters yet.\nUse Edit Workflow Metadata to add parameters."
+        )
+        node.addKnob(placeholder)
 
     auto_import_knob = nuke.Boolean_Knob(
         "charon_auto_import",
@@ -95,66 +124,24 @@ def create_charon_group_node(
     auto_import_knob.setFlag(nuke.NO_ANIMATION)
     auto_import_knob.setValue(1 if auto_import_default else 0)
     try:
-        auto_import_knob.setFlag(nuke.INVISIBLE)
+        auto_import_knob.setTooltip("When enabled, the resulting image is read into Nuke automatically.")
     except Exception:
         pass
     node.addKnob(auto_import_knob)
-
-    prompt_id_knob = nuke.String_Knob("charon_prompt_id", "Prompt ID", "")
-    prompt_id_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        prompt_id_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
-    node.addKnob(prompt_id_knob)
-
-    prompt_path_knob = nuke.String_Knob("charon_prompt_path", "Prompt Path", "")
-    prompt_path_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        prompt_path_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
-    node.addKnob(prompt_path_knob)
-
-    last_output_knob = nuke.String_Knob("charon_last_output", "Last Output Path", "")
-    last_output_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        last_output_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
-    node.addKnob(last_output_knob)
-
-    workflow_name_knob = nuke.String_Knob("charon_workflow_name", "Workflow Name", workflow_name)
-    workflow_name_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        workflow_name_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
-    node.addKnob(workflow_name_knob)
-
-    path_value = workflow_path or ""
-    path_knob = nuke.String_Knob("workflow_path", "Workflow Path", path_value)
-    path_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        path_knob.setFlag(nuke.INVISIBLE)
-    except Exception:
-        pass
-    node.addKnob(path_knob)
-
-    process_knob = nuke.PyScript_Knob("process", "Process with ComfyUI")
-    process_knob.setCommand(process_script)
-    node.addKnob(process_knob)
-
-    if menu_script:
-        menu_knob = nuke.PyScript_Knob("menu", "CharonOp Menu")
-        menu_knob.setCommand(menu_script)
-        node.addKnob(menu_knob)
 
     info_lines = ["Inputs Required:"]
     for input_def in inputs:
         info_lines.append(f"- {input_def.get('name', 'Input')} : {input_def.get('description', '')}")
     info_knob = nuke.Text_Knob("info", "Workflow Info", "\n".join(info_lines))
     node.addKnob(info_knob)
+
+    import_knob = nuke.PyScript_Knob("import_output", "Import Output")
+    import_knob.setCommand(import_script or "nuke.message('Import script unavailable.')")
+    node.addKnob(import_knob)
+
+    process_knob = nuke.PyScript_Knob("process", "Process with ComfyUI")
+    process_knob.setCommand(process_script)
+    node.addKnob(process_knob)
 
     status_payload = {
         "status": "Ready",
@@ -163,7 +150,7 @@ def create_charon_group_node(
         "updated_at": time.time(),
         "workflow_name": workflow_name,
         "workflow_path": workflow_path or "",
-        "auto_import": True,
+        "auto_import": bool(auto_import_default),
         "runs": [],
     }
     try:
@@ -171,7 +158,7 @@ def create_charon_group_node(
     except Exception:
         pass
     try:
-        node.setMetaData("charon/auto_import", "1")
+        node.setMetaData("charon/auto_import", "1" if auto_import_default else "0")
     except Exception:
         pass
     try:
@@ -181,3 +168,132 @@ def create_charon_group_node(
         pass
 
     return node, inputs
+
+
+def _prepare_parameter_controls(nuke_module, parameters):
+    knobs = []
+    normalized = []
+    used_names = set()
+
+    for index, raw_spec in enumerate(parameters):
+        if not isinstance(raw_spec, dict):
+            continue
+
+        node_id = str(raw_spec.get("node_id") or "").strip()
+        attribute = str(
+            raw_spec.get("attribute")
+            or raw_spec.get("attribute_key")
+            or ""
+        ).strip()
+        if not node_id or not attribute:
+            continue
+
+        label = str(raw_spec.get("label") or "").strip() or attribute
+        value_type = str(raw_spec.get("type") or "string").lower()
+        default = raw_spec.get("default")
+        node_name = str(raw_spec.get("node_name") or "").strip()
+
+        base_name = sanitize_name(f"charon_param_{index + 1}_{label}") or f"charon_param_{index + 1}"
+        knob_name = base_name.lower()
+        while knob_name in used_names:
+            knob_name = f"{knob_name}_"
+        used_names.add(knob_name)
+
+        knob = _create_parameter_knob(
+            nuke_module,
+            knob_name,
+            label,
+            value_type,
+            default,
+        )
+        if knob is None:
+            continue
+
+        tooltip_parts = []
+        if node_name:
+            tooltip_parts.append(node_name)
+        tooltip_parts.append(attribute)
+        try:
+            knob.setTooltip(" • ".join(tooltip_parts))
+        except Exception:
+            pass
+
+        knobs.append(knob)
+        normalized.append(
+            {
+                "node_id": node_id,
+                "node_name": node_name,
+                "attribute": attribute,
+                "label": label,
+                "type": value_type,
+                "default": default,
+                "knob": knob_name,
+            }
+        )
+
+    return knobs, normalized
+
+
+def _create_parameter_knob(nuke_module, name, label, value_type, default):
+    try:
+        if value_type == "boolean":
+            knob = nuke_module.Boolean_Knob(name, label)
+            knob.setValue(1 if _coerce_bool(default) else 0)
+        elif value_type == "integer":
+            knob = nuke_module.Int_Knob(name, label)
+            knob.setValue(_coerce_int(default))
+        elif value_type == "float":
+            knob = nuke_module.Double_Knob(name, label)
+            knob.setValue(_coerce_float(default))
+        else:
+            knob = nuke_module.Multiline_Eval_String_Knob(name, label)
+            knob.setValue(_coerce_string(default))
+        knob.setFlag(nuke_module.NO_ANIMATION)
+        return knob
+    except Exception:
+        return None
+
+
+def _hide_knob(knob, nuke_module):
+    try:
+        knob.setFlag(nuke_module.NO_ANIMATION)
+    except Exception:
+        pass
+    try:
+        knob.setFlag(nuke_module.INVISIBLE)
+    except Exception:
+        pass
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _coerce_int(value):
+    if isinstance(value, bool):
+        return 1 if value else 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_float(value):
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coerce_string(value):
+    if value is None:
+        return ""
+    return str(value)
