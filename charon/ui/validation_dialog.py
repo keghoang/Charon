@@ -54,6 +54,584 @@ MODEL_CATEGORY_PREFIXES = {
 }
 
 
+COLORS = {
+    "bg_main": "#212529",
+    "bg_card": "#17191d",
+    "bg_hover": "#3f3f46",
+    "text_main": "#f4f4f5",
+    "text_sub": "#a1a1aa",
+    "danger": "#ef4444",
+    "success": "#22c55e",
+    "border": "#3f3f46",
+    "btn_bg": "#27272a",
+}
+
+STYLESHEET = f"""
+    QDialog {{
+        background-color: {COLORS['bg_main']};
+        font-family: 'Segoe UI', 'Inter', sans-serif;
+    }}
+    QLabel {{
+        color: {COLORS['text_main']};
+    }}
+    QLabel#Heading {{
+        font-size: 20px;
+        font-weight: 700;
+    }}
+    QLabel#SubHeading {{
+        font-size: 15px;
+        color: {COLORS['text_sub']};
+    }}
+    QLabel#SectionLabel {{
+        font-size: 15px;
+        font-weight: 600;
+        margin-bottom: 6px;
+        margin-top: 15px;
+    }}
+    QFrame#SuccessCard {{
+        background-color: {COLORS['bg_card']};
+        border-radius: 6px;
+    }}
+    QFrame#IssueGroup {{
+        background-color: {COLORS['bg_card']};
+        border: 1px solid {COLORS['border']};
+        border-radius: 8px;
+    }}
+    QPushButton#ResolveBtn {{
+        background-color: transparent;
+        border: 1px solid {COLORS['border']};
+        border-radius: 4px;
+        color: {COLORS['text_main']};
+        font-size: 13px;
+        padding: 4px 10px; 
+    }}
+    QPushButton#ResolveBtn:hover {{
+        background-color: {COLORS['bg_hover']};
+    }}
+    QPushButton#ResolveBtn:disabled {{
+        color: {COLORS['text_sub']};
+        border-color: {COLORS['bg_hover']};
+    }}
+    QPushButton#FooterBtn {{
+        background-color: {COLORS['btn_bg']};
+        border: 1px solid {COLORS['border']};
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 14px;
+        font-weight: 500;
+        color: {COLORS['text_main']};
+    }}
+    QPushButton#FooterBtn:hover {{
+        background-color: {COLORS['bg_hover']};
+        border-color: {COLORS['text_sub']};
+    }}
+"""
+
+
+def _build_icon(name: str) -> QtGui.QIcon:
+    size = 48 if "header" in name else 32
+    pixmap = QtGui.QPixmap(size, size)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+    if name == "header_error":
+        painter.setBrush(QtGui.QColor(COLORS["danger"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, 40, 40)
+        pen = QtGui.QPen(QtCore.Qt.GlobalColor.white, 3)
+        painter.setPen(pen)
+        painter.drawLine(14, 14, 26, 26)
+        painter.drawLine(26, 14, 14, 26)
+
+    elif name == "header_success":
+        painter.setBrush(QtGui.QColor(COLORS["success"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, 40, 40)
+        pen = QtGui.QPen(QtCore.Qt.GlobalColor.white, 3)
+        painter.setPen(pen)
+        path = QtGui.QPainterPath()
+        path.moveTo(10, 20)
+        path.lineTo(18, 28)
+        path.lineTo(30, 12)
+        painter.drawPath(path)
+
+    elif name == "check":
+        pen = QtGui.QPen(QtGui.QColor(COLORS["success"]), 2.5)
+        painter.setPen(pen)
+        path = QtGui.QPainterPath()
+        path.moveTo(6, 16)
+        path.lineTo(13, 23)
+        path.lineTo(26, 9)
+        painter.drawPath(path)
+
+    elif name == "issue":
+        circle_pen = QtGui.QPen(QtGui.QColor(COLORS["danger"]), 2)
+        painter.setPen(circle_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(3, 3, 26, 26)
+        painter.setBrush(QtGui.QColor(COLORS["danger"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(16 - 1, 22, 2, 2)
+        painter.drawRoundedRect(16 - 1, 9, 2, 10, 1, 1)
+
+    painter.end()
+    return QtGui.QIcon(pixmap)
+
+
+class CheckRow(QtWidgets.QWidget):
+    def __init__(self, text: str, ok: bool = True, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setSpacing(12)
+
+        icon_lbl = QtWidgets.QLabel()
+        icon_name = "check" if ok else "issue"
+        icon_lbl.setPixmap(_build_icon(icon_name).pixmap(24, 24))
+        icon_lbl.setFixedSize(24, 24)
+
+        txt_lbl = QtWidgets.QLabel(text)
+        txt_lbl.setStyleSheet("font-size: 14px;")
+
+        layout.addWidget(icon_lbl)
+        layout.addWidget(txt_lbl)
+        layout.addStretch()
+
+
+class IssueRow(QtWidgets.QWidget):
+    def __init__(
+        self,
+        title: str,
+        subtitle: str,
+        *,
+        success_text: str = "Item resolved",
+        show_separator: bool = False,
+        resolve_handler=None,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._resolve_handler = resolve_handler
+        self._success_text = success_text
+        self._is_resolving = False
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+
+        container = QtWidgets.QWidget()
+        row_h = QtWidgets.QHBoxLayout(container)
+        row_h.setContentsMargins(15, 15, 15, 15)
+        row_h.setSpacing(12)
+
+        self.icon_lbl = QtWidgets.QLabel()
+        self.icon_lbl.setPixmap(_build_icon("issue").pixmap(24, 24))
+        self.icon_lbl.setFixedSize(24, 24)
+
+        text_widget = QtWidgets.QWidget()
+        text_v = QtWidgets.QVBoxLayout(text_widget)
+        text_v.setContentsMargins(0, 0, 0, 0)
+        text_v.setSpacing(2)
+        text_v.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+
+        self.lbl_title = QtWidgets.QLabel(title)
+        self.lbl_title.setStyleSheet("font-size: 14px; color: {0};".format(COLORS["text_main"]))
+
+        self.lbl_sub = QtWidgets.QLabel(subtitle)
+        self.lbl_sub.setStyleSheet("font-size: 13px; color: {0};".format(COLORS["text_sub"]))
+        self.lbl_sub.setWordWrap(True)
+
+        text_v.addWidget(self.lbl_title)
+        text_v.addWidget(self.lbl_sub)
+
+        self.btn_resolve = QtWidgets.QPushButton("Resolve")
+        self.btn_resolve.setObjectName("ResolveBtn")
+        self.btn_resolve.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_resolve.setFixedSize(90, 32)
+        self.btn_resolve.clicked.connect(self._on_resolve_clicked)
+
+        row_h.addWidget(self.icon_lbl)
+        row_h.addWidget(text_widget)
+        row_h.addWidget(self.btn_resolve)
+
+        self.layout.addWidget(container)
+
+        if show_separator:
+            line = QtWidgets.QFrame()
+            line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+            line.setStyleSheet(f"background-color: {COLORS['border']}; border: none; max-height: 1px;")
+            self.layout.addWidget(line)
+
+        self.dots = 0
+        self.anim_timer = QtCore.QTimer(self)
+        self.anim_timer.timeout.connect(self._update_dots)
+
+    # ------------------------------------------------------------------ UI helpers
+    def _on_resolve_clicked(self) -> None:
+        if self._is_resolving:
+            return
+        self.start_install_animation()
+        if callable(self._resolve_handler):
+            self._resolve_handler()
+
+    def start_install_animation(self) -> None:
+        self._is_resolving = True
+        self.btn_resolve.setEnabled(False)
+        self.btn_resolve.setFixedWidth(110)
+        self.btn_resolve.setText("Resolving")
+        self.dots = 0
+        self.anim_timer.start(400)
+
+    def reset_to_idle(self) -> None:
+        self.anim_timer.stop()
+        self._is_resolving = False
+        self.btn_resolve.setEnabled(True)
+        self.btn_resolve.setFixedWidth(90)
+        self.btn_resolve.setText("Resolve")
+
+    def mark_as_successful(self, message: Optional[str] = None) -> None:
+        self.anim_timer.stop()
+        self._is_resolving = False
+        self.icon_lbl.setPixmap(_build_icon("check").pixmap(24, 24))
+        self.btn_resolve.hide()
+        self.lbl_sub.hide()
+        self.lbl_title.setText(message or self._success_text)
+
+    def _update_dots(self) -> None:
+        self.dots = (self.dots + 1) % 4
+        self.btn_resolve.setText(f"Resolving{'.' * self.dots}")
+
+class ValidationPrototypeDialog(QtWidgets.QDialog):
+    """Static prototype for the redesigned validation result window."""
+
+    def __init__(self, workflow_name: str = "Workflow", parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._workflow_name = workflow_name or "Workflow"
+        self._issue_cards: list["_PrototypeIssueCard"] = []
+        self.setWindowTitle(f"Validation Result (Prototype) - {self._workflow_name}")
+        self.setModal(True)
+        self.setMinimumWidth(540)
+        self._build_ui()
+
+    # ------------------------------------------------------------------ UI
+    def _build_ui(self) -> None:
+        self.setStyleSheet(
+            """
+            QDialog {
+                background-color: #1B1D1F;
+                color: #E4E6E8;
+                border: 1px solid #2F3335;
+                border-radius: 8px;
+                box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+            }
+            QLabel#title {
+                font-size: 20px;
+                font-weight: 700;
+                color: #E4E6E8;
+            }
+            QLabel#subtitle {
+                color: #A8ADB0;
+                font-size: 14px;
+            }
+            QLabel.section-label {
+                font-size: 14px;
+                font-weight: 700;
+                color: #E4E6E8;
+            }
+            QFrame#card {
+                background-color: #232628;
+                border: 1px solid #2B3032;
+                border-radius: 10px;
+                box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+            }
+            QFrame#card[variant="success"] {
+                background-color: #232628;
+                border: 1px solid #2B3032;
+                box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+            }
+            QFrame#card[variant="issue"] {
+                background-color: #202426;
+                border: 1px solid #2B3032;
+            }
+            QLabel.card-title {
+                font-weight: 700;
+                color: #E4E6E8;
+            }
+            QLabel.card-subtitle {
+                color: #8A8F92;
+            }
+            QPushButton.primary {
+                background-color: #2A2E30;
+                color: #D9DDE0;
+                border: 1px solid #3A3F42;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 600;
+            }
+            QPushButton.primary:disabled {
+                background-color: #2A2E30;
+                color: #8A8F92;
+                border: 1px solid #3A3F42;
+                opacity: 0.6;
+            }
+            QPushButton.secondary {
+                background-color: #2A2E30;
+                color: #D9DDE0;
+                border: 1px solid #3A3F42;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 600;
+            }
+            QPushButton.resolve {
+                background-color: #A73632;
+                color: #FFFFFF;
+                border: 1px solid #C03D38;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-weight: 600;
+                min-width: 96px;
+            }
+            QFrame#card[selected="true"] {
+                background-color: #292D2F;
+                border: 1px solid #3A3F42;
+            }
+            QFrame#card[selected="false"] {
+                background-color: #202426;
+                border: 1px solid #2B3032;
+            }
+            QPushButton.primary:hover,
+            QPushButton.secondary:hover {
+                background-color: #303436;
+                border: 1px solid #3A3F42;
+            }
+            QPushButton.resolve:hover {
+                background-color: #C03D38;
+                border: 1px solid #C03D38;
+            }
+            """
+        )
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+
+        header_layout = QtWidgets.QHBoxLayout()
+        header_layout.setSpacing(12)
+        header_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        header_layout.addWidget(self._status_icon("✕", "#FFFFFF", "#D9534F"))
+
+        title_block = QtWidgets.QVBoxLayout()
+        title_label = QtWidgets.QLabel("Validation Failed", self)
+        title_label.setObjectName("title")
+        subtitle_label = QtWidgets.QLabel("2 issues need attention", self)
+        subtitle_label.setObjectName("subtitle")
+        title_block.addWidget(title_label)
+        title_block.addWidget(subtitle_label)
+        header_layout.addLayout(title_block)
+        header_layout.addStretch(1)
+        layout.addLayout(header_layout)
+
+        checks_label = QtWidgets.QLabel("Checks", self)
+        checks_label.setProperty("class", "section-label")
+        checks_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        checks_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #d8dfe8;")
+        layout.addWidget(checks_label)
+
+        layout.addWidget(self._build_check_card())
+
+        issues_label = QtWidgets.QLabel("Issues", self)
+        issues_label.setProperty("class", "section-label")
+        issues_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        issues_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #d8dfe8;")
+        layout.addWidget(issues_label)
+
+        issues_container = QtWidgets.QWidget(self)
+        issues_layout = QtWidgets.QVBoxLayout(issues_container)
+        issues_layout.setContentsMargins(0, 0, 0, 0)
+        issues_layout.setSpacing(10)
+        issues_layout.addWidget(
+            self._build_issue_card(
+                "Missing node: ComfyUI_rgbx_Wrapper",
+                "Expected: /custom_nodes/ComfyUI_rgbx Wrapper",
+            )
+        )
+        issues_layout.addWidget(
+            self._build_issue_card(
+                "Missing model file: model.safetensors",
+                "Expected: /models/model.safetensors",
+            )
+        )
+        layout.addWidget(issues_container)
+
+        layout.addStretch(1)
+
+        button_bar = QtWidgets.QHBoxLayout()
+        button_bar.setSpacing(10)
+        button_bar.addStretch(1)
+
+        rerun_button = QtWidgets.QPushButton("Re-run Validation", self)
+        rerun_button.setText("Auto Resolve")
+        rerun_button.setObjectName("rerun")
+        rerun_button.setProperty("class", "primary")
+        rerun_button.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        rerun_button.clicked.connect(self._show_placeholder_message)
+        rerun_button.setStyleSheet("QPushButton { min-width: 140px; }")
+
+        close_button = QtWidgets.QPushButton("Close", self)
+        close_button.setObjectName("close")
+        close_button.setProperty("class", "secondary")
+        close_button.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        close_button.clicked.connect(self.reject)
+        close_button.setStyleSheet("QPushButton { min-width: 120px; }")
+
+        button_bar.addWidget(rerun_button)
+        button_bar.addWidget(close_button)
+        layout.addLayout(button_bar)
+
+    def _status_icon(self, symbol: str, fg: str, bg: str) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(symbol, self)
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        label.setFixedSize(36, 36)
+        label.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {bg};
+                color: {fg};
+                border-radius: 18px;
+                font-size: 18px;
+                font-weight: 700;
+            }}
+            """
+        )
+        return label
+
+    def _build_check_card(self) -> QtWidgets.QFrame:
+        card = QtWidgets.QFrame(self)
+        card.setObjectName("card")
+        card.setProperty("variant", "success")
+        layout = QtWidgets.QHBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(10)
+
+        icon = self._status_icon("✓", "#FFFFFF", "#70C46D")
+        layout.addWidget(icon, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
+
+        text_layout = QtWidgets.QVBoxLayout()
+        title = QtWidgets.QLabel("All models located", card)
+        title.setObjectName("check-title")
+        title.setProperty("class", "card-title")
+        subtitle = QtWidgets.QLabel(
+            "Validation confirms all models used in the workflow are located.",
+            card,
+        )
+        subtitle.setObjectName("check-subtitle")
+        subtitle.setProperty("class", "card-subtitle")
+        subtitle.setWordWrap(True)
+        text_layout.addWidget(title)
+        text_layout.addWidget(subtitle)
+
+        layout.addLayout(text_layout)
+        layout.addStretch(1)
+        return card
+
+    def _build_issue_card(self, title: str, expected_hint: str) -> QtWidgets.QFrame:
+        card = _PrototypeIssueCard(
+            title=title,
+            subtitle=expected_hint,
+            click_handler=lambda c: self._on_issue_card_clicked(c),
+            placeholder_handler=self._show_placeholder_message,
+            parent=self,
+        )
+        self._issue_cards.append(card)
+        return card
+
+    def _on_issue_card_clicked(self, card: "_PrototypeIssueCard") -> None:
+        """Highlight the selected card and show a context menu."""
+        for item in self._issue_cards:
+            item.set_selected(item is card)
+        menu = QtWidgets.QMenu(self)
+        action = menu.addAction("Install this node")
+        action.triggered.connect(self._show_placeholder_message)
+        menu.exec(QtGui.QCursor.pos())
+
+    # ----------------------------------------------------------------- Events
+    def _show_placeholder_message(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "Prototype Only",
+            (
+                "This is a static preview of the revamped Validation Result window.\n"
+                "Functional checks for missing models and custom nodes will be wired here."
+            ),
+        )
+
+
+class _PrototypeIssueCard(QtWidgets.QFrame):
+    """Clickable card used only for the static validation prototype."""
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        subtitle: str,
+        click_handler,
+        placeholder_handler,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._click_handler = click_handler
+        self._placeholder_handler = placeholder_handler
+        self.setObjectName("card")
+        self.setProperty("selected", False)
+        self.setProperty("variant", "issue")
+        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        icon = self._status_icon("!", "#FFFFFF", "#FF5E51")
+        layout.addWidget(icon, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
+
+        text_layout = QtWidgets.QVBoxLayout()
+        text_layout.setSpacing(4)
+        title_label = QtWidgets.QLabel(title, self)
+        title_label.setProperty("class", "card-title")
+        subtitle_label = QtWidgets.QLabel(subtitle, self)
+        subtitle_label.setProperty("class", "card-subtitle")
+        subtitle_label.setWordWrap(True)
+        text_layout.addWidget(title_label)
+        text_layout.addWidget(subtitle_label)
+        layout.addLayout(text_layout, stretch=1)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if callable(self._click_handler):
+            self._click_handler(self)
+        super().mousePressEvent(event)
+
+    def set_selected(self, selected: bool) -> None:
+        self.setProperty("selected", selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def _status_icon(self, symbol: str, fg: str, bg: str) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(symbol, self)
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        label.setFixedSize(32, 32)
+        label.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: {bg};
+                color: {fg};
+                border-radius: 16px;
+                font-size: 16px;
+                font-weight: 700;
+            }}
+            """
+        )
+        return label
+
+
 class _FileCopyWorker(QtCore.QObject):
     progress = QtCore.Signal(int)
     finished = QtCore.Signal(bool, str)
@@ -126,11 +704,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Validation Result - {workflow_name}")
+        self.setStyleSheet(STYLESHEET)
         self._payload = payload or {}
         self._comfy_path = comfy_path or ""
         self._workflow_bundle = workflow_bundle or {}
         self._issue_lookup: Dict[str, Dict[str, Any]] = {}
         self._issue_widgets: Dict[str, Dict[str, Any]] = {}
+        self._issue_rows: Dict[str, List[IssueRow]] = {"models": [], "custom_nodes": []}
+        self._checks_layout: Optional[QtWidgets.QVBoxLayout] = None
+        self._issues_layout: Optional[QtWidgets.QVBoxLayout] = None
+        self._success_checks_layout: Optional[QtWidgets.QVBoxLayout] = None
+        self._stack: Optional[QtWidgets.QStackedWidget] = None
+        self._header_title: Optional[QtWidgets.QLabel] = None
+        self._header_subtitle: Optional[QtWidgets.QLabel] = None
+        self._header_icon: Optional[QtWidgets.QLabel] = None
+        self._auto_resolve_button: Optional[QtWidgets.QPushButton] = None
+        self._success_title: Optional[QtWidgets.QLabel] = None
+        self._success_subtitle: Optional[QtWidgets.QLabel] = None
         self._dependencies_cache: Optional[List[Dict[str, Any]]] = None
         self._workflow_folder: Optional[str] = None
         self._comfy_info = {}
@@ -155,246 +745,327 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
     # --------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        self._stack = QtWidgets.QStackedWidget(self)
+        failed_page = self._build_failed_page()
+        success_page = self._build_success_page()
+        self._stack.addWidget(failed_page)
+        self._stack.addWidget(success_page)
 
-        intro = QtWidgets.QLabel(
-            "Review the checklist below. Failed checks include auto-resolve helpers "
-            "when possible."
-        )
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
+        root_layout = QtWidgets.QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addWidget(self._stack)
 
-        scroll = QtWidgets.QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        layout.addWidget(scroll)
+        self._populate_sections()
+        self._update_overall_state()
+        self.resize(520, 620)
 
-        container = QtWidgets.QWidget()
-        self._issues_layout = QtWidgets.QVBoxLayout(container)
+    def _build_failed_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(10)
+
+        header_layout = QtWidgets.QHBoxLayout()
+        header_layout.setSpacing(15)
+
+        self._header_icon = QtWidgets.QLabel()
+        self._header_icon.setPixmap(_build_icon("header_error").pixmap(40, 40))
+        self._header_icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+
+        text_stack = QtWidgets.QVBoxLayout()
+        text_stack.setSpacing(0)
+
+        self._header_title = QtWidgets.QLabel("Validation Failed")
+        self._header_title.setObjectName("Heading")
+        self._header_subtitle = QtWidgets.QLabel("Issues need attention")
+        self._header_subtitle.setObjectName("SubHeading")
+
+        text_stack.addWidget(self._header_title)
+        text_stack.addWidget(self._header_subtitle)
+        header_layout.addWidget(self._header_icon)
+        header_layout.addLayout(text_stack)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+        layout.addSpacing(10)
+
+        lbl_checks = QtWidgets.QLabel("Checks")
+        lbl_checks.setObjectName("SectionLabel")
+        layout.addWidget(lbl_checks)
+
+        check_card = QtWidgets.QFrame()
+        check_card.setObjectName("SuccessCard")
+        self._checks_layout = QtWidgets.QVBoxLayout(check_card)
+        self._checks_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(check_card)
+
+        lbl_issues = QtWidgets.QLabel("Issues")
+        lbl_issues.setObjectName("SectionLabel")
+        layout.addWidget(lbl_issues)
+
+        issue_group = QtWidgets.QFrame()
+        issue_group.setObjectName("IssueGroup")
+        self._issues_layout = QtWidgets.QVBoxLayout(issue_group)
         self._issues_layout.setContentsMargins(0, 0, 0, 0)
-        self._issues_layout.setSpacing(10)
-        scroll.setWidget(container)
+        self._issues_layout.setSpacing(0)
+        layout.addWidget(issue_group)
+        layout.addSpacing(20)
 
-        issues = self._payload.get("issues") or []
-        if not issues:
-            placeholder = QtWidgets.QLabel("No validation data available.")
+        footer = QtWidgets.QHBoxLayout()
+        footer.setSpacing(15)
+
+        self._auto_resolve_button = QtWidgets.QPushButton("✨ Auto-resolve All")
+        self._auto_resolve_button.setObjectName("FooterBtn")
+        self._auto_resolve_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._auto_resolve_button.clicked.connect(self._auto_resolve_all)
+
+        btn_close = QtWidgets.QPushButton("Close")
+        btn_close.setObjectName("FooterBtn")
+        btn_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn_close.clicked.connect(self.accept)
+
+        footer.addWidget(self._auto_resolve_button)
+        footer.addWidget(btn_close)
+        layout.addLayout(footer)
+
+        return page
+
+    def _build_success_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(10)
+
+        header_layout = QtWidgets.QHBoxLayout()
+        header_layout.setSpacing(15)
+
+        icon_lbl = QtWidgets.QLabel()
+        icon_lbl.setPixmap(_build_icon("header_success").pixmap(40, 40))
+        icon_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+
+        text_stack = QtWidgets.QVBoxLayout()
+        text_stack.setSpacing(0)
+
+        self._success_title = QtWidgets.QLabel("Validation Successful!")
+        self._success_title.setObjectName("Heading")
+        self._success_subtitle = QtWidgets.QLabel("All systems operational")
+        self._success_subtitle.setObjectName("SubHeading")
+
+        text_stack.addWidget(self._success_title)
+        text_stack.addWidget(self._success_subtitle)
+        header_layout.addWidget(icon_lbl)
+        header_layout.addLayout(text_stack)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+        layout.addSpacing(10)
+
+        lbl_checks = QtWidgets.QLabel("Checks")
+        lbl_checks.setObjectName("SectionLabel")
+        layout.addWidget(lbl_checks)
+
+        check_card = QtWidgets.QFrame()
+        check_card.setObjectName("SuccessCard")
+        self._success_checks_layout = QtWidgets.QVBoxLayout(check_card)
+        self._success_checks_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(check_card)
+        layout.addStretch()
+
+        footer = QtWidgets.QHBoxLayout()
+        btn_done = QtWidgets.QPushButton("Done")
+        btn_done.setObjectName("FooterBtn")
+        btn_done.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn_done.clicked.connect(self.accept)
+        footer.addWidget(btn_done)
+        layout.addLayout(footer)
+        return page
+
+    def _populate_sections(self) -> None:
+        supported_keys = {"models", "custom_nodes"}
+        issues = [
+            issue
+            for issue in (self._payload.get("issues") or [])
+            if isinstance(issue, dict) and str(issue.get("key") or "") in supported_keys
+        ]
+        self._issue_lookup = {str(issue.get("key") or ""): issue for issue in issues}
+        self._issue_widgets = {}
+        self._issue_rows = {"models": [], "custom_nodes": []}
+
+        if self._checks_layout:
+            self._clear_layout(self._checks_layout)
+        if self._issues_layout:
+            self._clear_layout(self._issues_layout)
+        if self._success_checks_layout:
+            self._clear_layout(self._success_checks_layout)
+
+        self._populate_issue_section(issues)
+        self._populate_check_section(issues)
+
+    def _populate_check_section(self, issues: List[Dict[str, Any]]) -> None:
+        def _remaining_rows(key: str) -> int:
+            widget_info = self._issue_widgets.get(key) or {}
+            rows = widget_info.get("rows") or {}
+            remaining = 0
+            for row_info in rows.values():
+                if row_info.get("resolved"):
+                    continue
+                remaining += 1
+            return remaining
+
+        checks = [
+            ("All models found", _remaining_rows("models") == 0, "Models need attention"),
+            ("Custom nodes validated", _remaining_rows("custom_nodes") == 0, "Custom nodes need attention"),
+        ]
+
+        if self._checks_layout:
+            for passed_text, ok, pending_text in checks:
+                text = passed_text if ok else pending_text
+                self._checks_layout.addWidget(CheckRow(text, ok=ok))
+        if self._success_checks_layout:
+            for passed_text, ok, pending_text in checks:
+                text = passed_text if ok else pending_text
+                self._success_checks_layout.addWidget(CheckRow(text, ok=ok))
+
+    def _populate_issue_section(self, issues: List[Dict[str, Any]]) -> None:
+        if not self._issues_layout:
+            return
+        added_rows = False
+        for issue in issues:
+            key = str(issue.get("key") or "")
+            if key == "models":
+                added_rows = self._build_model_issue_rows(issue) or added_rows
+            elif key == "custom_nodes":
+                added_rows = self._build_custom_node_issue_rows(issue) or added_rows
+        if not added_rows:
+            placeholder = QtWidgets.QLabel("No validation issues reported.")
             placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self._issues_layout.addWidget(placeholder)
-        else:
-            for issue in issues:
-                if not isinstance(issue, dict):
-                    continue
-                widget = self._create_issue_widget(issue)
-                if widget:
-                    self._issues_layout.addWidget(widget)
-            self._issues_layout.addStretch(1)
 
-        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close, parent=self)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-        self.resize(500, 540)
-
-    def _create_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
-        key = str(issue.get("key") or "")
-        if key == "models":
-            return self._create_models_issue_widget(issue)
-        if key == "custom_nodes":
-            return self._create_custom_nodes_issue_widget(issue)
-        return self._create_generic_issue_widget(issue)
-
-    def _create_generic_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
-        key = str(issue.get("key") or "")
-        label = str(issue.get("label") or "Check")
-        summary = str(issue.get("summary") or "")
-        details = issue.get("details") or []
-        ok = bool(issue.get("ok"))
-
-        frame = QtWidgets.QFrame(self)
-        frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        frame_layout = QtWidgets.QVBoxLayout(frame)
-        frame_layout.setContentsMargins(10, 10, 10, 10)
-        frame_layout.setSpacing(6)
-
-        header_layout = QtWidgets.QHBoxLayout()
-        status_label = QtWidgets.QLabel("\u2713 Passed" if ok else "\u2717 Failed")
-        status_label.setStyleSheet(f"font-weight: bold; color: {'#228B22' if ok else '#B22222'};")
-        title_label = QtWidgets.QLabel(label)
-        title_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(status_label)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch(1)
-        frame_layout.addLayout(header_layout)
-
-        if summary:
-            summary_label = QtWidgets.QLabel(summary)
-            summary_label.setWordWrap(True)
-            frame_layout.addWidget(summary_label)
-        else:
-            summary_label = None
-
-        detail_labels: List[QtWidgets.QLabel] = []
-        for detail in details:
-            text = str(detail)
-            if text.lower().startswith("cannot find"):
-                continue
-            detail_label = QtWidgets.QLabel(text)
-            detail_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-            detail_label.setWordWrap(True)
-            detail_labels.append(detail_label)
-            frame_layout.addWidget(detail_label)
-
-        auto_button = None
-        if not ok and key in self.SUPPORTED_KEYS:
-            auto_button = QtWidgets.QPushButton("Auto Resolve")
-            auto_button.clicked.connect(lambda _checked=False, k=key: self._handle_auto_resolve(k))
-            frame_layout.addWidget(auto_button, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
-
-        self._issue_lookup[key] = issue
-        self._issue_widgets[key] = {
-            "frame": frame,
-            "status_label": status_label,
-            "summary_label": summary_label,
-            "detail_labels": detail_labels,
-            "button": auto_button,
-        }
-        return frame
-
-    def _create_models_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
-        key = str(issue.get("key") or "")
-        label = str(issue.get("label") or "Models")
-        details = issue.get("details") or []
-        ok = bool(issue.get("ok"))
-
-        frame = QtWidgets.QFrame(self)
-        frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        frame_layout = QtWidgets.QVBoxLayout(frame)
-        frame_layout.setContentsMargins(10, 10, 10, 10)
-        frame_layout.setSpacing(6)
-
-        header_layout = QtWidgets.QHBoxLayout()
-        status_label = QtWidgets.QLabel("\u2713 Passed" if ok else "\u2717 Failed")
-        status_label.setStyleSheet(f"font-weight: bold; color: {'#228B22' if ok else '#B22222'};")
-        title_label = QtWidgets.QLabel(label)
-        title_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(status_label)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch(1)
-        frame_layout.addLayout(header_layout)
-
-        detail_labels: List[QtWidgets.QLabel] = []
-        for detail in details:
-            text = str(detail)
-            lowered = text.lower()
-            if lowered.startswith("cannot find") or lowered.startswith("confirm the files exist"):
-                continue
-            detail_label = QtWidgets.QLabel(text)
-            detail_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-            detail_label.setWordWrap(True)
-            detail_labels.append(detail_label)
-            frame_layout.addWidget(detail_label)
-
-        table = QtWidgets.QTableWidget(frame)
-        table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Model", "Status", "Location", "Action"])
-        table.verticalHeader().setVisible(False)
-        table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
-        table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.horizontalHeader().setStretchLastSection(False)
-        for column in range(4):
-            mode = (
-                QtWidgets.QHeaderView.ResizeMode.Fixed
-                if column in (2, 3)
-                else QtWidgets.QHeaderView.ResizeMode.Interactive
-            )
-            table.horizontalHeader().setSectionResizeMode(column, mode)
-        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setTextElideMode(QtCore.Qt.TextElideMode.ElideMiddle)
-        table.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-        table.verticalHeader().setDefaultSectionSize(26)
-        table.setStyleSheet(
-            "QTableWidget { font-size: 12px; }"
-            "QPushButton { padding: 2px 8px; font-size: 11px; }"
-        )
-        for column, width in enumerate(VALIDATION_COLUMN_WIDTHS):
-            table.setColumnWidth(column, width)
-        frame_layout.addWidget(table)
-
+    def _build_model_issue_rows(self, issue: Dict[str, Any]) -> bool:
         data = issue.get("data") or {}
-        row_mapping = self._populate_models_table(table, data)
-
-        self._issue_lookup[key] = issue
-        self._issue_widgets[key] = {
-            "frame": frame,
+        temp_table = QtWidgets.QTableWidget(self)
+        temp_table.setVisible(False)
+        row_mapping = self._populate_models_table(temp_table, data)
+        status_label = QtWidgets.QLabel()
+        status_label.hide()
+        self._issue_widgets["models"] = {
             "status_label": status_label,
-            "detail_labels": detail_labels,
-            "table": table,
             "rows": row_mapping,
+            "table": temp_table,
         }
         self._refresh_models_issue_status()
-        return frame
 
-    def _create_custom_nodes_issue_widget(self, issue: Dict[str, Any]) -> Optional[QtWidgets.QWidget]:
-        key = str(issue.get("key") or "")
-        label = str(issue.get("label") or "Custom Nodes")
-        ok = bool(issue.get("ok"))
+        if not row_mapping:
+            return False
 
-        frame = QtWidgets.QFrame(self)
-        frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        frame_layout = QtWidgets.QVBoxLayout(frame)
-        frame_layout.setContentsMargins(10, 10, 10, 10)
-        frame_layout.setSpacing(6)
+        ordered_rows = sorted(row_mapping.items(), key=lambda item: item[0])
+        total = len(ordered_rows)
+        for position, (idx, row_info) in enumerate(ordered_rows):
+            reference = row_info.get("reference") or {}
+            name_value = reference.get("name") or reference.get("path") or ""
+            display_name = os.path.basename(name_value) or "Model"
+            models_root = row_info.get("models_root") or ""
+            expected_path = self._format_model_display_path(name_value, models_root) if name_value else models_root
+            subtitle = f"Expected: {expected_path or 'models/…'}"
+            issue_row = IssueRow(
+                f"Missing model: {display_name}",
+                subtitle,
+                success_text=f"{display_name} resolved",
+                show_separator=(position < total - 1),
+                resolve_handler=lambda row_index=idx: self._handle_model_auto_resolve(row_index),
+            )
+            row_info["issue_row"] = issue_row
+            row_info["button"] = issue_row.btn_resolve
+            row_info["success_text"] = f"{display_name} resolved"
+            self._issue_rows.setdefault("models", []).append(issue_row)
+            self._issues_layout.addWidget(issue_row)
+        return True
 
-        header_layout = QtWidgets.QHBoxLayout()
-        status_label = QtWidgets.QLabel("\u2713 Passed" if ok else "\u2717 Failed")
-        status_label.setStyleSheet(f"font-weight: bold; color: {'#228B22' if ok else '#B22222'};")
-        title_label = QtWidgets.QLabel(label)
-        title_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(status_label)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch(1)
-        frame_layout.addLayout(header_layout)
-
-        summary_label = QtWidgets.QLabel(issue.get("summary") or "")
-        summary_label.setWordWrap(True)
-        frame_layout.addWidget(summary_label)
-
-        table = QtWidgets.QTableWidget(frame)
-        table.setColumnCount(2)
-        table.setHorizontalHeaderLabels(["Name", "Action"])
-        table.verticalHeader().setVisible(False)
-        table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
-        table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.horizontalHeader().setStretchLastSection(False)
-        for column in range(2):
-            mode = QtWidgets.QHeaderView.ResizeMode.Fixed if column == 1 else QtWidgets.QHeaderView.ResizeMode.Interactive
-            table.horizontalHeader().setSectionResizeMode(column, mode)
-        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setTextElideMode(QtCore.Qt.TextElideMode.ElideMiddle)
-        table.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-        table.verticalHeader().setDefaultSectionSize(26)
-        table.setStyleSheet(
-            "QTableWidget { font-size: 12px; }"
-            "QPushButton { padding: 2px 8px; font-size: 11px; }"
-        )
-        for column, width in enumerate(VALIDATION_COLUMN_WIDTHS):
-            table.setColumnWidth(column, width)
-        frame_layout.addWidget(table)
-
+    def _build_custom_node_issue_rows(self, issue: Dict[str, Any]) -> bool:
         data = issue.get("data") or {}
-        row_mapping = self._populate_custom_nodes_table(table, data)
-
-        self._issue_lookup[key] = issue
-        self._issue_widgets[key] = {
-            "frame": frame,
+        temp_table = QtWidgets.QTableWidget(self)
+        temp_table.setVisible(False)
+        row_mapping = self._populate_custom_nodes_table(temp_table, data)
+        status_label = QtWidgets.QLabel()
+        status_label.hide()
+        self._issue_widgets["custom_nodes"] = {
             "status_label": status_label,
-            "summary_label": summary_label,
-            "table": table,
+            "summary_label": QtWidgets.QLabel(),
             "rows": row_mapping,
+            "table": temp_table,
         }
         self._refresh_custom_nodes_issue_status()
-        return frame
+
+        if not row_mapping:
+            return False
+
+        ordered_rows = sorted(row_mapping.items(), key=lambda item: item[0])
+        total = len(ordered_rows)
+        for position, (idx, row_info) in enumerate(ordered_rows):
+            package_display = row_info.get("package_name") or row_info.get("node_name") or "Custom node"
+            repo_url = row_info.get("manager_repo") or ""
+            subtitle = repo_url or "Install missing package into custom_nodes"
+            issue_row = IssueRow(
+                f"Missing node: {package_display}",
+                subtitle,
+                success_text=f"{package_display} installed",
+                show_separator=(position < total - 1),
+                resolve_handler=lambda row_index=idx: self._handle_custom_node_auto_resolve(row_index),
+            )
+            row_info["issue_row"] = issue_row
+            row_info["button"] = issue_row.btn_resolve
+            row_info["success_text"] = f"{package_display} installed"
+            self._issue_rows.setdefault("custom_nodes", []).append(issue_row)
+            self._issues_layout.addWidget(issue_row)
+        return True
+
+    def _clear_layout(self, layout: QtWidgets.QLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            elif item.layout():
+                self._clear_layout(item.layout())  # type: ignore[arg-type]
+
+    def _update_overall_state(self) -> None:
+        total_missing = 0
+        for key in ("models", "custom_nodes"):
+            widget_info = self._issue_widgets.get(key) or {}
+            rows = widget_info.get("rows") or {}
+            for row_info in rows.values():
+                if row_info.get("resolved"):
+                    continue
+                total_missing += 1
+
+        if self._header_subtitle:
+            subtitle_text = "All issues resolved" if total_missing == 0 else f"{total_missing} issue(s) need attention"
+            self._header_subtitle.setText(subtitle_text)
+        if self._header_title:
+            self._header_title.setText("Validation Successful" if total_missing == 0 else "Validation Failed")
+        if self._header_icon:
+            icon_name = "header_success" if total_missing == 0 else "header_error"
+            self._header_icon.setPixmap(_build_icon(icon_name).pixmap(40, 40))
+
+        if self._success_subtitle:
+            self._success_subtitle.setText("All systems operational")
+
+        if self._stack:
+            target = 1 if total_missing == 0 else 0
+            self._stack.setCurrentIndex(target)
+
+    def _auto_resolve_all(self) -> None:
+        if not self._auto_resolve_button:
+            return
+        self._auto_resolve_button.setText("Resolving...")
+        self._auto_resolve_button.setEnabled(False)
+        QtWidgets.QApplication.processEvents()
+        for key in ("custom_nodes", "models"):
+            self._handle_auto_resolve(key)
+        self._auto_resolve_button.setText("✨ Auto-resolve All")
+        self._auto_resolve_button.setEnabled(True)
+        self._populate_sections()
+        self._update_overall_state()
+
 
     def _load_cached_resolutions(self) -> None:
         if not self._workflow_folder:
@@ -839,6 +1510,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 status_label.setStyleSheet("font-weight: bold; color: #228B22;")
             issue["summary"] = "All required model files located."
             issue["details"] = []
+        self._update_overall_state()
 
     def _refresh_custom_nodes_issue_status(self) -> None:
         issue = self._issue_lookup.get("custom_nodes")
@@ -878,6 +1550,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             else:
                 summary_label.setStyleSheet("font-weight: bold;")
         issue["summary"] = summary_text
+        self._update_overall_state()
 
 
     def _persist_resolved_cache(self) -> None:
@@ -1127,6 +1800,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     pass
                 button.update()
                 button.repaint()
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.mark_as_successful(row_info.get("success_text") or status_text)
         row_info["resolved"] = True
         if isinstance(row_info, dict):
             if workflow_value:
@@ -1163,6 +1839,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             f"row={row} remaining_missing={len(missing_after) if isinstance(missing_after, list) else 'unknown'} "
             f"issue_ok={issue_info.get('ok') if isinstance(issue_info, dict) else 'unknown'}"
         )
+        self._update_overall_state()
 
     def _apply_model_override(self, original_value: str, new_value: str) -> Tuple[bool, str]:
         original_value = (original_value or "").strip()
@@ -1657,10 +2334,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if issue_key == "models":
             result = resolve_missing_models(data, self._comfy_path)
             self._report_resolution(issue_key, result)
+            self._refresh_models_issue_status()
         elif issue_key == "custom_nodes":
             dependencies = self._load_dependencies()
             result = resolve_missing_custom_nodes(data, self._comfy_path, dependencies)
             self._report_resolution(issue_key, result)
+            self._refresh_custom_nodes_issue_status()
+        self._update_overall_state()
 
     def _handle_model_auto_resolve(self, row: int) -> None:
         widget_info = self._issue_widgets.get("models")
@@ -1670,17 +2350,28 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         row_info = rows.get(row)
         if not row_info or row_info.get("resolved"):
             return
+        issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
-        if button:
+        if isinstance(issue_row, IssueRow):
+            issue_row.start_install_animation()
+        if button and button is not getattr(issue_row, "btn_resolve", None):
             button.setEnabled(False)
         try:
             resolved = self._resolve_model_entry(row, row_info)
-            if not resolved and button:
+            if isinstance(issue_row, IssueRow):
+                if resolved:
+                    issue_row.mark_as_successful(row_info.get("success_text"))
+                else:
+                    issue_row.reset_to_idle()
+            elif button and not resolved:
                 button.setEnabled(True)
         except Exception as exc:  # pragma: no cover - defensive guard
-            if button:
+            if isinstance(issue_row, IssueRow):
+                issue_row.reset_to_idle()
+            elif button:
                 button.setEnabled(True)
             QtWidgets.QMessageBox.warning(self, "Auto Resolve Failed", str(exc))
+        self._update_overall_state()
 
     def _handle_custom_node_auto_resolve(self, row: int) -> None:
         widget_info = self._issue_widgets.get("custom_nodes")
@@ -1690,8 +2381,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         row_info = rows.get(row)
         if not row_info or row_info.get("resolved"):
             return
+        issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
-        if button:
+        if isinstance(issue_row, IssueRow):
+            issue_row.start_install_animation()
+        if button and button is not getattr(issue_row, "btn_resolve", None):
             button.setEnabled(False)
         try:
             if self._resolve_custom_node_entry(row, row_info):
@@ -1714,25 +2408,32 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         if isinstance(pkg_item, QtWidgets.QTableWidgetItem):
                             pkg_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
                     # Disable any buttons (header row)
-                    cell_button = table.cellWidget(r_idx, 3)
-                    if isinstance(cell_button, QtWidgets.QPushButton):
-                        cell_button.setText("Resolved")
-                        cell_button.setEnabled(False)
-                        cell_button.setStyleSheet(
+                        cell_button = table.cellWidget(r_idx, 3)
+                        if isinstance(cell_button, QtWidgets.QPushButton):
+                            cell_button.setText("Resolved")
+                            cell_button.setEnabled(False)
+                            cell_button.setStyleSheet(
                             "QPushButton {"
                             " background-color: #228B22;"
                             " color: white;"
                             " border-radius: 4px;"
-                            " padding: 2px 8px;"
-                            " }"
-                        )
+                                " padding: 2px 8px;"
+                                " }"
+                            )
+                if isinstance(issue_row, IssueRow):
+                    issue_row.mark_as_successful(row_info.get("success_text"))
                 self._refresh_custom_nodes_issue_status()
             elif button:
                 button.setEnabled(True)
+                if isinstance(issue_row, IssueRow):
+                    issue_row.reset_to_idle()
         except Exception as exc:  # pragma: no cover - defensive guard
-            if button:
+            if isinstance(issue_row, IssueRow):
+                issue_row.reset_to_idle()
+            elif button:
                 button.setEnabled(True)
             QtWidgets.QMessageBox.warning(self, "Custom Node Resolve Failed", str(exc))
+        self._update_overall_state()
 
     def _resolve_model_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
         reference = row_info.get("reference") or {}
@@ -2001,6 +2702,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 " }"
             )
 
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.mark_as_successful(row_info.get("success_text") or "Installed")
         row_info["resolved"] = True
 
         node_name = row_info.get("node_name")
@@ -2050,6 +2754,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._append_issue_note("custom_nodes", note)
 
         self._refresh_custom_nodes_issue_status()
+        self._update_overall_state()
         return False
 
     def _report_resolution(self, issue_key: str, result: ResolutionResult) -> None:
@@ -2092,8 +2797,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return
         label = QtWidgets.QLabel(message)
         label.setWordWrap(True)
-        frame: QtWidgets.QFrame = widget_info["frame"]
-        frame.layout().addWidget(label)
+        frame = widget_info.get("frame")
+        if isinstance(frame, QtWidgets.QFrame) and frame.layout():
+            frame.layout().addWidget(label)
+            return
+        if self._issues_layout:
+            self._issues_layout.addWidget(label)
 
     def _load_dependencies(self) -> List[Dict[str, Any]]:
         if self._dependencies_cache is not None:

@@ -1,0 +1,9 @@
+import sys, importlib, os, runpy
+repo = r"C:\Users\kien\git\Charon"
+if repo not in sys.path:
+    sys.path.insert(0, repo)
+importlib.invalidate_caches()
+for name in list(sys.modules):
+    if name.split('.', 1)[0] == "charon":
+        sys.modules.pop(name, None)
+runpy.run_path(os.path.join(repo, "main.py"), run_name="__main__")
