@@ -1,0 +1,552 @@
+{
+  "id": "4d02e399-1277-44ef-8de9-dae4d25d45e0",
+  "revision": 0,
+  "last_node_id": 34,
+  "last_link_id": 32,
+  "nodes": [
+    {
+      "id": 21,
+      "type": "SaveImage",
+      "pos": [
+        1562.7689208984375,
+        849.20849609375
+      ],
+      "size": [
+        270,
+        270
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 25
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    },
+    {
+      "id": 1,
+      "type": "rgb2x",
+      "pos": [
+        914.5095825195312,
+        809.2988891601562
+      ],
+      "size": [
+        270,
+        130
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 29
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfyui_rgbx_wrapper",
+        "ver": "06fdd728252588839f2bfad5d9a3567a2ba7c2e7",
+        "Node name for S&R": "rgb2x",
+        "aux_id": "toyxyz/ComfyUI_rgbx_Wrapper"
+      },
+      "widgets_values": [
+        "normal",
+        752961780458644,
+        "randomize",
+        50
+      ]
+    },
+    {
+      "id": 30,
+      "type": "GetNode",
+      "pos": [
+        644.5932006835938,
+        812.5311889648438
+      ],
+      "size": [
+        210,
+        60
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            29
+          ]
+        }
+      ],
+      "title": "Get_CR_input_image",
+      "properties": {},
+      "widgets_values": [
+        "CR_input_image"
+      ],
+      "color": "#2a363b",
+      "bgcolor": "#3f5159"
+    },
+    {
+      "id": 26,
+      "type": "LoadImage",
+      "pos": [
+        631.1478271484375,
+        972.3536987304688
+      ],
+      "size": [
+        274.080078125,
+        314.00006103515625
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            26
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "tmp4skq_3u7.png",
+        "image"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "GetNode",
+      "pos": [
+        937.7155151367188,
+        1332.0770263671875
+      ],
+      "size": [
+        210,
+        60
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [
+            31
+          ]
+        }
+      ],
+      "title": "Get_CR_input_mask",
+      "properties": {},
+      "widgets_values": [
+        "CR_input_mask"
+      ],
+      "color": "#1c5715",
+      "bgcolor": "#1f401b"
+    },
+    {
+      "id": 28,
+      "type": "LoadImageMask",
+      "pos": [
+        22.40996551513672,
+        1322.4658203125
+      ],
+      "size": [
+        274.080078125,
+        318
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40",
+        "Node name for S&R": "LoadImageMask"
+      },
+      "widgets_values": [
+        "062225_174636_flux_lowRes_00001_.png",
+        "alpha",
+        "image"
+      ]
+    },
+    {
+      "id": 29,
+      "type": "SetNode",
+      "pos": [
+        362.6741027832031,
+        811.3394165039062
+      ],
+      "size": [
+        210,
+        60
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "link": 28
+        }
+      ],
+      "outputs": [
+        {
+          "name": "*",
+          "type": "*",
+          "links": null
+        }
+      ],
+      "title": "Set_CR_input_image",
+      "properties": {
+        "previousName": "CR_input_image"
+      },
+      "widgets_values": [
+        "CR_input_image"
+      ],
+      "color": "#2a363b",
+      "bgcolor": "#3f5159"
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        20.106786727905273,
+        812.1635131835938
+      ],
+      "size": [
+        274.080078125,
+        314
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            28
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "20250708_1214_Realistic Living Room Transformation_remix_01jznq9wqnfh7apb8mzg5a0kxe.png",
+        "image"
+      ]
+    },
+    {
+      "id": 31,
+      "type": "SetNode",
+      "pos": [
+        364.80841064453125,
+        1324.2108154296875
+      ],
+      "size": [
+        210,
+        60
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "link": 32
+        }
+      ],
+      "outputs": [
+        {
+          "name": "*",
+          "type": "*",
+          "links": null
+        }
+      ],
+      "title": "Set_CR_input_mask",
+      "properties": {
+        "previousName": "CR_input_mask"
+      },
+      "widgets_values": [
+        "CR_input_mask"
+      ],
+      "color": "#1c5715",
+      "bgcolor": "#1f401b"
+    },
+    {
+      "id": 25,
+      "type": "ImageCompositeMasked",
+      "pos": [
+        1243.5462646484375,
+        974.0872192382812
+      ],
+      "size": [
+        270,
+        146
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "destination",
+          "type": "IMAGE",
+          "link": 24
+        },
+        {
+          "name": "source",
+          "type": "IMAGE",
+          "link": 26
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 31
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            25
+          ]
+        }
+      ],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfy-core",
+        "ver": "0.3.40",
+        "Node name for S&R": "ImageCompositeMasked"
+      },
+      "widgets_values": [
+        0,
+        50,
+        false
+      ]
+    },
+    {
+      "id": 34,
+      "type": "CreateShapeMask",
+      "pos": [
+        33.55475616455078,
+        1714.1365966796875
+      ],
+      "size": [
+        270,
+        270
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": [
+            32
+          ]
+        },
+        {
+          "name": "mask_inverted",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "cnr_id": "comfyui-kjnodes",
+        "ver": "9d7af919b91838fb22e31ad0107a6ddcf8bd7f3f",
+        "Node name for S&R": "CreateShapeMask"
+      },
+      "widgets_values": [
+        "circle",
+        1,
+        256,
+        256,
+        0,
+        512,
+        512,
+        128,
+        128
+      ]
+    }
+  ],
+  "links": [
+    [
+      24,
+      1,
+      0,
+      25,
+      0,
+      "IMAGE"
+    ],
+    [
+      25,
+      25,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      26,
+      26,
+      0,
+      25,
+      1,
+      "IMAGE"
+    ],
+    [
+      28,
+      3,
+      0,
+      29,
+      0,
+      "*"
+    ],
+    [
+      29,
+      30,
+      0,
+      1,
+      0,
+      "IMAGE"
+    ],
+    [
+      31,
+      33,
+      0,
+      25,
+      2,
+      "MASK"
+    ],
+    [
+      32,
+      34,
+      0,
+      31,
+      0,
+      "MASK"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7627768444385489,
+      "offset": [
+        659.143861476783,
+        -1015.6230961146837
+      ]
+    },
+    "frontendVersion": "1.21.7"
+  },
+  "version": 0.4
+}

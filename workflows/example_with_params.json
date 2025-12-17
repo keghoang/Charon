@@ -1,0 +1,48 @@
+{
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    }
+  },
+  "4": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 12345,
+      "steps": 20,
+      "cfg": 7.0,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "_nuke_expose": true,
+      "_nuke_params": {
+        "steps": {"type": "int", "min": 1, "max": 50, "default": 20, "label": "Sampling Steps"},
+        "cfg": {"type": "float", "min": 1.0, "max": 20.0, "default": 7.0, "label": "CFG Scale"},
+        "seed": {"type": "int", "default": 12345, "label": "Seed"}
+      }
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "beautiful scenery",
+      "clip": ["6", 0],
+      "_nuke_expose": true,
+      "_nuke_params": {
+        "text": {"type": "string", "default": "beautiful scenery", "label": "Positive Prompt"}
+      }
+    }
+  },
+  "6": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": ["4", 0]
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "1": {
+    "inputs": {
+      "aov": "albedo",
+      "seed": 677912913805145,
+      "steps": 50,
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "rgb2x",
+    "_meta": {
+      "title": "rgb2x"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "20250708_1214_Realistic Living Room Transformation_remix_01jznq9wqnfh7apb8mzg5a0kxe.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "21": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}
