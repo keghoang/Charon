@@ -1925,6 +1925,7 @@ QPushButton#NewWorkflowButton:pressed {{
     
     def _on_folders_loaded(self, folders):
         """Handle loaded folders from async loader."""
+        print(f"[DEBUG] _on_folders_loaded called with {len(folders)} folders")
         user_slug = get_current_user_slug()
         user_dir_exists = False
         if user_slug and self.current_base and os.path.isdir(self.current_base):
@@ -1956,13 +1957,15 @@ QPushButton#NewWorkflowButton:pressed {{
         # Update folder panel
         self.folder_panel.update_folders(display_folders)
 
+        # Always apply folder compatibility check to update colors
+        self._apply_folder_compatibility_async(display_folders)
+
         # Prefer restoring a pending selection (e.g., during refresh) to avoid flicker
         preferred = self._pending_folder_selection
         self._pending_folder_selection = None
         if preferred and preferred in display_folders:
             self.folder_panel.select_folder(preferred)
             return
-        self._apply_folder_compatibility_async(display_folders)
 
         # Prefer selecting the user's folder if nothing is selected yet
         if not self.folder_panel.get_selected_folder() and user_slug and user_dir_exists:
@@ -1979,7 +1982,9 @@ QPushButton#NewWorkflowButton:pressed {{
 
     def _apply_folder_compatibility_async(self, folder_names):
         """Apply compatibility colors without blocking the UI thread."""
+        print(f"[DEBUG] _apply_folder_compatibility_async called")
         if not self.current_base or not os.path.isdir(self.current_base):
+            print(f"[DEBUG] current_base invalid, returning")
             return
 
         cache_manager = get_cache_manager()
@@ -1994,16 +1999,21 @@ QPushButton#NewWorkflowButton:pressed {{
             cache_key = f"folder_nonempty_v2:{folder_path}"
             cached = cache_manager.get_cached_data(cache_key, max_age_seconds=600)
             if cached is not None:
+                print(f"[DEBUG] Cache hit for {folder_name}: {cached}")
                 compatibility[folder_name] = bool(cached)
             else:
+                print(f"[DEBUG] Cache miss for {folder_name}")
                 pending.append((folder_name, folder_path, cache_key))
 
         if compatibility:
+            print(f"[DEBUG] Applying cached compatibility: {compatibility}")
             self.folder_panel.apply_compatibility(compatibility)
 
         if not pending:
+            print(f"[DEBUG] No pending folders")
             return
 
+        print(f"[DEBUG] Submitting {len(pending)} folders for probing")
         self._folder_probe_generation += 1
         generation = self._folder_probe_generation
 
@@ -2038,16 +2048,12 @@ QPushButton#NewWorkflowButton:pressed {{
         if not results:
             return
 
-        def apply_results():
-            if generation != self._folder_probe_generation:
-                return
-            self.folder_panel.apply_compatibility(results)
-
-        QtCore.QMetaObject.invokeMethod(
-            self,
-            lambda: apply_results(),
-            QtCore.Qt.QueuedConnection,
-        )
+        # Check if generation is still current before applying
+        if generation != self._folder_probe_generation:
+            return
+        
+        # Call directly - we're already on the main thread via the callback
+        self.folder_panel.apply_compatibility(results)
 
     def on_refresh_clicked(self):
         """Handle public refresh request."""

@@ -532,7 +532,6 @@ class FolderTableView(QtWidgets.QTableView):
         QTableView {
             background: #262a2e;
             alternate-background-color: #1f2226;
-            color: #f4f4f5;
             selection-background-color: #84a8de;
             selection-color: #0f1114;
             border: none;

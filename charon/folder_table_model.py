@@ -50,13 +50,17 @@ class FolderTableModel(QtCore.QAbstractTableModel):
             return folder.name
             
         elif role == Qt.ForegroundRole:
-            # Special folders get default color
+            # Special folders get default color (white)
             if folder.is_special:
-                return None
+                return QtGui.QBrush(QtGui.QColor("#ffffff"))
                 
             # Check compatibility using cached state
-            if not folder.is_compatible:
-                color = QtGui.QColor("#95a5a6")  # Default gray
+            if folder.is_compatible:
+                # Compatible (non-empty) folders get white text
+                return QtGui.QBrush(QtGui.QColor("#ffffff"))
+            else:
+                # Incompatible (empty) folders get gray text
+                color = QtGui.QColor("#95a5a6")
                 return QtGui.QBrush(apply_incompatible_opacity(color))
                 
         elif role == Qt.FontRole:
@@ -106,7 +110,9 @@ class FolderTableModel(QtCore.QAbstractTableModel):
                     changed = True
         
         if changed:
+            # Sort items first (this will emit layoutChanged)
             self.sortItems()
+            # Then emit dataChanged to ensure colors update
             self.dataChanged.emit(
                 self.index(0, 0),
                 self.index(len(self.folders) - 1, 0)

@@ -119,6 +119,8 @@ class FolderPanel(QtWidgets.QWidget):
         selected = self.get_selected_folder()
         current_index = self.folder_view.currentIndex()
         self.folder_model.update_compatibility(compatibility_map)
+        # Force viewport to update colors
+        self.folder_view.viewport().update()
         # If the current selection is still valid, avoid re-emitting
         if selected and current_index.isValid():
             current = self.folder_model.get_folder_at_row(current_index.row())
