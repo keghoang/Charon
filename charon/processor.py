@@ -1113,6 +1113,7 @@ def _run_3d_texturing_step2_logic(
     for idx, (cam_index, view_node) in enumerate(camera_views):
         progress_base = 0.2 + (0.8 * (idx / len(camera_views)))
         update_progress(progress_base, f"Processing view {idx+1}/{len(camera_views)}")
+        log_debug(f"Starting execution for camera view {idx}...")
         
         # Render View
         view_path = os.path.join(temp_dir, f'step2_view_{idx}_{str(uuid.uuid4())[:8]}.png').replace('\\', '/')
@@ -1129,6 +1130,7 @@ def _run_3d_texturing_step2_logic(
         prompt_id = comfy_client.submit_workflow(prompt)
         if not prompt_id:
             raise Exception("Failed to submit workflow to ComfyUI")
+        log_debug(f"Submitted view {idx}, prompt_id: {prompt_id}")
             
         # Wait for result (Simplified wait loop)
         output_file = _wait_for_single_image(comfy_client, prompt_id, timeout=300)
