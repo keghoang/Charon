@@ -293,6 +293,9 @@ async def main():
         "missing": [],
         "registered_count": 0,
         "nodepack_count": 0,
+        "missing_models": [],
+        "model_paths": {},
+        "model_capture": {"invoked": False},
     }
 
     async with async_playwright() as p:
@@ -314,7 +317,69 @@ async def main():
             payload = await page.evaluate(
                 '''async ({ workflow, mode }) => {
                     const app = window.comfyAPI.app.app;
-                    await app.loadGraphData(workflow, true);
+
+                    const capturedModels = { items: null, paths: null, seen: false };
+                    const clone = (value) => {
+                        try {
+                            return JSON.parse(JSON.stringify(value));
+                        } catch (err) {
+                            return value;
+                        }
+                    };
+                    const captureMissing = (missingModels, paths) => {
+                        capturedModels.seen = true;
+                        if (capturedModels.items === null && Array.isArray(missingModels)) {
+                            capturedModels.items = missingModels.map((item) => ({ ...(item || {}) }));
+                        }
+                        if (capturedModels.paths === null && paths && typeof paths === "object") {
+                            capturedModels.paths = clone(paths);
+                        }
+                    };
+                    const wrapMissing = (owner, attr) => {
+                        if (!owner || typeof owner[attr] !== "function") return;
+                        const original = owner[attr].bind(owner);
+                        owner[attr] = (...args) => {
+                            try {
+                                captureMissing(args[0], args[1]);
+                            } catch (err) {}
+                            try {
+                                return original(...args);
+                            } catch (err) {
+                                return undefined;
+                            }
+                        };
+                    };
+
+                    const dialogService = app?.dialogService || window.comfyAPI?.app?.dialogService || null;
+                    wrapMissing(dialogService, "showMissingModelsWarning");
+                    wrapMissing(app, "showMissingModelsError");
+                    wrapMissing(app, "showMissingModelsWarning");
+
+                    const graphData = await app.loadGraphData(workflow, true);
+
+                    let resolvedMissingModels = capturedModels.items;
+                    let resolvedPaths = capturedModels.paths;
+                    if (!resolvedMissingModels && graphData && Array.isArray(graphData?.missing_models)) {
+                        resolvedMissingModels = graphData.missing_models;
+                    } else if (!resolvedMissingModels && graphData && Array.isArray(graphData?.models_missing)) {
+                        resolvedMissingModels = graphData.models_missing;
+                    }
+                    if (!resolvedPaths && graphData && graphData?.model_paths && typeof graphData.model_paths === "object") {
+                        resolvedPaths = graphData.model_paths;
+                    }
+                    if (!resolvedMissingModels && typeof app.getMissingModelsFromGraph === "function") {
+                        try {
+                            const data = await app.getMissingModelsFromGraph(workflow);
+                            if (data) {
+                                if (!resolvedMissingModels && Array.isArray(data.missing)) {
+                                    resolvedMissingModels = data.missing.map((item) => ({ ...(item || {}) }));
+                                }
+                                if (!resolvedPaths && data.paths && typeof data.paths === "object") {
+                                    resolvedPaths = clone(data.paths);
+                                }
+                            }
+                        } catch (err) {}
+                    }
 
                     const registry = window.LiteGraph?.registered_node_types || {};
                     const registered = new Set(Object.keys(registry));
@@ -439,6 +504,11 @@ async def main():
                         registered_count: registered.size,
                         nodepack_count: Object.keys(nodePacks).length,
                         pack_meta: packMeta,
+                        missing_models: resolvedMissingModels || [],
+                        model_paths: resolvedPaths || {},
+                        model_capture: {
+                            invoked: capturedModels.seen || Array.isArray(resolvedMissingModels),
+                        },
                     };
                 }''',
                 {"workflow": workflow, "mode": MODE},
@@ -584,7 +654,9 @@ def validate_comfy_environment(
 
     env_info = resolve_comfy_environment(comfy_path)
     issues.append(_validate_environment(comfy_path, env_info))
-    issues.append(_validate_custom_nodes_browser(env_info, workflow_bundle))
+    custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(env_info, workflow_bundle)
+    issues.append(custom_nodes_issue)
+    issues.append(_validate_models_browser(env_info, workflow_bundle, browser_payload))
 
     finished = time.time()
     result = ValidationResult(
@@ -736,9 +808,10 @@ def _validate_custom_nodes_browser(
     workflow_bundle: Optional[Dict[str, Any]],
     *,
     mode: str = "cache",
-) -> ValidationIssue:
+) -> Tuple[ValidationIssue, Optional[Dict[str, Any]]]:
     python_exe = env_info.get("python_exe")
     comfy_dir = env_info.get("comfy_dir")
+    payload: Optional[Dict[str, Any]] = None
     if not python_exe or not os.path.exists(python_exe):
         return ValidationIssue(
             key="custom_nodes",
@@ -746,7 +819,7 @@ def _validate_custom_nodes_browser(
             ok=False,
             summary="Embedded python not found; cannot validate custom nodes.",
             details=["Repair the embedded python environment and retry."],
-        )
+        ), payload
     if not comfy_dir or not os.path.isdir(comfy_dir):
         return ValidationIssue(
             key="custom_nodes",
@@ -754,7 +827,7 @@ def _validate_custom_nodes_browser(
             ok=False,
             summary="ComfyUI directory missing; cannot validate custom nodes.",
             details=["Fix the ComfyUI path first."],
-        )
+        ), payload
 
     workflow = workflow_bundle.get("workflow") if isinstance(workflow_bundle, dict) else None
     if not isinstance(workflow, dict):
@@ -764,7 +837,7 @@ def _validate_custom_nodes_browser(
             ok=True,
             summary="No workflow selected; skipping custom node validation.",
             details=[],
-        )
+        ), payload
 
     temp_dir = tempfile.mkdtemp(prefix="charon_browser_validate_")
     try:
@@ -793,7 +866,7 @@ def _validate_custom_nodes_browser(
                 ok=False,
                 summary="Playwright validation timed out.",
                 details=["Ensure ComfyUI is running and reachable on 127.0.0.1:8188."],
-            )
+            ), payload
 
         stdout = completed.stdout.strip()
         stderr = completed.stderr.strip()
@@ -806,7 +879,7 @@ def _validate_custom_nodes_browser(
                 ok=False,
                 summary="Playwright validation failed.",
                 details=[detail],
-            )
+            ), payload
 
         try:
             payload = json.loads(stdout or "{}")
@@ -818,7 +891,7 @@ def _validate_custom_nodes_browser(
                 ok=False,
                 summary="Playwright validation returned invalid JSON.",
                 details=[stdout[:500]],
-            )
+            ), payload
 
         if payload.get("error"):
             return ValidationIssue(
@@ -828,7 +901,7 @@ def _validate_custom_nodes_browser(
                 summary="Playwright validation errored.",
                 details=[str(payload.get("error"))],
                 data=payload,
-            )
+            ), payload
 
         missing = payload.get("missing") or []
         registered = payload.get("registered_count")
@@ -922,7 +995,7 @@ def _validate_custom_nodes_browser(
                 summary=f"Missing {len(missing_nodes)} custom node(s).",
                 details=detail_lines,
                 data=data,
-            )
+            ), payload
 
         summary = "All custom nodes registered in the active ComfyUI session."
         if registered:
@@ -934,9 +1007,182 @@ def _validate_custom_nodes_browser(
             summary=summary,
             details=[],
             data=data,
-        )
+        ), payload
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _validate_models_browser(
+    env_info: Dict[str, Any],
+    workflow_bundle: Optional[Dict[str, Any]],
+    browser_payload: Optional[Dict[str, Any]],
+) -> ValidationIssue:
+    comfy_dir = env_info.get("comfy_dir")
+    python_exe = env_info.get("python_exe")
+    models_root = os.path.join(comfy_dir, "models") if comfy_dir else ""
+    data: Dict[str, Any] = {
+        "models_root": models_root,
+        "found": [],
+    }
+
+    if not python_exe or not os.path.exists(python_exe):
+        return ValidationIssue(
+            key="models",
+            label="Models available",
+            ok=False,
+            summary="Embedded python not found; cannot validate models.",
+            details=["Repair the embedded python environment and retry."],
+            data=data,
+        )
+    if not comfy_dir or not os.path.isdir(comfy_dir):
+        return ValidationIssue(
+            key="models",
+            label="Models available",
+            ok=False,
+            summary="ComfyUI directory missing; cannot validate models.",
+            details=["Fix the ComfyUI path first."],
+            data=data,
+        )
+
+    workflow = workflow_bundle.get("workflow") if isinstance(workflow_bundle, dict) else None
+    if not isinstance(workflow, dict):
+        return ValidationIssue(
+            key="models",
+            label="Models available",
+            ok=True,
+            summary="No workflow selected; skipping model validation.",
+            details=[],
+            data=data,
+        )
+
+    if not browser_payload:
+        return _validate_models(env_info, workflow_bundle)
+
+    capture_info = browser_payload.get("model_capture") if isinstance(browser_payload, dict) else {}
+    capture_invoked = bool(capture_info.get("invoked")) if isinstance(capture_info, dict) else False
+    missing_models = browser_payload.get("missing_models") if isinstance(browser_payload, dict) else None
+    if missing_models is None and not capture_invoked:
+        return _validate_models(env_info, workflow_bundle)
+
+    model_paths = browser_payload.get("model_paths") if isinstance(browser_payload, dict) else {}
+    if not isinstance(model_paths, dict):
+        model_paths = {}
+    normalized_paths: Dict[str, List[str]] = {}
+    for key, value in model_paths.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, (list, tuple, set)):
+            paths = [os.path.abspath(str(item)) for item in value if isinstance(item, str)]
+            normalized_paths[key] = paths
+    data["paths"] = normalized_paths
+    data["model_paths"] = normalized_paths
+    data["model_capture"] = capture_info if isinstance(capture_info, dict) else {}
+
+    if not isinstance(missing_models, list):
+        missing_models = []
+
+    missing_entries: List[Dict[str, Any]] = []
+    for model_entry in missing_models:
+        if not isinstance(model_entry, dict):
+            continue
+        raw_entry = dict(model_entry)
+        name_value = str(
+            raw_entry.get("name")
+            or raw_entry.get("path")
+            or raw_entry.get("file")
+            or ""
+        ).strip()
+        directory_value = str(raw_entry.get("directory") or raw_entry.get("folder") or "").strip()
+        folder_path = raw_entry.get("folder_path") or raw_entry.get("resolved_path") or raw_entry.get("path")
+
+        entry: Dict[str, Any] = {
+            "name": name_value,
+            "category": directory_value or None,
+            "node_type": raw_entry.get("node_type") or raw_entry.get("node"),
+            "raw": raw_entry,
+        }
+        url_value = raw_entry.get("url")
+        if isinstance(url_value, str) and url_value:
+            entry["url"] = url_value
+
+        attempted_dirs: List[str] = []
+        if isinstance(folder_path, str) and folder_path:
+            entry["folder_path"] = folder_path
+            entry["path"] = folder_path
+            attempted_dirs.append(folder_path)
+        if directory_value:
+            entry["category"] = directory_value
+            attempted_dirs.extend(normalized_paths.get(directory_value, []))
+            entry["attempted_categories"] = [directory_value]
+        if attempted_dirs:
+            entry["attempted_directories"] = [os.path.abspath(path) for path in attempted_dirs]
+        if raw_entry.get("directory_invalid") is True:
+            entry["directory_invalid"] = True
+
+        missing_entries.append(entry)
+
+    workflow_folder = workflow_bundle.get("folder") if isinstance(workflow_bundle, dict) else None
+    cached_resolved_entries: List[Dict[str, Any]] = []
+    if workflow_folder:
+        try:
+            cached_payload = load_validation_log(workflow_folder)
+            if isinstance(cached_payload, dict):
+                models_cache = cached_payload.get("models")
+                if isinstance(models_cache, dict):
+                    cached_entries = models_cache.get("resolved_entries") or []
+                    if isinstance(cached_entries, list):
+                        cached_resolved_entries = [
+                            entry for entry in cached_entries if isinstance(entry, dict)
+                        ]
+        except Exception:
+            cached_resolved_entries = []
+
+    if cached_resolved_entries:
+        data["resolved_entries"] = list(cached_resolved_entries)
+        found = data.get("found") or []
+        for entry in cached_resolved_entries:
+            path_value = entry.get("path")
+            if isinstance(path_value, str) and path_value and path_value not in found:
+                found.append(path_value)
+        data["found"] = found
+        missing_entries = _filter_missing_with_resolved_cache(missing_entries, cached_resolved_entries)
+
+    data["missing"] = missing_entries
+
+    if missing_entries:
+        detail_lines = []
+        for entry in missing_entries:
+            name_value = entry.get("name") or entry.get("folder_path") or "Model file"
+            directory_value = entry.get("category") or ""
+            folder_hint = entry.get("folder_path")
+            url_value = entry.get("url") or entry.get("raw", {}).get("url")
+            parts = [str(name_value)]
+            if directory_value:
+                parts.append(f"folder: {directory_value}")
+            if folder_hint:
+                parts.append(f"path: {folder_hint}")
+            if entry.get("directory_invalid"):
+                parts.append("directory invalid")
+            if url_value:
+                parts.append(f"url: {url_value}")
+            detail_lines.append(" | ".join(parts))
+        return ValidationIssue(
+            key="models",
+            label="Models available",
+            ok=False,
+            summary=f"Missing {len(missing_entries)} model file(s).",
+            details=detail_lines,
+            data=data,
+        )
+
+    return ValidationIssue(
+        key="models",
+        label="Models available",
+        ok=True,
+        summary="All required model files reported by ComfyUI.",
+        details=[],
+        data=data,
+    )
 
 
 def _validate_models(
