@@ -67,6 +67,7 @@
 - Dependencies must be installed into the ComfyUI bundle; `nodes.init_extra_nodes(init_custom_nodes=True)` expects a complete environment.
 - Preferences and caches persist under `%LOCALAPPDATA%\Charon\plugins\charon\`.
 - Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it reuses an existing ComfyUI on port 8188 when running and only launches a headless instance if the port is free.
+- Workflows that emit 3D outputs (e.g., `.glb`) are stored under the `_CHARON/3D` tree; `.glb` assets are auto-converted to `.obj` via `trimesh` using the ComfyUI embedded Python. On launch, Charon checks the ComfyUI env for `trimesh` and Playwright and prompts to install if missing. CharonRead nodes will use ReadGeo for these assets.
 
 ## Consolidation Status (2025-10-24)
 The legacy `charon_core` package has been retired. All runtime code now lives in `charon/`.

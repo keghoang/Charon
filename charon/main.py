@@ -66,9 +66,17 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     app = None
     if not QtWidgets.QApplication.instance():
         app = QtWidgets.QApplication(sys.argv)
-    
+
+    # Prompt for optional dependencies (playwright/trimesh) before building the window
+    try:
+        from .dependency_check import check_and_prompt
+
+        check_and_prompt(parent=None)
+    except Exception as exc:
+        system_error(f"Dependency check failed: {exc}")
+
     # Scripts now use dual execution model based on run_on_main metadata
-    
+
     # Use the centralized WindowManager to create the window
     window = WindowManager.create_window(
         host=detected_host,

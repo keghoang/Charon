@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -18,13 +19,16 @@ from .paths import (
     allocate_charon_output_path,
     get_default_comfy_launch_path,
     get_placeholder_image_path,
+    resolve_comfy_environment,
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
+from .comfy_client import ComfyUIClient
 from . import config, preferences
 from .node_factory import reset_charon_node_state
 from .utilities import get_current_user_slug, status_to_gl_color, status_to_tile_color
 
 CONTROL_VALUE_TOKENS = {"fixed", "increment", "decrement", "randomize"}
+MODEL_OUTPUT_EXTENSIONS = {".obj", ".fbx", ".abc", ".gltf", ".glb", ".usd", ".usdz"}
 
 
 def _load_parameter_specs(node) -> List[Dict[str, Any]]:
@@ -91,6 +95,60 @@ def _coerce_parameter_value(value_type: str, value: Any) -> Any:
     if value is None:
         return ""
     return str(value)
+
+
+def _ensure_trimesh():
+    """
+    Ensure trimesh is available in the current (Nuke) Python environment.
+    Installation is handled on Charon launch; if missing, instruct the user.
+    """
+    try:
+        import trimesh  # type: ignore
+
+        return trimesh
+    except ImportError as exc:
+        raise RuntimeError(
+            "GLB to OBJ conversion requires the 'trimesh' module in the Nuke Python environment. "
+            "Launch Charon and accept the dependency install prompt to add it."
+        ) from exc
+
+
+def _convert_glb_to_obj(glb_path: str, obj_path: str) -> str:
+    """Convert a GLB asset to OBJ using the ComfyUI embedded Python (trimesh)."""
+    comfy_path = _read_comfy_preferences_path()
+    if not comfy_path:
+        comfy_path = get_default_comfy_launch_path()
+    env = resolve_comfy_environment(comfy_path)
+    python_exe = env.get("python_exe")
+    if not python_exe or not os.path.exists(python_exe):
+        raise RuntimeError(
+            "ComfyUI embedded Python not found; cannot convert GLB to OBJ. "
+            "Set a valid ComfyUI launch path and reinstall dependencies."
+        )
+
+    try:
+        os.makedirs(os.path.dirname(obj_path), exist_ok=True)
+    except Exception:
+        pass
+
+    script = r"""
+import sys, os
+import trimesh
+glb_path, obj_path = sys.argv[1], sys.argv[2]
+scene = trimesh.load(glb_path, force="scene")
+if scene is None:
+    raise SystemExit(1)
+scene.export(obj_path)
+if not os.path.exists(obj_path):
+    raise SystemExit(2)
+"""
+    try:
+        subprocess.check_call([python_exe, "-c", script, glb_path, obj_path])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"GLB to OBJ conversion failed via ComfyUI Python: {exc}") from exc
+    if not os.path.exists(obj_path):
+        raise RuntimeError(f"OBJ export did not produce a file: {obj_path}")
+    return obj_path
 
 
 def _lookup_ui_nodes(ui_workflow: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -447,6 +505,14 @@ def _resolve_comfy_environment() -> Tuple[Optional[object], Optional[object], Op
         default_path = get_default_comfy_launch_path()
         if default_path and os.path.exists(default_path):
             comfy_path = default_path
+
+    if client is None:
+        try:
+            tentative_client = ComfyUIClient()
+            if tentative_client.test_connection():
+                client = tentative_client
+        except Exception:
+            client = None
 
     return window, client, comfy_path
 
@@ -1018,10 +1084,16 @@ def process_charonop_node():
         current_node_state = 'Ready'
 
         def iter_candidate_read_nodes():
+            candidates: List[Any] = []
             try:
-                return list(nuke.allNodes('Read'))
+                candidates.extend(list(nuke.allNodes('Read')))
             except Exception:
-                return []
+                pass
+            try:
+                candidates.extend(list(nuke.allNodes('ReadGeo2')))
+            except Exception:
+                pass
+            return candidates
 
         def read_node_parent_id(candidate):
             try:
@@ -1087,7 +1159,7 @@ def process_charonop_node():
                     fallback = nuke.toNode(str(fallback_name))
                 except Exception:
                     fallback = None
-                if fallback is not None and getattr(fallback, "Class", lambda: "")() == "Read":
+                if fallback is not None and getattr(fallback, "Class", lambda: "")() in {"Read", "ReadGeo2"}:
                     return fallback
             return None
 
@@ -2202,6 +2274,36 @@ def process_charonop_node():
                     base_value = 0.5 + per_batch_progress * batch_index
                     return min(base_value + per_batch_progress * local_clamped, 1.0)
 
+                def _select_output_artifact(outputs_map, prompt_lookup):
+                    """
+                    Extract the first available output artifact (image/file/mesh).
+                    Returns dict with filename, subfolder, type, extension, node_id, class_type.
+                    """
+                    if not isinstance(outputs_map, dict):
+                        return None
+                    for node_id, output_data in outputs_map.items():
+                        if not isinstance(output_data, dict):
+                            continue
+                        for key in ("images", "files", "meshes"):
+                            entries = output_data.get(key)
+                            if not isinstance(entries, list) or not entries:
+                                continue
+                            entry = entries[0]
+                            filename = entry.get("filename")
+                            if not filename:
+                                continue
+                            ext = (os.path.splitext(filename)[1] or "").lower()
+                            return {
+                                "filename": filename,
+                                "subfolder": entry.get("subfolder") or "",
+                                "type": entry.get("type") or "output",
+                                "extension": ext,
+                                "node_id": node_id,
+                                "class_type": (prompt_lookup.get(node_id) or {}).get("class_type") or "",
+                                "kind": key,
+                            }
+                    return None
+
                 for batch_index in range(batch_count):
                     seed_offset = batch_index * 9973
                     prompt_payload = copy.deepcopy(base_prompt)
@@ -2239,6 +2341,7 @@ def process_charonop_node():
                     )
 
                     while time.time() - start_time < timeout:
+                        status_str = None
                         if hasattr(comfy_client, 'get_progress_for_prompt'):
                             progress_val = comfy_client.get_progress_for_prompt(prompt_id)
                             if progress_val > 0:
@@ -2254,86 +2357,104 @@ def process_charonop_node():
                                     },
                                 )
 
-                        history = comfy_client.get_history(prompt_id)
-                        if history and prompt_id in history:
-                            history_data = history[prompt_id]
-                            status_str = history_data.get('status', {}).get('status_str')
-                            if status_str == 'success':
-                                outputs = history_data.get('outputs', {})
-                                if outputs:
-                                    output_filename = None
-                                    for node_id, node_data in base_prompt.items():
-                                        if node_data.get('class_type') == 'SaveImage' and node_id in outputs:
-                                            images = outputs[node_id].get('images', [])
-                                            if images:
-                                                output_filename = images[0].get('filename')
-                                                break
-                                    if not output_filename:
-                                        raise Exception('ComfyUI did not return an output filename')
-                                    update_progress(
-                                        _progress_for(batch_index, 0.9),
-                                        f'{batch_label}: downloading result',
-                                        extra={
+                            history = comfy_client.get_history(prompt_id)
+                            if history and prompt_id in history:
+                                history_data = history[prompt_id]
+                                status_str = history_data.get('status', {}).get('status_str')
+                                if status_str == 'success':
+                                    outputs = history_data.get('outputs', {})
+                                    if outputs:
+                                        artifact = _select_output_artifact(outputs, base_prompt)
+                                        if not artifact:
+                                            raise Exception('ComfyUI did not return an output file')
+                                        update_progress(
+                                            _progress_for(batch_index, 0.9),
+                                            f'{batch_label}: downloading result',
+                                            extra={
+                                                'prompt_id': prompt_id,
+                                                'batch_index': batch_index + 1,
+                                                'batch_total': batch_count,
+                                            },
+                                        )
+                                        raw_extension = artifact.get("extension") or ".png"
+                                        category = "3D" if raw_extension.lower() in MODEL_OUTPUT_EXTENSIONS else "2D"
+                                        allocated_output_path = allocate_charon_output_path(
+                                            charon_node_id,
+                                            _resolve_nuke_script_name(),
+                                            raw_extension,
+                                            user_slug=user_slug,
+                                            workflow_name=workflow_display_name,
+                                            category=category,
+                                        )
+                                        log_debug(f'Resolved output path: {allocated_output_path}')
+                                        success = comfy_client.download_file(
+                                            artifact["filename"],
+                                            allocated_output_path,
+                                            subfolder=artifact.get("subfolder", ""),
+                                            file_type=artifact.get("type", "output"),
+                                        )
+                                        if not success:
+                                            raise Exception('Failed to download result file from ComfyUI')
+
+                                        final_output_path = allocated_output_path
+                                        converted_from = None
+                                        if raw_extension.lower() == ".glb":
+                                            obj_target = os.path.splitext(allocated_output_path)[0] + ".obj"
+                                            log_debug(f'Converting GLB to OBJ: {allocated_output_path} -> {obj_target}')
+                                            final_output_path = _convert_glb_to_obj(allocated_output_path, obj_target)
+                                            converted_from = allocated_output_path
+
+                                        elapsed = time.time() - start_time
+                                        normalized_output_path = final_output_path.replace('\\', '/')
+                                        if category == "2D":
+                                            metadata_payload = {
+                                                'charon_node_id': charon_node_id,
+                                                'prompt_id': prompt_id,
+                                                'run_id': current_run_id,
+                                                'script_name': _resolve_nuke_script_name(),
+                                                'user': user_slug,
+                                                'workflow_path': workflow_path or '',
+                                                'timestamp': time.time(),
+                                                'batch_index': batch_index + 1,
+                                                'batch_total': batch_count,
+                                                'seed_offset': seed_offset,
+                                            }
+                                            embed_png_metadata(normalized_output_path, metadata_payload)
+                                            if workflow_data_str:
+                                                embed_png_workflow(normalized_output_path, workflow_data_str)
+                                        batch_entry = {
+                                            'batch_index': batch_index + 1,
+                                            'batch_total': batch_count,
+                                            'prompt_id': prompt_id,
+                                            'output_path': normalized_output_path,
+                                            'elapsed_time': elapsed,
+                                            'output_kind': category,
+                                            'original_filename': artifact.get("filename"),
+                                            'download_path': allocated_output_path.replace('\\', '/'),
+                                        }
+                                        if converted_from:
+                                            batch_entry['converted_from'] = converted_from.replace('\\', '/')
+                                        batch_outputs.append(batch_entry)
+                                        extra_payload = {
+                                            'output_path': normalized_output_path,
+                                            'elapsed_time': elapsed,
                                             'prompt_id': prompt_id,
                                             'batch_index': batch_index + 1,
                                             'batch_total': batch_count,
-                                        },
-                                    )
-                                    raw_extension = os.path.splitext(output_filename or "")[1] or ".png"
-                                    allocated_output_path = allocate_charon_output_path(
-                                        charon_node_id,
-                                        _resolve_nuke_script_name(),
-                                        raw_extension,
-                                        user_slug=user_slug,
-                                        workflow_name=workflow_display_name,
-                                        category="2D",
-                                    )
-                                    log_debug(f'Resolved output path: {allocated_output_path}')
-                                    success = comfy_client.download_image(output_filename, allocated_output_path)
-                                    if not success:
-                                        raise Exception('Failed to download result image from ComfyUI')
-                                    elapsed = time.time() - start_time
-                                    normalized_output_path = allocated_output_path.replace('\\', '/')
-                                    metadata_payload = {
-                                        'charon_node_id': charon_node_id,
-                                        'prompt_id': prompt_id,
-                                        'run_id': current_run_id,
-                                        'script_name': _resolve_nuke_script_name(),
-                                        'user': user_slug,
-                                        'workflow_path': workflow_path or '',
-                                        'timestamp': time.time(),
-                                        'batch_index': batch_index + 1,
-                                        'batch_total': batch_count,
-                                        'seed_offset': seed_offset,
-                                    }
-                                    embed_png_metadata(normalized_output_path, metadata_payload)
-                                    if workflow_data_str:
-                                        embed_png_workflow(normalized_output_path, workflow_data_str)
-                                    batch_entry = {
-                                        'batch_index': batch_index + 1,
-                                        'batch_total': batch_count,
-                                        'prompt_id': prompt_id,
-                                        'output_path': normalized_output_path,
-                                        'elapsed_time': elapsed,
-                                    }
-                                    batch_outputs.append(batch_entry)
-                                    extra_payload = {
-                                        'output_path': normalized_output_path,
-                                        'elapsed_time': elapsed,
-                                        'prompt_id': prompt_id,
-                                        'batch_index': batch_index + 1,
-                                        'batch_total': batch_count,
-                                        'batch_outputs': batch_outputs.copy(),
-                                    }
-                                    update_progress(
-                                        _progress_for(batch_index, 1.0),
-                                        f'{batch_label}: completed',
-                                        extra=extra_payload,
-                                    )
-                                    break
+                                            'batch_outputs': batch_outputs.copy(),
+                                            'output_kind': category,
+                                        }
+                                        update_progress(
+                                            _progress_for(batch_index, 1.0),
+                                            f'{batch_label}: completed',
+                                            extra=extra_payload,
+                                        )
+                                        break
                             elif status_str == 'error':
                                 error_msg = history_data.get('status', {}).get('status_message', 'Unknown error')
                                 raise Exception(f'ComfyUI failed: {error_msg}')
+                            else:
+                                status_str = None
                         time.sleep(1.0)
                     else:
                         raise Exception('Processing timed out')
@@ -2349,6 +2470,7 @@ def process_charonop_node():
                     'batch_total': batch_count,
                     'output_path': batch_outputs[-1]['output_path'],
                     'elapsed_time': batch_outputs[-1].get('elapsed_time', 0),
+                    'output_kind': batch_outputs[-1].get('output_kind'),
                 }
                 with open(result_file, 'w') as fp:
                     json.dump(result_data, fp)
@@ -2408,19 +2530,39 @@ def process_charonop_node():
                                     except Exception:
                                         reuse_existing = False
 
+                                    outputs = []
+                                    for entry in entries:
+                                        path = entry.get('output_path')
+                                        if path:
+                                            outputs.append(path)
+                                    if not outputs:
+                                        log_debug('No output paths available for Read update.', 'WARNING')
+                                        cleanup_files()
+                                        return
+
+                                    required_class = "ReadGeo2" if os.path.splitext(outputs[-1])[1].lower() in MODEL_OUTPUT_EXTENSIONS else "Read"
+
                                     read_node = find_linked_read_node()
                                     if read_node is not None and not reuse_existing:
                                         unlink_read_node(read_node)
                                         read_node = None
+                                    if read_node is not None:
+                                        try:
+                                            current_class = getattr(read_node, "Class", lambda: "")()
+                                        except Exception:
+                                            current_class = ""
+                                        if current_class != required_class:
+                                            unlink_read_node(read_node)
+                                            read_node = None
 
                                     if read_node is None:
                                         try:
-                                            read_node = nuke.createNode('Read')
+                                            read_node = nuke.createNode(required_class)
                                             read_node.setXpos(node_x)
                                             read_node.setYpos(node_y + 60)
                                             read_node.setSelected(True)
                                         except Exception as create_error:
-                                            log_debug(f'Failed to create Read node: {create_error}', 'ERROR')
+                                            log_debug(f'Failed to create CharonRead node: {create_error}', 'ERROR')
                                             cleanup_files()
                                             return
                                         read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
@@ -2443,16 +2585,6 @@ def process_charonop_node():
                                             pass
                                         log_debug('Reusing existing Read node for output update.')
 
-                                    outputs = []
-                                    for entry in entries:
-                                        path = entry.get('output_path')
-                                        if path:
-                                            outputs.append(path)
-                                    if not outputs:
-                                        log_debug('No output paths available for Read update.', 'WARNING')
-                                        cleanup_files()
-                                        return
-
                                     try:
                                         outputs_json = json.dumps(entries)
                                     except Exception as serialize_error:
@@ -2472,7 +2604,7 @@ def process_charonop_node():
                                     try:
                                         read_node['file'].setValue(outputs[default_index])
                                     except Exception as assign_error:
-                                        log_debug(f'Could not assign output path to Read node: {assign_error}', 'ERROR')
+                                        log_debug(f'Could not assign output path to CharonRead node: {assign_error}', 'ERROR')
 
                                     if outputs_knob is not None:
                                         try:
@@ -2618,10 +2750,15 @@ def recreate_missing_read_node():
         normalized = _normalize(read_id)
         if not normalized:
             return None
+        candidates = []
         try:
-            candidates = nuke.allNodes("Read")
+            candidates.extend(list(nuke.allNodes("Read")))
         except Exception:
-            candidates = []
+            pass
+        try:
+            candidates.extend(list(nuke.allNodes("ReadGeo2")))
+        except Exception:
+            pass
         for candidate in candidates:
             try:
                 candidate_id = candidate.metadata('charon/read_id')
@@ -2641,10 +2778,15 @@ def recreate_missing_read_node():
         normalized = _normalize(parent_id)
         if not normalized:
             return None
+        candidates = []
         try:
-            candidates = nuke.allNodes("Read")
+            candidates.extend(list(nuke.allNodes("Read")))
         except Exception:
-            candidates = []
+            pass
+        try:
+            candidates.extend(list(nuke.allNodes("ReadGeo2")))
+        except Exception:
+            pass
         for candidate in candidates:
             try:
                 parent_val = candidate.metadata('charon/parent_id')
@@ -2710,7 +2852,7 @@ def recreate_missing_read_node():
             candidate = nuke.toNode(read_hint)
         except Exception:
             candidate = None
-        if candidate is not None and getattr(candidate, "Class", lambda: "")() == "Read":
+        if candidate is not None and getattr(candidate, "Class", lambda: "")() in {"Read", "ReadGeo2"}:
             existing = candidate
     if existing is None and parent_id:
         existing = _find_read_by_parent(parent_id)
@@ -2767,15 +2909,17 @@ def recreate_missing_read_node():
             began_group = True
         except Exception:
             began_group = False
+    extension = os.path.splitext(normalized_output)[1].lower()
+    read_class = "ReadGeo2" if extension in MODEL_OUTPUT_EXTENSIONS else "Read"
     try:
-        read_node = nuke.createNode('Read', inpanel=False)
+        read_node = nuke.createNode(read_class, inpanel=False)
     except Exception as creation_error:
         if began_group and creator_group is not None:
             try:
                 creator_group.end()
             except Exception:
                 pass
-        nuke.message('Failed to create Read node: {0}'.format(creation_error))
+        nuke.message('Failed to create CharonRead node: {0}'.format(creation_error))
         return
     finally:
         if began_group and creator_group is not None:
@@ -2790,6 +2934,10 @@ def recreate_missing_read_node():
         pass
     try:
         read_node.setSelected(True)
+    except Exception:
+        pass
+    try:
+        read_node.setName("CharonRead")
     except Exception:
         pass
     try:

@@ -184,17 +184,27 @@ class ComfyUIClient:
         return False, None
 
     def download_image(self, filename, output_path):
+        return self.download_file(filename, output_path)
+
+    def download_file(self, filename, output_path, subfolder: str = "", file_type: str = "output"):
         try:
-            request = urllib.request.Request(f"{self.base_url}/view?filename={filename}")
+            params = urllib.parse.urlencode(
+                {
+                    "filename": filename,
+                    "subfolder": subfolder or "",
+                    "type": file_type or "output",
+                }
+            )
+            request = urllib.request.Request(f"{self.base_url}/view?{params}")
             with urllib.request.urlopen(request, timeout=30) as response:
                 if response.getcode() == 200:
                     with open(output_path, "wb") as handle:
                         handle.write(response.read())
                     return True
-                logger.error("Failed to download image: %s", response.getcode())
+                logger.error("Failed to download file: %s", response.getcode())
                 return False
         except Exception as exc:
-            logger.error("Failed to download image: %s", exc)
+            logger.error("Failed to download file: %s", exc)
             return False
 
     def process_workflow_with_image(self, workflow, image_path, output_dir=None):
