@@ -43,7 +43,7 @@ Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay unde
 - Preferences persist in `%LOCALAPPDATA%\Charon\plugins\charon\preferences.json`.
 
 ## 4. Developing and Testing
-- Use `python tools\populate_dummy_workflows.py` to seed sample workflows.
+- Sample workflows ship in-repo; duplicate from `workflows/` if you need a clean set.
 - Reload the panel in-place by clearing cached `charon.*` modules and re-running `main.py`.
 - Run the conversion smoke test:
   ```powershell

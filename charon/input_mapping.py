@@ -186,7 +186,7 @@ def _discover_with_external_process(
     if not python_exe or not comfy_dir or not os.path.exists(python_exe):
         return tuple()
 
-    script_path = Path(__file__).resolve().parents[1] / "tools" / "inspect_workflow_widgets.py"
+    script_path = Path(__file__).resolve().parents[1] / "inspect_workflow_widgets.py"
     if not script_path.exists():
         return tuple()
 
@@ -402,3 +402,4 @@ def _iter_workflow_nodes(
     for node_id, node in document.items():
         if isinstance(node, dict):
             yield str(node_id), node
+
