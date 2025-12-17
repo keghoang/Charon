@@ -561,22 +561,46 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._set_status("checking", False)
             return
 
-        QtWidgets.QMessageBox.information(
-            self,
-            "Restart ComfyUI",
-            "ComfyUI was launched outside of Charon. "
-            "Please restart it in the terminal window you originally used.",
-        )
-        self._restart_pending = False
+        # Externally launched instance: try graceful shutdown over HTTP, then relaunch via configured path.
+        self._restart_pending = True
+        self._set_status("restarting", False)
+        if self._send_shutdown_signal():
+            # If the external instance rebooted itself, just poll for connectivity instead of spawning another instance.
+            self._set_status("restarting", False)
+            QtCore.QTimer.singleShot(3000, lambda: self._check_connection(manual=True))
+        else:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Restart ComfyUI",
+                "Could not send a shutdown request to the running ComfyUI instance.\n"
+                "Close it manually, then click Restart again.",
+            )
+            self._restart_pending = False
+            self._set_status("checking", False)
 
     def _send_shutdown_signal(self) -> bool:
-        try:
-            req = urllib.request.Request(f"{self._DEFAULT_URL}/system/shutdown", method="POST")
-            with urllib.request.urlopen(req, timeout=5):
-                return True
-        except Exception as exc:
-            system_warning(f"ComfyUI shutdown request failed: {exc}")
-            return False
+        endpoints = [
+            ("POST", f"{self._DEFAULT_URL}/system/shutdown"),
+            ("POST", f"{self._DEFAULT_URL}/shutdown"),
+            ("GET", f"{self._DEFAULT_URL}/system/shutdown"),
+            ("GET", f"{self._DEFAULT_URL}/shutdown"),
+            ("GET", f"{self._DEFAULT_URL}/manager/reboot"),
+        ]
+        last_error = None
+        for method, url in endpoints:
+            try:
+                req = urllib.request.Request(url, method=method)
+                with urllib.request.urlopen(req, timeout=5):
+                    return True
+            except Exception as exc:
+                last_error = exc
+                # Manager reboot may close the connection before responding; treat connection reset as success.
+                msg = str(exc).lower()
+                if "/manager/reboot" in url and ("connection reset" in msg or "forcibly closed" in msg):
+                    return True
+                continue
+        system_warning(f"ComfyUI shutdown request failed: {last_error}")
+        return False
     def _terminate_managed_process(self) -> bool:
         process = self._managed_process
         if process is None:
