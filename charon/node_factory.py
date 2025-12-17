@@ -534,6 +534,7 @@ def _prepare_parameter_controls(nuke_module, parameters):
                 label,
                 value_type,
                 default,
+                raw_spec.get('choices'),
             )
             if knob is None:
                 continue
@@ -566,25 +567,37 @@ def _prepare_parameter_controls(nuke_module, parameters):
 
     return knobs, normalized
 
-def _create_parameter_knob(nuke_module, name, label, value_type, default):
+def _create_parameter_knob(nuke_module, name, label, value_type, default, choices=None):
     try:
-        if value_type == "boolean":
+        if choices and isinstance(choices, (list, tuple)) and len(choices) > 0:
+            knob = nuke_module.Enumeration_Knob(name, label, list(choices))
+            if default in choices:
+                knob.setValue(default)
+            else:
+                knob.setValue(choices[0])
+        elif value_type == "boolean":
             knob = nuke_module.Boolean_Knob(name, label)
             knob.setValue(1 if _coerce_bool(default) else 0)
         elif value_type == "integer":
-            knob = nuke_module.Int_Knob(name, label)
             coerced = _coerce_int(default)
-            knob.setValue(coerced)
+            # Try standard Int_Knob first
             try:
-                span = max(abs(coerced), 10)
-                min_val = coerced - span
-                max_val = coerced + span
-                if min_val == max_val:
-                    max_val += 1
-                knob.setSliderFlag(True)
-                knob.setRange(min_val, max_val)
+                knob = nuke_module.Int_Knob(name, label)
+                knob.setValue(coerced)
+                try:
+                    span = max(abs(coerced), 10)
+                    min_val = coerced - span
+                    max_val = coerced + span
+                    if min_val == max_val:
+                        max_val += 1
+                    knob.setSliderFlag(True)
+                    knob.setRange(min_val, max_val)
+                except Exception:
+                    pass
             except Exception:
-                pass
+                # Fallback for large integers (e.g. 64-bit seeds) that overflow Nuke's Int_Knob
+                knob = nuke_module.String_Knob(name, label)
+                knob.setValue(str(coerced))
         elif value_type == "float":
             knob = nuke_module.Double_Knob(name, label)
             coerced = _coerce_float(default)

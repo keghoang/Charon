@@ -8,6 +8,7 @@ import time
 import uuid
 import zlib
 import shutil
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 from .conversion_cache import (
@@ -377,11 +378,14 @@ def _apply_parameter_overrides(
     node,
     workflow_copy: Dict[str, Any],
     parameter_specs: List[Dict[str, Any]],
+    knob_values: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[str, str]]:
     """Write knob values into the converted prompt using stored bindings."""
     applied: List[Tuple[str, str]] = []
     if not parameter_specs or not isinstance(workflow_copy, dict):
         return applied
+    
+    overrides = knob_values or {}
 
     for spec in parameter_specs:
         if not isinstance(spec, dict):
@@ -414,13 +418,26 @@ def _apply_parameter_overrides(
         if knob is None:
             log_debug(f"Knob {knob_name} not found on node; skipping override", "WARNING")
             continue
-        try:
-            raw_value = knob.value()
-        except Exception as exc:
-            log_debug(f"Failed to read knob {knob_name}: {exc}", "WARNING")
-            continue
+            
+        if knob_name in overrides:
+            raw_value = overrides[knob_name]
+        else:
+            try:
+                raw_value = knob.value()
+            except Exception as exc:
+                log_debug(f"Failed to read knob {knob_name}: {exc}", "WARNING")
+                continue
 
         coerced = _coerce_parameter_value(spec.get("type") or "", raw_value)
+        
+        # If this is the control widget and we are handling logic client-side,
+        # force it to "fixed" so ComfyUI respects the seed we send.
+        if spec.get("attribute") == "control_after_generate":
+             # We assume client-side logic has already updated the seed knob if needed.
+             # By sending "fixed", we ensure Comfy uses that explicit seed.
+             coerced = "fixed"
+             log_debug(f"Forcing {api_input} to 'fixed' for API submission to respect client-side seed.")
+
         inputs[api_input] = coerced
         applied.append((api_node_id, api_input))
         log_debug(
@@ -812,6 +829,139 @@ def _apply_seed_offset(prompt: Dict[str, Any], records: List[Tuple[str, str, int
         if not isinstance(inputs, dict):
             continue
         inputs[key] = (base_value + offset) & 0xFFFFFFFF
+
+
+def _resolve_client_side_logic(node, parameter_specs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Execute client-side parameter logic (Seed Control) before submission.
+    Returns a dictionary of {knob_name: value} to overlap read values.
+    """
+    overrides = {}
+    if not parameter_specs:
+        return overrides
+
+    # Group specs by node_id
+    by_node = {}
+    for spec in parameter_specs:
+        node_id = spec.get('node_id')
+        if node_id:
+            by_node.setdefault(node_id, []).append(spec)
+
+    for node_id, specs in by_node.items():
+        seed_spec = None
+        control_spec = None
+        
+        for spec in specs:
+            knob_name = spec.get('knob')
+            if not knob_name:
+                continue
+            
+            # Identify by attribute name
+            attr = str(spec.get('attribute') or "").lower()
+            
+            # Standard ComfyUI seed parameter names
+            if attr in ('seed', 'noise_seed', 'seed_noise'):
+                 seed_spec = spec
+            # Standard ComfyUI control widget names
+            elif attr in ('control_after_generate', 'control', 'seed_control'):
+                 control_spec = spec
+        
+        if seed_spec and control_spec:
+            updates = _apply_seed_control(node, seed_spec, control_spec)
+            if updates:
+                overrides.update(updates)
+                
+    return overrides
+
+
+def _apply_seed_control(node, seed_spec, control_spec) -> Dict[str, Any]:
+    seed_knob_name = seed_spec.get('knob')
+    control_knob_name = control_spec.get('knob')
+    updates = {}
+    
+    try:
+        seed_knob = node.knob(seed_knob_name)
+        control_knob = node.knob(control_knob_name)
+    except Exception:
+        return updates
+
+    if not seed_knob or not control_knob:
+        return updates
+        
+    try:
+        raw_mode = control_knob.value()
+        # Handle Enumeration_Knob potentially returning index (float/int) instead of string
+        if isinstance(raw_mode, (int, float)):
+            try:
+                # Attempt to get the string label from the enumeration values
+                # This relies on the knob having a 'values' method or similar, which Nuke Python API varies on.
+                # Safer: assume standard order if index.
+                # But safer still: rely on Nuke casting?
+                # Actually, standard Nuke Enumeration_Knob.value() returns string name.
+                # Only if it's not setup right does it return index.
+                # Let's try to interpret common indices if string fails?
+                # No, let's just cast to string and clean.
+                mode = str(raw_mode)
+            except Exception:
+                mode = ""
+        else:
+            mode = str(raw_mode).lower().strip()
+    except Exception:
+        return updates
+    
+    # If mode is numeric (e.g. "3.0"), map it to the choices list if possible
+    # Choices order: fixed, increment, decrement, randomize
+    if mode.replace(".", "", 1).isdigit():
+        try:
+            idx = int(float(mode))
+            choices = ["fixed", "increment", "decrement", "randomize"]
+            if 0 <= idx < len(choices):
+                mode = choices[idx]
+        except Exception:
+            pass
+            
+    try:
+        current_seed = int(seed_knob.value())
+    except Exception:
+        current_seed = 0
+
+    log_debug(f"Seed control logic: mode='{mode}', current_seed={current_seed}")
+    
+    new_seed = current_seed
+    
+    if mode == 'fixed':
+        pass
+    elif mode == 'increment':
+        new_seed = current_seed + 1
+    elif mode == 'decrement':
+        new_seed = current_seed - 1
+    elif mode == 'randomize':
+        # Generate a random 15-digit integer (similar magnitude to user preference)
+        new_seed = random.randint(100_000_000_000_000, 999_999_999_999_999)
+        
+    if new_seed != current_seed:
+        # DATA: Store the new seed in updates so submission uses it immediately
+        updates[seed_knob_name] = str(new_seed)
+        
+        # UI: Queue a visual update for the user
+        def _force_redraw():
+            try:
+                # Re-setting the value in the main thread event loop helps wake up the UI
+                seed_knob.setValue(str(new_seed))
+                # Toggling visibility forces Nuke to repaint the widget layout
+                seed_knob.setVisible(False)
+                seed_knob.setVisible(True)
+            except Exception:
+                pass
+        try:
+            import nuke
+            nuke.executeInMainThread(_force_redraw)
+        except Exception:
+            pass
+
+        log_debug(f"Client-side logic: Calculated seed {current_seed} -> {new_seed} (Mode: {mode})")
+        
+    return updates
 
 
 def process_charonop_node():
@@ -2454,6 +2604,10 @@ def process_charonop_node():
                 else:
                     parameter_specs_local = parameter_specs
 
+                # Apply client-side logic (e.g. seed randomization)
+                # This returns explicit values to use, decoupling data from UI lag
+                parameter_overrides = _resolve_client_side_logic(node, parameter_specs_local)
+
                 if render_jobs:
                     update_progress(0.2, 'Uploading images', extra=conversion_extra or None)
                 else:
@@ -2464,6 +2618,7 @@ def process_charonop_node():
                     node,
                     workflow_copy,
                     parameter_specs_local,
+                    knob_values=parameter_overrides,
                 )
                 if applied_overrides:
                     log_debug(

@@ -32,6 +32,7 @@ class ExposableAttribute:
     preview: str
     aliases: Tuple[str, ...] = field(default_factory=tuple)
     node_default: Any = None
+    choices: Tuple[Any, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -343,6 +344,7 @@ def _aggregate_bindings(bindings, workflow_document):
             preview=_format_attribute_preview(binding.value),
             aliases=aliases,
             node_default=spec.default,
+            choices=spec.choices,
         )
 
     nodes: List[ExposableNode] = []

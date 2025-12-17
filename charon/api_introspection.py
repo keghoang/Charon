@@ -48,6 +48,22 @@ _WIDGET_TYPE_ALIASES: Dict[str, str] = {
 _CONTROL_WIDGET_SENTINELS = {"fixed", "increment", "decrement", "randomize"}
 
 
+def _is_type_mismatch(spec: NodeWidgetSpec, value: Any) -> bool:
+    """Return True if the value is structurally incompatible with the spec type."""
+    if spec.value_type in ("integer", "float", "number"):
+        if isinstance(value, str):
+            # "randomize" etc are definitely not numbers
+            if not value.replace(".", "", 1).isdigit():
+                # Exception: empty string might be coerced to 0, but "fixed" is mismatch
+                if not value:
+                    return False
+                # Exception: negative numbers
+                if value.startswith("-") and value[1:].replace(".", "", 1).isdigit():
+                    return False
+                return True
+    return False
+
+
 def get_node_widget_specs_from_schema(
     node_type: str,
     object_info: Dict[str, Any]
@@ -150,23 +166,59 @@ def map_node_widgets(
     # 1. Handle widgets_values (Editor format)
     widget_values = node_data.get("widgets_values")
     if isinstance(widget_values, list):
-        normalized_values = widget_values
-        # Filter control values if the counts mismatch
-        if len(widget_values) != len(specs):
-             normalized_values = _filter_control_widget_values(widget_values)
-        
-        # Safety: limit to shortest length
-        limit = min(len(specs), len(normalized_values))
-        for index in range(limit):
+        spec_idx = 0
+        val_idx = 0
+        total_specs = len(specs)
+        total_vals = len(widget_values)
+
+        while spec_idx < total_specs and val_idx < total_vals:
+            spec = specs[spec_idx]
+            val = widget_values[val_idx]
+
+            # Check for inserted control widget (frontend-only)
+            # If value is a control token (e.g. "randomize") BUT spec expects something else (e.g. INT),
+            # we infer this is an extra control widget.
+            if (
+                str(val) in _CONTROL_WIDGET_SENTINELS
+                and spec.name != "control_after_generate"
+                and _is_type_mismatch(spec, val)
+            ):
+                # Create synthetic spec for this control value
+                control_spec = NodeWidgetSpec(
+                    node_type=str(node_type),
+                    name="control_after_generate",
+                    value_type="string",
+                    section="inferred",
+                    index=-1,
+                    default="fixed",
+                    choices=("fixed", "increment", "decrement", "randomize"),
+                    config={},
+                )
+                bindings.append(
+                    NodeWidgetBinding(
+                        node_id=str(node_id),
+                        spec=control_spec,
+                        source="widgets_values",
+                        value=val,
+                        source_index=val_idx,
+                    )
+                )
+                # Consume value, retry spec
+                val_idx += 1
+                continue
+
+            # Normal mapping
             bindings.append(
                 NodeWidgetBinding(
                     node_id=str(node_id),
-                    spec=specs[index],
+                    spec=spec,
                     source="widgets_values",
-                    value=normalized_values[index],
-                    source_index=index,
+                    value=val,
+                    source_index=val_idx,
                 )
             )
+            spec_idx += 1
+            val_idx += 1
 
     # 2. Handle inputs (API format or hybrids)
     # In API format, widgets are named in 'inputs'.
@@ -219,30 +271,9 @@ def _is_scalar(value: Any) -> bool:
 
 
 def _filter_control_widget_values(values: List[Any]) -> List[Any]:
-    filtered: List[Any] = []
-    total = len(values)
-    skip_next = False
-    for index, value in enumerate(values):
-        if skip_next:
-            skip_next = False
-            continue
-            
-        if isinstance(value, str) and value in _CONTROL_WIDGET_SENTINELS:
-             continue
-
-        # Look ahead for sentinel
-        next_value = values[index + 1] if index + 1 < total else None
-        if isinstance(next_value, str) and next_value in _CONTROL_WIDGET_SENTINELS:
-            # This value is the seed/value being controlled by the sentinel? 
-            # In Comfy, the sentinel usually FOLLOWS the widget it controls (like seed + control_after_generate).
-            # Actually, in the list, it's [seed_value, "fixed"].
-            # The spec only asks for "seed". So we keep seed_value and drop "fixed".
-            filtered.append(value)
-            # We don't skip next loop iteration because the next iteration will see the sentinel and drop it.
-            continue
-            
-        filtered.append(value)
-    return filtered
+    # We no longer filter out control values (fixed, increment, etc.)
+    # because we want to expose them as valid parameters in Nuke.
+    return values
 
 
 def _iter_workflow_nodes(document: Dict[str, Any]) -> Iterable[Tuple[str, Dict[str, Any]]]:

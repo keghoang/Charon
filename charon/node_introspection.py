@@ -240,18 +240,6 @@ def _is_scalar(value: Any) -> bool:
 
 
 def _filter_control_widget_values(values: List[Any]) -> List[Any]:
-    """
-    Remove control-after-generate sentinel values from widget lists so positional
-    mapping stays aligned with node specs.
-    """
-    filtered: List[Any] = []
-    total = len(values)
-    for index, value in enumerate(values):
-        if isinstance(value, str) and value in _CONTROL_WIDGET_SENTINELS:
-            continue
-        next_value = values[index + 1] if index + 1 < total else None
-        if isinstance(next_value, str) and next_value in _CONTROL_WIDGET_SENTINELS:
-            filtered.append(value)
-            continue
-        filtered.append(value)
-    return filtered
+    # We no longer filter out control values (fixed, increment, etc.)
+    # because we want to expose them as valid parameters in Nuke.
+    return values

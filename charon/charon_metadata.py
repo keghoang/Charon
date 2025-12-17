@@ -184,14 +184,15 @@ def _normalize_parameters(values) -> List[Dict[str, Any]]:
         label = str(entry.get("label") or "").strip() or attribute
         value_type = str(entry.get("type") or "string").strip().lower() or "string"
         node_name = str(entry.get("node_name") or "").strip()
-        normalized.append(
-            {
-                "node_id": node_id,
-                "node_name": node_name,
-                "attribute": attribute,
-                "label": label,
-                "type": value_type,
-                "default": entry.get("default"),
-            }
-        )
+        spec = {
+            "node_id": node_id,
+            "node_name": node_name,
+            "attribute": attribute,
+            "label": label,
+            "type": value_type,
+            "default": entry.get("default"),
+        }
+        if "choices" in entry and isinstance(entry["choices"], (list, tuple)):
+            spec["choices"] = list(entry["choices"])
+        normalized.append(spec)
     return normalized

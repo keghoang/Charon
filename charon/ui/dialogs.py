@@ -22,7 +22,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import hashlib
 import json
 
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = 2
 _CACHE_FILENAME = "input_mapping_cache.json"
 _MEMORY_CACHE: Dict[str, Tuple[str, Tuple[ExposableNode, ...]]] = {}
 _ACTIVE_DISCOVERY_THREADS: List[QtCore.QThread] = []
@@ -111,6 +111,7 @@ def _serialize_candidates(candidates: Tuple[ExposableNode, ...]) -> List[Dict[st
                         "preview": attr.preview,
                         "aliases": list(attr.aliases or []),
                         "node_default": attr.node_default,
+                        "choices": list(attr.choices or []),
                     }
                     for attr in node.attributes or ()
                 ],
@@ -133,6 +134,7 @@ def _deserialize_candidates(serialized: List[Dict[str, Any]]) -> Tuple[Exposable
                     preview=str(attr_entry.get("preview") or ""),
                     aliases=tuple(attr_entry.get("aliases") or []),
                     node_default=attr_entry.get("node_default"),
+                    choices=tuple(attr_entry.get("choices") or []),
                 )
             )
         nodes.append(
@@ -939,6 +941,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                         "value_type": attribute.value_type,
                         "aliases": attribute.aliases,
                         "node_default": attribute.node_default,
+                        "choices": attribute.choices,
                     },
                 )
 
@@ -1057,6 +1060,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                     "default": resolved_default,
                     "value": data.get("value"),
                     "group": data.get("group") or node_item.text(0),
+                    "choices": data.get("choices") or [],
                 }
                 selected.append(spec)
         system_debug(f"Metadata dialog collected parameters: {selected}")
