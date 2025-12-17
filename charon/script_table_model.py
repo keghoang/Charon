@@ -193,6 +193,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 state = self._get_validation_state_for_script(script)
                 entry = self._get_validation_entry_for_script(script)
                 payload = entry.get("payload") if isinstance(entry, dict) else {}
+                if not isinstance(payload, dict):
+                    payload = {}
                 restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
                 phase = int(entry.get("phase", 0)) if isinstance(entry, dict) else 0
                 if restart_required:
@@ -209,6 +211,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 state = self._get_validation_state_for_script(script)
                 entry = self._get_validation_entry_for_script(script)
                 payload = entry.get("payload") if isinstance(entry, dict) else {}
+                if not isinstance(payload, dict):
+                    payload = {}
                 restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
                 if restart_required:
                     return "Fix Issue"
@@ -284,10 +288,11 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         normalized = self._normalize_path(script.path)
         entry = self.validation_states.get(normalized)
         if not isinstance(entry, dict):
-            entry = {"state": "idle", "phase": 0, "payload": None}
+            entry = {"state": "idle", "phase": 0, "payload": {}}
             self.validation_states[normalized] = entry
         entry.setdefault("state", "idle")
         entry.setdefault("phase", 0)
+        entry.setdefault("payload", {})
         if entry["state"] != "validating":
             entry["phase"] = 0
         return entry
