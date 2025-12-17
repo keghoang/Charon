@@ -1,5 +1,7 @@
 import time
 import psutil
+import subprocess
+import shutil
 from .qt_compat import QObject, Signal, QThread
 from .charon_logger import system_error, system_debug
 
@@ -13,12 +15,55 @@ except ImportError:
 class HardwareInfo:
     def __init__(self):
         self.pynvml_initialized = False
+        self.nvidia_smi_path = shutil.which("nvidia-smi")
+        
         if HAS_PYNVML:
             try:
                 pynvml.nvmlInit()
                 self.pynvml_initialized = True
             except Exception as e:
                 system_error(f"Failed to initialize pynvml: {e}")
+
+    def _get_gpu_stats_nvidia_smi(self):
+        """Fallback to nvidia-smi if pynvml is unavailable"""
+        if not self.nvidia_smi_path:
+            return []
+            
+        try:
+            # query: utilization.gpu [%], memory.total [MiB], memory.used [MiB]
+            cmd = [
+                self.nvidia_smi_path,
+                "--query-gpu=utilization.gpu,memory.total,memory.used",
+                "--format=csv,noheader,nounits"
+            ]
+            # Use a short timeout to prevent UI freeze
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, timeout=1.0
+            )
+            
+            stats = []
+            for i, line in enumerate(result.stdout.strip().splitlines()):
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) < 3:
+                    continue
+                    
+                util = float(parts[0])
+                total_mb = float(parts[1])
+                used_mb = float(parts[2])
+                
+                vram_percent = (used_mb / total_mb * 100) if total_mb > 0 else 0
+                
+                stats.append({
+                    "index": i,
+                    "utilization": util,
+                    "vram_percent": vram_percent,
+                    "vram_used_gb": used_mb / 1024,
+                    "vram_total_gb": total_mb / 1024,
+                    "temperature": 0 # Not queried to keep it simple
+                })
+            return stats
+        except Exception:
+            return []
 
     def get_status(self):
         # CPU
@@ -59,8 +104,11 @@ class HardwareInfo:
                         "temperature": temp
                     })
             except Exception as e:
-                # system_error(f"Error reading GPU stats: {e}")
-                pass
+                # Fallback if runtime error occurs
+                self.pynvml_initialized = False
+                gpu_stats = self._get_gpu_stats_nvidia_smi()
+        else:
+            gpu_stats = self._get_gpu_stats_nvidia_smi()
 
         return {
             "cpu_percent": cpu,
