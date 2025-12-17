@@ -15,6 +15,27 @@ def _generate_charon_node_id() -> str:
     return uuid.uuid4().hex[:12].lower()
 
 
+def _build_default_status_payload(
+    workflow_name: str,
+    workflow_path: str,
+    auto_import_enabled: bool,
+    node_id: str,
+) -> Dict[str, Any]:
+    """Return the default status payload stored on freshly created nodes."""
+    return {
+        "status": "Ready",
+        "progress": 0.0,
+        "message": "Awaiting processing",
+        "updated_at": time.time(),
+        "workflow_name": workflow_name,
+        "workflow_path": workflow_path or "",
+        "auto_import": bool(auto_import_enabled),
+        "runs": [],
+        "node_id": node_id,
+        "read_node_id": "",
+    }
+
+
 def create_charon_group_node(
     nuke,
     workflow_name,
@@ -251,18 +272,12 @@ def create_charon_group_node(
     color_debug_knob = nuke.Text_Knob("charon_color_debug", "Color Debug", debug_text)
     node.addKnob(color_debug_knob)
 
-    status_payload = {
-        "status": "Ready",
-        "progress": 0.0,
-        "message": "Awaiting processing",
-        "updated_at": time.time(),
-        "workflow_name": workflow_name,
-        "workflow_path": workflow_path or "",
-        "auto_import": bool(auto_import_default),
-        "runs": [],
-        "node_id": node_id_value,
-        "read_node_id": "",
-    }
+    status_payload = _build_default_status_payload(
+        workflow_name=workflow_name,
+        workflow_path=workflow_path or "",
+        auto_import_enabled=bool(auto_import_default),
+        node_id=node_id_value,
+    )
     try:
         node.setMetaData("charon/status_payload", json.dumps(status_payload))
     except Exception:
@@ -444,6 +459,161 @@ def _hide_knob(knob, nuke_module):
         knob.setFlag(nuke_module.INVISIBLE)
     except Exception:
         pass
+
+
+def reset_charon_node_state(node, node_id: str = "") -> str:
+    """
+    Reset the supplied CharonOp group to its default Ready state.
+
+    Returns the node identifier applied to the node (empty string on failure).
+    """
+    if node is None:
+        return ""
+
+    def _read_str_knob(knob_name: str) -> str:
+        try:
+            knob = node.knob(knob_name)
+        except Exception:
+            knob = None
+        if knob is None:
+            return ""
+        try:
+            value = knob.value()
+        except Exception:
+            return ""
+        if value is None:
+            return ""
+        try:
+            return str(value)
+        except Exception:
+            return ""
+
+    def _set_knob_value(knob_name: str, value) -> None:
+        try:
+            knob = node.knob(knob_name)
+        except Exception:
+            knob = None
+        if knob is None:
+            return
+        try:
+            knob.setValue(value)
+        except Exception:
+            pass
+
+    def _resolve_auto_import() -> bool:
+        try:
+            knob = node.knob("charon_auto_import")
+        except Exception:
+            knob = None
+        if knob is not None:
+            try:
+                raw_value = knob.value()
+            except Exception:
+                raw_value = None
+            if raw_value is not None:
+                if isinstance(raw_value, str):
+                    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+                try:
+                    return bool(int(raw_value))
+                except Exception:
+                    return bool(raw_value)
+        try:
+            meta_val = node.metadata("charon/auto_import")
+        except Exception:
+            meta_val = None
+        if isinstance(meta_val, str):
+            lowered = meta_val.strip().lower()
+            if lowered in {"0", "false", "off", "no"}:
+                return False
+            if lowered in {"1", "true", "on", "yes"}:
+                return True
+        elif meta_val is not None:
+            return bool(meta_val)
+        return True
+
+    node_id_value = (node_id or "").strip().lower()[:12]
+    if not node_id_value:
+        node_id_value = _generate_charon_node_id()
+
+    workflow_name = _read_str_knob("charon_workflow_name") or ""
+    if not workflow_name:
+        try:
+            meta_name = node.metadata("charon/workflow_name")
+        except Exception:
+            meta_name = ""
+        if meta_name:
+            workflow_name = str(meta_name)
+    if not workflow_name:
+        try:
+            workflow_name = node.name()
+        except Exception:
+            workflow_name = "Charon"
+
+    workflow_path = _read_str_knob("workflow_path") or ""
+    if not workflow_path:
+        try:
+            meta_path = node.metadata("charon/workflow_path")
+        except Exception:
+            meta_path = ""
+        if meta_path:
+            workflow_path = str(meta_path)
+
+    auto_import_enabled = _resolve_auto_import()
+    status_payload = _build_default_status_payload(
+        workflow_name=workflow_name,
+        workflow_path=workflow_path,
+        auto_import_enabled=auto_import_enabled,
+        node_id=node_id_value,
+    )
+    serialized_payload = json.dumps(status_payload)
+
+    # Update knobs
+    _set_knob_value("charon_status", "Ready")
+    _set_knob_value("charon_progress", 0.0)
+    _set_knob_value("charon_status_payload", serialized_payload)
+    _set_knob_value("charon_prompt_id", "")
+    _set_knob_value("charon_prompt_path", "")
+    _set_knob_value("charon_last_output", "")
+    _set_knob_value("charon_read_node_id", "")
+    _set_knob_value("charon_read_node", "")
+    _set_knob_value("charon_node_id", node_id_value)
+    _set_knob_value("charon_node_id_info", node_id_value)
+    _set_knob_value("charon_read_id_info", "Not linked")
+
+    ready_tile = status_to_tile_color("Ready")
+    ready_gl = status_to_gl_color("Ready") or (0.0, 0.0, 0.0)
+    debug_text = f"Status=Ready | tile=0x{ready_tile:08X} | gl=" + ",".join(f"{channel:.3f}" for channel in ready_gl)
+    _set_knob_value("charon_color_debug", debug_text)
+
+    try:
+        node["tile_color"].setValue(ready_tile)
+    except Exception:
+        pass
+    try:
+        node["gl_color"].setValue(ready_gl)
+    except Exception:
+        try:
+            node["gl_color"].setValue(list(ready_gl))
+        except Exception:
+            pass
+
+    # Persist metadata mirrors
+    try:
+        node.setMetaData("charon/status_payload", serialized_payload)
+    except Exception:
+        pass
+    try:
+        node.setMetaData("charon/workflow_name", workflow_name)
+        node.setMetaData("charon/workflow_path", workflow_path or "")
+        node.setMetaData("charon/node_id", node_id_value)
+        node.setMetaData("charon/read_node_id", "")
+        node.setMetaData("charon/read_node", "")
+        node.setMetaData("charon/last_output", "")
+        node.setMetaData("charon/prompt_hash", "")
+    except Exception:
+        pass
+
+    return node_id_value
 
 
 def _coerce_bool(value):
