@@ -212,14 +212,9 @@ def create_charon_group_node(
     batch_knob.setFlag(nuke.STARTLINE)
     node.addKnob(batch_knob)
 
-    recreate_knob = nuke.PyScript_Knob("charon_recreate_read", "Recreate Read Node")
-    recreate_knob.setCommand(recreate_script or "nuke.message('Recreate helper unavailable.')")
-    recreate_knob.setFlag(nuke.STARTLINE)
-    try:
-        recreate_knob.setEnabled(False)
-    except Exception:
-        pass
-    node.addKnob(recreate_knob)
+    actions_label = nuke.Text_Knob("charon_actions_header", "", "Actions")
+    actions_label.setFlag(nuke.STARTLINE)
+    node.addKnob(actions_label)
 
     process_knob = nuke.PyScript_Knob("process", "Execute")
     process_knob.setCommand(process_script)
@@ -230,8 +225,9 @@ def create_charon_group_node(
         pass
     node.addKnob(process_knob)
 
-    select_board_knob = nuke.PyScript_Knob("charon_focus_board", "Select in CharonBoard")
-    select_board_knob.setCommand(
+    select_board_knob = nuke.PyScript_Knob(
+        "charon_focus_board",
+        "Select in CharonBoard",
         "\n".join(
             (
                 "import nuke",
@@ -242,14 +238,80 @@ def create_charon_group_node(
                 "except Exception:",
                 "    pass",
             )
-        )
+        ),
     )
-    select_board_knob.setFlag(nuke.STARTLINE)
     try:
         select_board_knob.setTooltip("Highlight this node inside CharonBoard.")
     except Exception:
         pass
+    select_board_knob.clearFlag(nuke.STARTLINE)
     node.addKnob(select_board_knob)
+
+    open_input_knob = nuke.PyScript_Knob(
+        "charon_open_input_folder",
+        "Open Input Folder",
+        "\n".join(
+            (
+                "import os",
+                "import nuke",
+                "",
+                "node = nuke.thisNode()",
+                "workflow_path = ''",
+                "try:",
+                "    knob = node.knob('workflow_path')",
+                "    if knob:",
+                "        workflow_path = knob.value() or ''",
+                "except Exception:",
+                "    workflow_path = ''",
+                "if not workflow_path:",
+                "    try:",
+                "        workflow_path = node.metadata('charon/workflow_path') or ''",
+                "    except Exception:",
+                "        workflow_path = ''",
+                "",
+                "folder = workflow_path",
+                "if folder and os.path.isfile(folder):",
+                "    folder = os.path.dirname(folder)",
+                "",
+                "if not folder:",
+                "    nuke.message('Workflow path is not available for this CharonOp.')",
+                "else:",
+                "    folder = os.path.abspath(folder)",
+                "    if not os.path.isdir(folder):",
+                "        nuke.message('Input folder not found:\\n{}'.format(folder))",
+                "    else:",
+                "        opened = False",
+                "        try:",
+                "            from PySide6 import QtGui as _QtGui, QtCore as _QtCore  # type: ignore",
+                "            opened = _QtGui.QDesktopServices.openUrl(_QtCore.QUrl.fromLocalFile(folder))",
+                "        except Exception:",
+                "            try:",
+                "                from PySide2 import QtGui as _QtGui, QtCore as _QtCore  # type: ignore",
+                "                opened = _QtGui.QDesktopServices.openUrl(_QtCore.QUrl.fromLocalFile(folder))",
+                "            except Exception:",
+                "                opened = False",
+                "        if not opened:",
+                "            try:",
+                "                os.startfile(folder)",
+                "                opened = True",
+                "            except Exception:",
+                "                opened = False",
+                "        if not opened:",
+                "            nuke.message('Could not open folder:\\n{}'.format(folder))",
+            )
+        ),
+    )
+    open_input_knob.setTooltip("Open the workflow folder referenced by this CharonOp.")
+    open_input_knob.setFlag(nuke.STARTLINE)
+    node.addKnob(open_input_knob)
+
+    recreate_knob = nuke.PyScript_Knob("charon_recreate_read", "Recreate Read Node")
+    recreate_knob.setCommand(recreate_script or "nuke.message('Recreate helper unavailable.')")
+    try:
+        recreate_knob.setEnabled(False)
+    except Exception:
+        pass
+    node.addKnob(recreate_knob)
 
     reuse_knob = nuke.Boolean_Knob(
         "charon_reuse_output",
