@@ -2056,19 +2056,21 @@ QPushButton#NewWorkflowButton:pressed {{
     def _folder_has_visible_items(self, folder_path):
         """Check if a folder contains any visible subfolders or JSON files."""
         try:
-            with os.scandir(folder_path) as entries:
-                for entry in entries:
-                    if entry.name.startswith("."):
-                        continue
-                    if entry.is_dir():
-                        return True
-                    if entry.is_file() and entry.name.lower().endswith(".json"):
-                        return True
-        except FileNotFoundError:
+            if not os.path.exists(folder_path):
+                return False
+            # Use listdir for robustness on network shares
+            for item in os.listdir(folder_path):
+                if item.startswith('.'):
+                    continue
+                full_path = os.path.join(folder_path, item)
+                if os.path.isdir(full_path):
+                    return True
+                if item.lower().endswith('.json'):
+                    return True
             return False
         except Exception as exc:
             system_error(f"Error scanning folder contents for {folder_path}: {exc}")
-        return False
+            return False
 
     def on_folder_selected(self, folder_name):
         if not folder_name:
