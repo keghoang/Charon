@@ -1,4 +1,5 @@
 import json
+import time
 
 
 def sanitize_name(name):
@@ -67,6 +68,57 @@ def create_charon_group_node(
         pass
     node.addKnob(temp_knob)
 
+    status_knob = nuke.String_Knob("charon_status", "Status", "Ready")
+    status_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        status_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(status_knob)
+
+    progress_knob = nuke.Double_Knob("charon_progress", "Progress")
+    progress_knob.setFlag(nuke.NO_ANIMATION)
+    progress_knob.setRange(0.0, 1.0)
+    progress_knob.setValue(0.0)
+    try:
+        progress_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(progress_knob)
+
+    auto_import_knob = nuke.Boolean_Knob("charon_auto_import", "Auto Import Outputs", True)
+    auto_import_knob.setFlag(nuke.NO_ANIMATION)
+    auto_import_knob.setValue(1)
+    try:
+        auto_import_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(auto_import_knob)
+
+    prompt_id_knob = nuke.String_Knob("charon_prompt_id", "Prompt ID", "")
+    prompt_id_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        prompt_id_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(prompt_id_knob)
+
+    prompt_path_knob = nuke.String_Knob("charon_prompt_path", "Prompt Path", "")
+    prompt_path_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        prompt_path_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(prompt_path_knob)
+
+    last_output_knob = nuke.String_Knob("charon_last_output", "Last Output Path", "")
+    last_output_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        last_output_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(last_output_knob)
+
     if workflow_path:
         path_knob = nuke.String_Knob("workflow_path", "Workflow Path", workflow_path)
         path_knob.setFlag(nuke.NO_ANIMATION)
@@ -87,8 +139,25 @@ def create_charon_group_node(
 
     info_lines = ["Inputs Required:"]
     for input_def in inputs:
-        info_lines.append(f"• {input_def.get('name', 'Input')} : {input_def.get('description', '')}")
-    info_knob = nuke.Text_Knob("info", "Workflow Info", "\\n".join(info_lines))
+        info_lines.append(f"- {input_def.get('name', 'Input')} : {input_def.get('description', '')}")
+    info_knob = nuke.Text_Knob("info", "Workflow Info", "\n".join(info_lines))
     node.addKnob(info_knob)
+
+    status_payload = {
+        "status": "Ready",
+        "progress": 0.0,
+        "message": "Awaiting processing",
+        "updated_at": time.time(),
+        "auto_import": True,
+        "runs": [],
+    }
+    try:
+        node.setMetaData("charon/status_payload", json.dumps(status_payload))
+    except Exception:
+        pass
+    try:
+        node.setMetaData("charon/auto_import", "1")
+    except Exception:
+        pass
 
     return node, inputs
