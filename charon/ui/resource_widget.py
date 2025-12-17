@@ -87,7 +87,7 @@ class ResourceWidget(QWidget):
         # Use Grid layout to align columns (CPU/GPU, RAM/VRAM)
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(8)
+        self.grid.setHorizontalSpacing(4) # Reduced from 8 to bring label closer
         self.grid.setVerticalSpacing(2)
         self.grid.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         
@@ -167,8 +167,8 @@ class ResourceWidget(QWidget):
     def _on_flush_finished(self, success):
         self.anim_timer.stop()
         if success:
-            # Wait 1.5s for VRAM to actually drop and update in monitor
-            QTimer.singleShot(1500, self._show_flush_result)
+            # Wait 2.5s for VRAM to actually drop and update in monitor
+            QTimer.singleShot(2500, self._show_flush_result)
         else:
             self.flush_feedback.setText("Failed")
             self.flush_btn.setEnabled(True)
