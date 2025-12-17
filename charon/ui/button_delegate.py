@@ -70,6 +70,17 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
 
         if (
             self._column == ScriptTableModel.COL_VALIDATE
+            and validation_state == "validating"
+        ):
+            background_color = QtGui.QColor("#FF8C00")
+            text_color = QtGui.QColor("#FFFFFF")
+            if not is_enabled:
+                background_color = palette.mid().color()
+                text_color = palette.midlight().color()
+            elif opt.state & QtWidgets.QStyle.State_MouseOver:
+                background_color = background_color.lighter(110)
+        elif (
+            self._column == ScriptTableModel.COL_VALIDATE
             and validation_state == "needs_resolve"
         ):
             background_color = QtGui.QColor("#B22222")

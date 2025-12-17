@@ -16,6 +16,7 @@ from ..paths import get_default_comfy_launch_path
 from .validation_dialog import ValidationResolveDialog
 from ..workflow_local_store import (
     clear_ui_validation_status,
+    clear_validation_artifacts,
     load_ui_validation_status,
     save_ui_validation_status,
     write_validation_raw,
@@ -109,6 +110,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self._validation_timer.setInterval(300)
         self._validation_timer.timeout.connect(self._on_validation_timer_tick)
         self._validation_cache = {}
+        self._comfy_connected = False
         self._closing = False
         
         # Setup the UI
@@ -274,6 +276,10 @@ class ScriptPanel(QtWidgets.QWidget):
         clear_ui_validation_status(script_path or "")
         normalized = self._normalize_script_path(script_path)
         self._validation_cache.pop(normalized, None)
+
+    def update_comfy_connection_status(self, connected: bool) -> None:
+        """Receive connection state updates from the ComfyUI footer widget."""
+        self._comfy_connected = bool(connected)
 
     def _apply_cached_validation_states(self, scripts) -> None:
         for script in scripts:
@@ -727,6 +733,17 @@ class ScriptPanel(QtWidgets.QWidget):
             )
             return
 
+        if not self._comfy_connected:
+            QtWidgets.QMessageBox.information(
+                self,
+                "ComfyUI Offline",
+                (
+                    "ComfyUI is not currently running. Launch it from the footer and wait "
+                    "for the status to turn green before validating."
+                ),
+            )
+            return
+
         # Avoid launching duplicate validators for the same workflow
         if self.script_model.get_validation_state(script_path) == "validating":
             return
@@ -936,6 +953,24 @@ class ScriptPanel(QtWidgets.QWidget):
         bundle = self._load_workflow_bundle_safe(script_path)
         if not bundle:
             return
+        remote_folder = ''
+        if isinstance(bundle, dict):
+            remote_folder = bundle.get('folder') or ''
+        if remote_folder:
+            try:
+                clear_validation_artifacts(remote_folder)
+            except Exception:
+                pass
+        self._clear_validation_cache(script_path)
+        if isinstance(bundle, dict):
+            bundle.pop('local_state', None)
+            bundle.pop('validated', None)
+        bundle = self._load_workflow_bundle_safe(script_path)
+        if not bundle:
+            return
+        if isinstance(bundle, dict):
+            bundle.pop('local_state', None)
+            bundle.pop('validated', None)
         self._start_validation(script_path, bundle)
 
     def _handle_script_show_payload_request(self, script_path: str) -> None:
@@ -1258,3 +1293,5 @@ class ScriptPanel(QtWidgets.QWidget):
             if script and script.path == script_path:
                 flash_table_row(self.script_view, row)
                 break
+
+

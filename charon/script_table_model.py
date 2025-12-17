@@ -14,6 +14,7 @@ from .workflow_model import ScriptItem, BaseScriptLoader
 from .script_validator import ScriptValidator
 from .settings import user_settings_db
 import os
+import time
 
 class ScriptTableModel(QtCore.QAbstractTableModel):
     """Table model for displaying workflows with columns: Name, Hotkey, Run"""
@@ -296,8 +297,10 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         entry["state"] = state
         if state == "validating":
             entry["phase"] = 0
+            entry["animation_start"] = time.time()
         else:
             entry["phase"] = 0
+            entry.pop("animation_start", None)
         entry["payload"] = payload
         self.validation_states[normalized] = entry
         row = self._row_for_path(normalized)
@@ -410,3 +413,4 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         
         # End model reset
         self.endResetModel()
+

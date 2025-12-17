@@ -702,6 +702,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     " border: none;"
                     " border-radius: 4px;"
                     "}"
+                    "QPushButton:disabled {"
+                    " background-color: #228B22;"
+                    " color: white;"
+                    " border-radius: 4px;"
+                    "}"
                 )
         row_info["resolved"] = True
         if isinstance(row_info, dict):
@@ -790,12 +795,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         worker.failed.connect(_handle_failed)
         worker.canceled.connect(_handle_canceled)
         progress.canceled.connect(worker.cancel)
+        thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
 
         thread.start()
         progress.exec()
-        thread.wait()
 
         return bool(result["success"]), result["message"]
 
@@ -947,23 +952,44 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     for entry in resolver_invalid
                     if not (isinstance(entry, dict) and entry.get("index") == ref_index)
                 ]
-    def _notify_manual_download(self, file_name: str, models_root: str) -> None:
-        if file_name:
-            message = (
-                f"Could not locate '{file_name}'. Please download it manually and place it under "
-                "your ComfyUI/models directory."
+    def _notify_manual_download(
+        self,
+        file_name: str,
+        models_root: str,
+        expected_path: Optional[str] = None,
+    ) -> None:
+        display_name = file_name or "the required model"
+        if expected_path:
+            destination_display = self._format_model_display_path(expected_path, models_root)
+        elif models_root and file_name:
+            destination_display = self._format_model_display_path(
+                os.path.join(models_root, file_name), models_root
             )
-            if models_root:
-                message += (
-                    f"\nSuggested destination: {self._format_model_display_path(os.path.join(models_root, file_name), models_root)}"
-                )
         else:
-            message = (
-                "Could not locate the referenced model. Please download it manually and place it "
-                "under your ComfyUI/models directory."
-            )
-        QtWidgets.QMessageBox.information(self, "Model Missing", message)
-        self._append_issue_note("models", message)
+            destination_display = "your ComfyUI/models directory"
+
+        destination_fragment = f'<span style="color:#228B22;">{destination_display}</span>'
+        message = (
+            f"Could not locate <b>{display_name}</b>.<br>"
+            "Please download it manually, place it under "
+            f"{destination_fragment}.<br>"
+            "After that, click Resolve again."
+        )
+
+        dialog = QtWidgets.QMessageBox(self)
+        dialog.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        dialog.setWindowTitle("Model Missing")
+        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        dialog.setText(message)
+        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        dialog.exec()
+
+        note_text = (
+            f"Could not locate {display_name}. "
+            f"Please download it manually and place it under {destination_display}. "
+            "After that, click Resolve again."
+        )
+        self._append_issue_note("models", note_text)
 
     # ---------------------------------------------------------------- Actions
     def _handle_auto_resolve(self, issue_key: str) -> None:
@@ -1002,6 +1028,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         original_name = str(reference.get("name") or "").strip()
         models_root = row_info.get("models_root") or ""
         comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
+        expected_path: Optional[str] = None
+        notified_manual = False
         local_matches = find_local_model_matches(reference, models_root)
         if local_matches:
             selected = self._select_candidate_path(
@@ -1036,8 +1064,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if shared_matches:
             selected = self._select_candidate_path(
                 shared_matches,
-                title="Copy Shared Model",
-                prompt="A matching model was found in the shared repository. Choose which file to copy.",
+                title="Download Model from Global Repo",
+                prompt=(
+                    "Could not locate model in your local ComfyUI folder.\n\n"
+                    f"{file_name} is available in the Global Repo. Download it?"
+                ),
             )
             if selected:
                 expected_path = determine_expected_model_path(reference, models_root, comfy_dir)
@@ -1048,23 +1079,30 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         expected_path = os.path.join(os.path.dirname(selected), file_name)
                 workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
                 destination_display = self._format_model_display_path(expected_path, models_root)
-                answer = QtWidgets.QMessageBox.question(
-                    self,
-                    "Copy Model",
-                    (
-                        f"Copy '{file_name}' to your ComfyUI models folder?\n\n"
-                        f"Destination:\n{destination_display}"
-                    ),
-                    QtWidgets.QMessageBox.StandardButton.Yes
-                    | QtWidgets.QMessageBox.StandardButton.No,
+                download_text = (
+                    "Could not locate model in your local ComfyUI folder.<br>"
+                    f"<b>{file_name}</b> is available in the Global Repo. Download it?<br><br>"
+                    "Destination:<br>"
+                    f'<span style="color:#228B22;">{destination_display}</span>'
                 )
+                msg_box = QtWidgets.QMessageBox(self)
+                msg_box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+                msg_box.setWindowTitle("Download Model from Global Repo")
+                msg_box.setTextFormat(QtCore.Qt.TextFormat.RichText)
+                msg_box.setText(download_text)
+                msg_box.setStandardButtons(
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+                )
+                msg_box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
+                answer = msg_box.exec()
+
                 if answer == QtWidgets.QMessageBox.StandardButton.Yes:
                     success, message = self._copy_shared_model(selected, expected_path)
                     if success:
-                        note = f"Copied {file_name} to {destination_display}."
+                        note = f"Downloaded {file_name} to {destination_display}."
                         self._mark_model_resolved(
                             row,
-                            "Copied",
+                            "Resolved",
                             destination_display,
                             note,
                             workflow_value,
@@ -1078,8 +1116,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         QtWidgets.QMessageBox.warning(self, "Copy Failed", message)
                 else:
                     self._append_issue_note("models", "Copy canceled by user.")
-
-        self._notify_manual_download(file_name, models_root)
+                    self._notify_manual_download(file_name, models_root, expected_path)
+                    notified_manual = True
+        if not notified_manual:
+            if expected_path and os.path.exists(expected_path):
+                return True
+            self._notify_manual_download(file_name, models_root, expected_path)
         return False
         return False
 
