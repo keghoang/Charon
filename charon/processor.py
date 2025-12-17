@@ -2472,39 +2472,6 @@ def process_charonop_node():
                                             _append_artifact(candidate, "meshes")
                     return artifacts
 
-                def _discover_outputs_since(timestamp: float, extensions: set) -> List[str]:
-                    """Fallback: scan ComfyUI output directory for recent files with desired extensions."""
-                    candidates: List[str] = []
-                    env = resolve_comfy_environment(comfy_path) if comfy_path else {}
-                    comfy_dir = env.get("comfy_dir") or env.get("base_dir")
-                    search_dirs = []
-                    if comfy_dir:
-                        search_dirs.append(os.path.join(comfy_dir, "output"))
-                        parent = os.path.dirname(comfy_dir)
-                        if parent and parent != comfy_dir:
-                            search_dirs.append(os.path.join(parent, "ComfyUI", "output"))
-                    search_dirs.append(os.path.join(os.getcwd(), "output"))
-                    seen = set()
-                    for folder in search_dirs:
-                        if not folder or folder in seen or not os.path.isdir(folder):
-                            continue
-                        seen.add(folder)
-                        try:
-                            for entry in os.listdir(folder):
-                                if _is_ignored_output(entry):
-                                    continue
-                                if not any(entry.lower().endswith(ext) for ext in extensions):
-                                    continue
-                                path = os.path.join(folder, entry)
-                                try:
-                                    mtime = os.path.getmtime(path)
-                                except Exception:
-                                    mtime = None
-                                if mtime is None or mtime >= (timestamp - 1.0):
-                                    candidates.append(path)
-                        except Exception:
-                            continue
-                    return candidates
 
                 for batch_index in range(batch_count):
                     seed_offset = batch_index * 9973
@@ -2566,25 +2533,6 @@ def process_charonop_node():
                                 if status_str == 'success':
                                     outputs = history_data.get('outputs', {})
                                     artifacts = _collect_output_artifacts(outputs, base_prompt) if outputs else []
-                                    has_camera = any(
-                                        (artifact.get("extension") or "").lower() in CAMERA_OUTPUT_EXTENSIONS
-                                        for artifact in artifacts
-                                    )
-                                    if not has_camera:
-                                        discovered = _discover_outputs_since(start_time, CAMERA_OUTPUT_EXTENSIONS)
-                                        for camera_path in discovered:
-                                            ext_local = (os.path.splitext(camera_path)[1] or "").lower()
-                                            artifacts.append(
-                                                {
-                                                    "filename": camera_path,
-                                                    "subfolder": "",
-                                                    "type": "output",
-                                                    "extension": ext_local,
-                                                    "node_id": "",
-                                                    "class_type": CAMERA_OUTPUT_LABEL,
-                                                    "kind": "camera",
-                                                }
-                                            )
                                     if not artifacts:
                                         raise Exception('ComfyUI did not return an output file')
 
