@@ -42,9 +42,6 @@ from ..icon_manager import get_icon_manager
 from ..paths import get_charon_temp_dir
 
 
-BANNER_IMAGE_PATH = Path(__file__).resolve().parent.parent / "resources" / "banner.png"
-BANNER_MAX_HEIGHT = 80
-
 class CharonWindow(QtWidgets.QWidget):
     def __init__(self, global_path=None, local_path=None, host="None", parent=None, startup_mode="normal"):
         super(CharonWindow, self).__init__(parent)
@@ -436,8 +433,6 @@ class CharonWindow(QtWidgets.QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._update_banner_pixmap()
-
     def _setup_normal_ui(self, parent):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
@@ -446,32 +441,22 @@ class CharonWindow(QtWidgets.QWidget):
                                       config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS)
         main_layout.setSpacing(config.UI_ELEMENT_SPACING)
 
-        self.banner_label = None
-        if BANNER_IMAGE_PATH.exists():
-            banner_pixmap = QtGui.QPixmap(str(BANNER_IMAGE_PATH))
-            if not banner_pixmap.isNull():
-                if banner_pixmap.height() > BANNER_MAX_HEIGHT:
-                    banner_pixmap = banner_pixmap.scaledToHeight(
-                        BANNER_MAX_HEIGHT,
-                        QtCore.Qt.TransformationMode.SmoothTransformation,
-                    )
-                self.banner_label = QtWidgets.QLabel()
-                self.banner_label.setObjectName("CharonBanner")
-                self.banner_label.setAlignment(Qt.AlignCenter)
-                self.banner_label.setContentsMargins(0, 0, 0, 0)
-                self.banner_label.setStyleSheet("background-color: #000;")
-                self.banner_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
-                self.banner_label.setMinimumSize(0, 0)
-                self._banner_base_pixmap = banner_pixmap
-                self._banner_target_height = banner_pixmap.height()
-                self.banner_label.setFixedHeight(self._banner_target_height)
-                self._update_banner_pixmap()
-                main_layout.addWidget(self.banner_label)
-                QtCore.QTimer.singleShot(0, self._update_banner_pixmap)
-
-        # Add spacing before separator
+        # Text-only header (replaces legacy banner)
+        header_layout = QtWidgets.QVBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(4)
+        title_label = QtWidgets.QLabel("Charon")
+        title_label.setObjectName("CharonTitle")
+        title_label.setStyleSheet("font-size: 26px; font-weight: 600;")
+        subtitle_label = QtWidgets.QLabel("Nuke/ComfyUI Integration")
+        subtitle_label.setObjectName("CharonSubtitle")
+        subtitle_label.setStyleSheet("font-size: 14px; color: palette(midlight);")
+        header_layout.addWidget(title_label)
+        header_layout.addWidget(subtitle_label)
+        header_layout.addStretch(0)
+        main_layout.addLayout(header_layout)
         main_layout.addSpacing(config.UI_ELEMENT_SPACING)
-        
+
         # Add horizontal separator
         separator = QtWidgets.QFrame()
         separator.setFrameShape(QtWidgets.QFrame.HLine)
