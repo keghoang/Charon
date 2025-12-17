@@ -25,6 +25,7 @@ import os
 import shutil
 import re
 import json
+from pathlib import Path
 from datetime import datetime
 
 
@@ -243,6 +244,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.openCurrentFolder.connect(self._on_open_current_folder)
         self.script_view.script_revalidate.connect(self._handle_script_revalidate_request)
         self.script_view.set_advanced_mode_provider(self._is_advanced_mode_enabled)
+        self.script_view.workflowFileDropped.connect(self._on_workflow_files_dropped)
         
         # Store reference for parent folder updates
         self.parent_folder = None
@@ -1115,10 +1117,8 @@ class ScriptPanel(QtWidgets.QWidget):
         # Update the model with filtered scripts (sorting is done inside updateItems)
         self.script_model.updateItems(filtered_scripts)
     
-    def _on_create_script_clicked(self):
-        """Handle create new workflow button click."""
-        from pathlib import Path
-
+    def _get_user_folder_context(self):
+        """Resolve the active base path and user workflow folder."""
         main_window = self.window() if hasattr(self, "window") else None
         base_path = getattr(main_window, "current_base", None) if main_window else None
         if not base_path:
@@ -1130,7 +1130,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 "Workflow Repository Unavailable",
                 f"The workflow repository is not accessible:\n{base_path}"
             )
-            return
+            return None, None
 
         user_folder = os.path.join(base_path, self._user_slug)
         if not os.path.isdir(user_folder):
@@ -1142,17 +1142,19 @@ class ScriptPanel(QtWidgets.QWidget):
                     "Create Failed",
                     f"Could not prepare your workflow folder:\n{exc}"
                 )
-                return
+                return None, None
 
-        start_dir = user_folder
-        workflow_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Select Workflow JSON",
-            start_dir,
-            "Workflow Files (*.json);;All Files (*.*)"
-        )
-        if not workflow_path:
-            return
+        return main_window, user_folder
+
+    def _import_workflow_json(self, workflow_path: str, main_window, user_folder):
+        """Copy a workflow JSON into the repository and collect metadata."""
+        if not workflow_path or not os.path.isfile(workflow_path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid Workflow",
+                "The selected workflow file could not be found."
+            )
+            return False
 
         suggested_name = Path(workflow_path).stem or "workflow"
         name, ok = QtWidgets.QInputDialog.getText(
@@ -1163,12 +1165,12 @@ class ScriptPanel(QtWidgets.QWidget):
             suggested_name
         )
         if not ok:
-            return
+            return None
 
         workflow_name = name.strip()
         if not workflow_name:
             QtWidgets.QMessageBox.warning(self, "Invalid Name", "Workflow name cannot be empty.")
-            return
+            return False
 
         safe_name = re.sub(r'[\\\\/:*?"<>|]', "_", workflow_name)
         if not safe_name:
@@ -1180,7 +1182,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 "Folder Exists",
                 f"A workflow named '{workflow_name}' already exists."
             )
-            return
+            return False
 
         try:
             os.makedirs(target_folder)
@@ -1190,7 +1192,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 "Error",
                 f"Failed to create workflow folder: {exc}"
             )
-            return
+            return False
 
         dest_json = os.path.join(target_folder, "workflow.json")
         try:
@@ -1202,7 +1204,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 "Error",
                 f"Failed to copy workflow JSON: {exc}"
             )
-            return
+            return False
 
         default_meta = {
             "workflow_file": "workflow.json",
@@ -1216,7 +1218,7 @@ class ScriptPanel(QtWidgets.QWidget):
         dialog = CharonMetadataDialog(default_meta, workflow_path=dest_json, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             shutil.rmtree(target_folder, ignore_errors=True)
-            return
+            return None
 
         updated_meta = default_meta.copy()
         updated_meta.update(dialog.get_metadata())
@@ -1232,7 +1234,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 "Error",
                 f"Failed to save workflow metadata: {exc}"
             )
-            return
+            return False
 
         # Invalidate caches so the new workflow appears immediately
         try:
@@ -1255,6 +1257,48 @@ class ScriptPanel(QtWidgets.QWidget):
             main_window.folder_panel.select_folder(self._user_slug)
 
         self.load_scripts_for_folder(user_folder)
+        return True
+
+    def _on_workflow_files_dropped(self, file_paths):
+        """Handle drag-and-drop import of workflow JSON files."""
+        main_window, user_folder = self._get_user_folder_context()
+        if not user_folder:
+            return
+
+        valid_paths = []
+        for path in file_paths or []:
+            if isinstance(path, str) and path.lower().endswith(".json"):
+                valid_paths.append(path)
+
+        if not valid_paths:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Unsupported Drop",
+                "Only .json workflow files can be dropped onto the workflow table."
+            )
+            return
+
+        for workflow_path in valid_paths:
+            result = self._import_workflow_json(workflow_path, main_window, user_folder)
+            if result is None:
+                break
+    
+    def _on_create_script_clicked(self):
+        """Handle create new workflow button click."""
+        main_window, user_folder = self._get_user_folder_context()
+        if not user_folder:
+            return
+
+        workflow_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select Workflow JSON",
+            user_folder,
+            "Workflow Files (*.json);;All Files (*.*)"
+        )
+        if not workflow_path:
+            return
+
+        self._import_workflow_json(workflow_path, main_window, user_folder)
     
     def _on_open_current_folder(self):
         """Handle open folder request from context menu."""

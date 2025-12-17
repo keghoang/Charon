@@ -1,3 +1,4 @@
+import os
 from typing import Callable, Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, AlignLeft, AlignVCenter, exec_menu
@@ -28,6 +29,7 @@ class ScriptTableView(QtWidgets.QTableView):
     mouseReleased = QtCore.Signal()
     createScriptInCurrentFolder = QtCore.Signal()
     openCurrentFolder = QtCore.Signal()
+    workflowFileDropped = QtCore.Signal(list)
     
     def __init__(self, parent=None):
         super(ScriptTableView, self).__init__(parent)
@@ -87,6 +89,7 @@ class ScriptTableView(QtWidgets.QTableView):
         if focusless_style not in existing_style:
             combined_style = focusless_style if not existing_style else '{}\n{}'.format(existing_style, focusless_style)
             self.setStyleSheet(combined_style)
+        self.setAcceptDrops(True)
         
     def set_host(self, host):
         self.host = host
@@ -115,6 +118,29 @@ class ScriptTableView(QtWidgets.QTableView):
     def set_advanced_mode_provider(self, provider: Optional[Callable[[], bool]]) -> None:
         """Register a callback returning whether advanced mode is enabled."""
         self._advanced_mode_provider = provider
+
+    def _extract_json_paths(self, mime_data) -> list:
+        """Pull supported workflow JSON paths from mime data."""
+        if mime_data is None:
+            return []
+
+        json_paths = []
+        if mime_data.hasUrls():
+            for url in mime_data.urls():
+                if url.isLocalFile():
+                    local_path = url.toLocalFile()
+                    if isinstance(local_path, str) and local_path.lower().endswith(".json"):
+                        json_paths.append(local_path)
+        elif mime_data.hasText():
+            for line in mime_data.text().splitlines():
+                candidate = line.strip()
+                if candidate.lower().endswith(".json") and os.path.isfile(candidate):
+                    json_paths.append(candidate)
+        return json_paths
+
+    def _can_accept_drop(self, mime_data) -> bool:
+        """Check if the drag contains at least one workflow JSON."""
+        return bool(self._extract_json_paths(mime_data))
 
     def _emit_script_signal(self, index, signal):
         """Emit the provided signal with the script path resolved from the index."""
@@ -167,6 +193,30 @@ class ScriptTableView(QtWidgets.QTableView):
         # Emit signal that mouse was released
         self.mouseReleased.emit()
         super().mouseReleaseEvent(event)
+
+    def dragEnterEvent(self, event):
+        """Accept drags that include workflow JSON files."""
+        if self._can_accept_drop(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        """Accept drag move for workflow JSON files."""
+        if self._can_accept_drop(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        """Handle dropped workflow JSON files."""
+        paths = self._extract_json_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+
+        self.workflowFileDropped.emit(paths)
+        event.acceptProposedAction()
         
     def keyPressEvent(self, event):
         """Preserve keyboard navigation from list view"""
