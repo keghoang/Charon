@@ -3,13 +3,14 @@ from __future__ import annotations
 import copy
 import json
 import os
-import urllib.request
+from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..qt_compat import QtCore, QtGui, QtWidgets
-from ..paths import resolve_comfy_environment
 from ..charon_logger import system_debug, system_warning
+from ..model_transfer_manager import TransferState, manager as transfer_manager
+from ..paths import resolve_comfy_environment
 from ..validation_resolver import (
     ResolutionResult,
     determine_expected_model_path,
@@ -329,139 +330,6 @@ class IssueRow(QtWidgets.QWidget):
         self.dots = (self.dots + 1) % 4
         self.btn_resolve.setText(f"Resolving{'.' * self.dots}")
 
-
-
-class _FileCopyWorker(QtCore.QObject):
-    progress = QtCore.Signal(int, object, object)  # percent, copied_bytes, total_bytes
-    finished = QtCore.Signal(bool, str)
-    failed = QtCore.Signal(str)
-    canceled = QtCore.Signal()
-
-    def __init__(self, source: str, destination: str, parent: Optional[QtCore.QObject] = None) -> None:
-        super().__init__(parent)
-        self._source = source
-        self._destination = destination
-        self._cancel_requested = False
-        try:
-            self._total_size = os.path.getsize(self._source)
-        except OSError:
-            self._total_size = 0
-
-    @QtCore.Slot()
-    def run(self) -> None:
-        try:
-            self._copy_with_progress()
-        except Exception as exc:  # pragma: no cover - filesystem guard
-            self.failed.emit(str(exc))
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-
-    @property
-    def total_size(self) -> int:
-        return self._total_size
-
-    def _copy_with_progress(self) -> None:
-        if not os.path.isfile(self._source):
-            self.failed.emit("Source model file no longer exists.")
-            return
-        os.makedirs(os.path.dirname(self._destination), exist_ok=True)
-        total = self._total_size or os.path.getsize(self._source)
-        copied = 0
-        chunk_size = 4 * 1024 * 1024
-        temp_path = f"{self._destination}.tmp"
-
-        try:
-            with open(self._source, "rb") as src, open(temp_path, "wb") as dest:
-                while True:
-                    if self._cancel_requested:
-                        self.canceled.emit()
-                        return
-                    chunk = src.read(chunk_size)
-                    if not chunk:
-                        break
-                    dest.write(chunk)
-                    copied += len(chunk)
-                    percent = int((copied / total) * 100) if total else 0
-                    self.progress.emit(min(percent, 100), copied, total)
-            os.replace(temp_path, self._destination)
-            self.finished.emit(True, self._destination)
-        finally:
-            if os.path.exists(temp_path) and (self._cancel_requested or not os.path.exists(self._destination)):
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-
-
-class _UrlDownloadWorker(QtCore.QObject):
-    progress = QtCore.Signal(int, object, object)  # percent, downloaded_bytes, total_bytes
-    finished = QtCore.Signal(bool, str)
-    failed = QtCore.Signal(str)
-    canceled = QtCore.Signal()
-
-    def __init__(self, url: str, destination: str, parent: Optional[QtCore.QObject] = None) -> None:
-        super().__init__(parent)
-        self._url = url
-        self._destination = destination
-        self._cancel_requested = False
-        self._total_size = 0
-
-    @property
-    def total_size(self) -> int:
-        return self._total_size
-
-    @QtCore.Slot()
-    def run(self) -> None:
-        try:
-            self._download_with_progress()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            self.failed.emit(str(exc))
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-
-    def _download_with_progress(self) -> None:
-        temp_path = f"{self._destination}.download"
-        try:
-            with urllib.request.urlopen(self._url) as response:
-                total_header = response.getheader("Content-Length")
-                try:
-                    self._total_size = int(total_header) if total_header else 0
-                except (TypeError, ValueError):
-                    self._total_size = 0
-                os.makedirs(os.path.dirname(self._destination) or ".", exist_ok=True)
-                with open(temp_path, "wb") as dest:
-                    copied = 0
-                    chunk_size = 4 * 1024 * 1024
-                    while True:
-                        if self._cancel_requested:
-                            self.canceled.emit()
-                            return
-                        chunk = response.read(chunk_size)
-                        if not chunk:
-                            break
-                        dest.write(chunk)
-                        copied += len(chunk)
-                        percent = int((copied / self._total_size) * 100) if self._total_size else 0
-                        self.progress.emit(min(percent, 100), copied, self._total_size)
-            os.replace(temp_path, self._destination)
-            self.finished.emit(True, self._destination)
-        except Exception:
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-            raise
-        finally:
-            if os.path.exists(temp_path) and (self._cancel_requested or not os.path.exists(self._destination)):
-                try:
-                    os.remove(temp_path)
-                except OSError:
-                    pass
-
-
 class _CustomNodesResolveWorker(QtCore.QObject):
     finished = QtCore.Signal(object)
     failed = QtCore.Signal(str)
@@ -543,12 +411,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_node_row_worker: Optional[_CustomNodeInstallWorker] = None
         self._custom_node_row_context: Optional[Dict[str, Any]] = None
         self._custom_node_install_queue: List[Dict[str, Any]] = []
-        self._model_copy_thread: Optional[QtCore.QThread] = None
-        self._model_copy_worker: Optional[_FileCopyWorker] = None
-        self._model_copy_context: Optional[Dict[str, Any]] = None
-        self._model_download_thread: Optional[QtCore.QThread] = None
-        self._model_download_worker: Optional[_UrlDownloadWorker] = None
-        self._model_download_context: Optional[Dict[str, Any]] = None
+        self._transfer_manager = transfer_manager
+        self._transfer_subscriptions: Dict[int, Dict[str, Any]] = {}
         restart_flag = False
         if isinstance(self._payload, dict):
             restart_flag = bool(
@@ -982,6 +846,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._issue_lookup = {str(issue.get("key") or ""): issue for issue in issues}
         self._issue_widgets = {}
         self._issue_rows = {"models": [], "custom_nodes": []}
+        self._teardown_transfers()
 
         if self._checks_layout:
             self._clear_layout(self._checks_layout)
@@ -991,6 +856,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._clear_layout(self._success_checks_layout)
 
         self._populate_issue_section(issues)
+        self._reattach_model_transfers()
         self._refresh_check_rows()
 
     def _remaining_rows(self, key: str) -> int:
@@ -1228,9 +1094,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _process_next_auto_resolve_item(self) -> None:
         if not self._auto_resolve_running:
             return
-        if self._model_download_thread and self._model_download_thread.isRunning():
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
             return
-        if self._model_copy_thread and self._model_copy_thread.isRunning():
+        if self._has_active_transfers():
             return
         while self._auto_resolve_queue:
             issue_key, row_index = self._auto_resolve_queue.pop(0)
@@ -1249,9 +1115,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
             if issue_key == "models":
                 self._handle_model_auto_resolve(row_index)
-                if (self._model_copy_thread and self._model_copy_thread.isRunning()) or (
-                    self._model_download_thread and self._model_download_thread.isRunning()
-                ):
+                if self._has_active_transfers():
                     return
                 QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
                 return
@@ -1263,9 +1127,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return
         if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
             return
-        if self._model_copy_thread and self._model_copy_thread.isRunning():
-            return
-        if self._model_download_thread and self._model_download_thread.isRunning():
+        if self._has_active_transfers():
             return
         QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
 
@@ -1346,24 +1208,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         else:
             self._update_overall_state()
 
-    def _cleanup_model_copy_worker(self) -> None:
-        thread = self._model_copy_thread
-        self._model_copy_thread = None
-        self._model_copy_worker = None
-        self._model_copy_context = None
-        if thread:
-            thread.quit()
-            thread.wait(2000)
-
-    def _cleanup_model_download_worker(self) -> None:
-        thread = self._model_download_thread
-        self._model_download_thread = None
-        self._model_download_worker = None
-        self._model_download_context = None
-        if thread:
-            thread.quit()
-            thread.wait(2000)
-
     def _cleanup_custom_nodes_worker(self) -> None:
         thread = self._custom_nodes_thread
         self._custom_nodes_thread = None
@@ -1374,6 +1218,128 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if thread:
             thread.quit()
             thread.wait(2000)
+
+    def _normalize_transfer_key(self, destination: str) -> str:
+        try:
+            return Path(destination).resolve().as_posix().lower()
+        except Exception:
+            return destination.replace("\\", "/").lower()
+
+    def _has_active_transfers(self) -> bool:
+        return any(state.in_progress for state in self._transfer_manager.active_states().values())
+
+    def _match_transfer_state(self, destination: Optional[str]) -> Optional[TransferState]:
+        if not destination:
+            return None
+        target_key = self._normalize_transfer_key(destination)
+        for state in self._transfer_manager.active_states().values():
+            if self._normalize_transfer_key(state.destination) == target_key:
+                return state
+        return None
+
+    def _unsubscribe_transfer(self, row_info: Dict[str, Any]) -> None:
+        listener_id = id(row_info)
+        entry = self._transfer_subscriptions.pop(listener_id, None)
+        if not entry:
+            return
+        destination = entry.get("destination") or ""
+        try:
+            self._transfer_manager.unsubscribe(destination, listener_id)
+        except Exception:
+            pass
+
+    def _subscribe_to_transfer(
+        self,
+        row_info: Dict[str, Any],
+        destination: str,
+    ) -> Optional[TransferState]:
+        if not destination:
+            return None
+        listener_id = id(row_info)
+
+        def _dispatch(state: TransferState) -> None:
+            # Bridge worker thread updates back to the UI thread.
+            QtCore.QTimer.singleShot(0, lambda st=state: self._handle_transfer_update(row_info, st))
+
+        self._transfer_subscriptions[listener_id] = {"destination": destination}
+        return self._transfer_manager.subscribe(destination, listener_id, _dispatch)
+
+    def _teardown_transfers(self) -> None:
+        subscriptions = list(self._transfer_subscriptions.items())
+        self._transfer_subscriptions.clear()
+        for listener_id, entry in subscriptions:
+            destination = entry.get("destination") or ""
+            try:
+                self._transfer_manager.unsubscribe(destination, listener_id)
+            except Exception:
+                pass
+
+    def _expected_path_from_row(self, row_info: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(row_info, dict):
+            return None
+        cached = row_info.get("expected_path") or row_info.get("resolved_path")
+        if isinstance(cached, str) and cached.strip():
+            return cached
+        reference = row_info.get("reference") or {}
+        if not isinstance(reference, dict):
+            reference = {}
+        reference_expected = reference.get("expected_path")
+        if isinstance(reference_expected, str) and reference_expected.strip():
+            row_info["expected_path"] = reference_expected
+            return reference_expected
+        models_root = row_info.get("models_root") or ""
+        comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
+        expected_path = determine_expected_model_path(reference, models_root, comfy_dir)
+        if not expected_path:
+            candidate = (
+                reference.get("name")
+                or reference.get("path")
+                or row_info.get("folder_path")
+                or reference.get("folder_path")
+                or ""
+            )
+            file_name = os.path.basename(candidate) or os.path.basename(row_info.get("url") or "")
+            folder_hint = (
+                reference.get("folder_path")
+                or row_info.get("folder_path")
+                or reference.get("path")
+                or ""
+            )
+            if models_root and file_name:
+                expected_path = os.path.join(models_root, file_name)
+            elif folder_hint and file_name:
+                expected_path = os.path.join(folder_hint, file_name)
+        if expected_path:
+            row_info["expected_path"] = expected_path
+        return expected_path
+
+    def _active_transfer_for_row(
+        self,
+        row_info: Dict[str, Any],
+        *,
+        include_completed: bool = False,
+    ) -> Optional[TransferState]:
+        destination = self._expected_path_from_row(row_info)
+        state = self._match_transfer_state(destination)
+        if not state:
+            return None
+        if state.in_progress or include_completed:
+            return state
+        return None
+
+    def _reattach_model_transfers(self) -> None:
+        widget_info = self._issue_widgets.get("models") or {}
+        rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
+        if not rows:
+            return
+        for row_info in rows.values():
+            state = self._active_transfer_for_row(row_info, include_completed=True)
+            if not state:
+                continue
+            if not state.in_progress and row_info.get("resolved"):
+                continue
+            self._subscribe_to_transfer(row_info, state.destination)
+            self._handle_transfer_update(row_info, state)
 
     def _start_next_custom_node_from_queue(self) -> None:
         if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
@@ -1796,6 +1762,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "resolved": resolved_flag,
                 "resolve_method": resolve_method,
             }
+            expected_path = self._expected_path_from_row(row_mapping[row])
+            row_mapping[row]["expected_path"] = expected_path or row_mapping[row].get("folder_path")
             row += 1
 
         table.resizeRowsToContents()
@@ -2486,44 +2454,51 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         note: str,
         file_name: str,
     ) -> Tuple[Optional[bool], Optional[str]]:
-        if self._model_copy_thread and self._model_copy_thread.isRunning():
-            info_text = (
-                "A model copy from the Global Repo is already running. "
-                "Please wait for it to complete."
-            )
-            self._set_issue_row_subtitle(row_info, info_text)
-            return False, None
-
-        worker = _FileCopyWorker(source, destination)
-        thread = QtCore.QThread(self)
-        self._model_copy_worker = worker
-        self._model_copy_thread = thread
-        self._model_copy_context = {
-            "row": row,
-            "row_info": row_info,
-            "workflow_value": workflow_value,
-            "destination_display": destination_display,
-            "note": note,
-            "expected_path": destination,
-            "file_name": file_name,
-            "source": source,
-        }
-        row_info["copy_in_progress"] = True
-        worker.moveToThread(thread)
-
-        worker.progress.connect(self._on_model_copy_progress)
-        worker.finished.connect(
-            lambda success, dest: self._handle_model_copy_finished(success, dest)
+        system_debug(
+            "[Validation] Starting Global Repo copy | "
+            f"source='{source}' destination='{destination}' file='{file_name}'"
         )
-        worker.failed.connect(self._handle_model_copy_failed)
-        worker.canceled.connect(lambda: self._handle_model_copy_failed("Copy canceled."))
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        row_info.setdefault("row_index", row)
+        row_info["expected_path"] = destination
+        reference = row_info.get("reference")
+        if isinstance(reference, dict):
+            reference["expected_path"] = destination
+        active_state = self._active_transfer_for_row(row_info, include_completed=True)
+        if active_state:
+            active_state.resolve_method = active_state.resolve_method or note
+            active_state.destination_display = (
+                active_state.destination_display or destination_display
+            )
+            active_state.workflow_value = active_state.workflow_value or workflow_value
+            active_state.file_name = active_state.file_name or file_name
+            self._subscribe_to_transfer(row_info, active_state.destination)
+            self._handle_transfer_update(row_info, active_state)
+            if active_state.in_progress:
+                return None, None
+            if not active_state.error:
+                return None, None
 
-        thread.start()
-        self._on_model_copy_progress(0, 0, worker.total_size)
-        return None
+        try:
+            state = self._transfer_manager.start_copy(
+                source,
+                destination,
+                resolve_method=note,
+                workflow_value=workflow_value,
+                destination_display=destination_display,
+                file_name=file_name,
+            )
+        except Exception as exc:
+            message = f"Copy failed: {exc}"
+            system_warning(
+                "[Validation] Global Repo copy start failed | "
+                f"source='{source}' dest='{destination}' error='{exc}'"
+            )
+            self._set_issue_row_subtitle(row_info, message)
+            return False, message
+
+        self._subscribe_to_transfer(row_info, destination)
+        self._handle_transfer_update(row_info, state)
+        return None, None
 
     def _download_model_from_url(
         self,
@@ -2537,220 +2512,151 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         note: str,
         file_name: str,
     ) -> Tuple[Optional[bool], Optional[str]]:
-        if self._model_download_thread and self._model_download_thread.isRunning():
-            info_text = (
-                "A model download is already running. Please wait for it to complete."
-            )
-            self._set_issue_row_subtitle(row_info, info_text)
-            return False, None
-
-        worker = _UrlDownloadWorker(url, destination)
-        thread = QtCore.QThread(self)
-        self._model_download_worker = worker
-        self._model_download_thread = thread
-        self._model_download_context = {
-            "row": row,
-            "row_info": row_info,
-            "workflow_value": workflow_value,
-            "destination_display": destination_display,
-            "note": note,
-            "expected_path": destination,
-            "file_name": file_name,
-            "url": url,
-        }
-        row_info["download_in_progress"] = True
-        worker.moveToThread(thread)
-
-        worker.progress.connect(self._on_model_download_progress)
-        worker.finished.connect(
-            lambda success, dest: self._handle_model_download_finished(success, dest)
+        system_debug(
+            "[Validation] Starting URL model download | "
+            f"url='{url}' destination='{destination}' file='{file_name}'"
         )
-        worker.failed.connect(self._handle_model_download_failed)
-        worker.canceled.connect(lambda: self._handle_model_download_failed("Download canceled."))
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        row_info.setdefault("row_index", row)
+        row_info["expected_path"] = destination
+        reference = row_info.get("reference")
+        if isinstance(reference, dict):
+            reference["expected_path"] = destination
+        active_state = self._active_transfer_for_row(row_info, include_completed=True)
+        if active_state:
+            active_state.resolve_method = active_state.resolve_method or note
+            active_state.destination_display = (
+                active_state.destination_display or destination_display
+            )
+            active_state.workflow_value = active_state.workflow_value or workflow_value
+            active_state.file_name = active_state.file_name or file_name
+            self._subscribe_to_transfer(row_info, active_state.destination)
+            self._handle_transfer_update(row_info, active_state)
+            if active_state.in_progress:
+                return None, None
+            if not active_state.error:
+                return None, None
 
-        thread.start()
-        self._on_model_download_progress(0, 0, worker.total_size)
+        try:
+            state = self._transfer_manager.start_download(
+                url,
+                destination,
+                resolve_method=note,
+                workflow_value=workflow_value,
+                destination_display=destination_display,
+                file_name=file_name,
+            )
+        except Exception as exc:
+            message = f"Download failed: {exc}"
+            system_warning(
+                "[Validation] URL model download start failed | "
+                f"url='{url}' dest='{destination}' error='{exc}'"
+            )
+            self._set_issue_row_subtitle(row_info, message)
+            return False, message
+
+        self._subscribe_to_transfer(row_info, destination)
+        self._handle_transfer_update(row_info, state)
         return None, None
 
-    def _on_model_copy_progress(self, percent: int, copied: int, total: int) -> None:
-        context = self._model_copy_context or {}
-        row_info = context.get("row_info") or {}
-        copied_bytes = self._clamp_size(copied)
-        total_bytes = self._clamp_size(total)
+    def _render_transfer_progress(self, row_info: Dict[str, Any], state: TransferState) -> None:
+        copied_bytes = self._clamp_size(state.copied_bytes)
+        total_bytes = self._clamp_size(state.total_bytes)
+        percent = max(0, min(int(state.percent), 100))
         total_display = self._format_bytes_progress(total_bytes) if total_bytes else "unknown size"
+        prefix = "Copying from Global Repo" if state.kind == "copy" else "Downloading model"
         subtitle = (
-            f"Copying from Global Repo: {percent}% "
+            f"{prefix}: {percent}% "
             f"({self._format_bytes_progress(copied_bytes)} / {total_display})"
         )
+        issue_row = row_info.get("issue_row")
+        button = row_info.get("button")
+        if isinstance(issue_row, IssueRow) and not getattr(issue_row, "_is_resolving", False):
+            issue_row.start_install_animation()
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(False)
         self._set_issue_row_subtitle(row_info, subtitle)
 
-    def _on_model_download_progress(self, percent: int, copied: int, total: int) -> None:
-        context = self._model_download_context or {}
-        row_info = context.get("row_info") or {}
-        copied_bytes = self._clamp_size(copied)
-        total_bytes = self._clamp_size(total)
-        total_display = self._format_bytes_progress(total_bytes) if total_bytes else "unknown size"
-        subtitle = (
-            f"Downloading model: {percent}% "
-            f"({self._format_bytes_progress(copied_bytes)} / {total_display})"
+    def _handle_transfer_success(self, row_info: Dict[str, Any], state: TransferState) -> None:
+        destination = state.destination
+        models_root = row_info.get("models_root") or ""
+        comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
+        reference = row_info.get("reference") or {}
+        workflow_value = state.workflow_value or self._compute_workflow_value(
+            reference, destination, models_root, comfy_dir
         )
-        self._set_issue_row_subtitle(row_info, subtitle)
-
-    def _handle_model_copy_finished(self, success: bool, destination: str) -> None:
-        context = self._model_copy_context or {}
-        row_info = context.get("row_info") or {}
-        row_info["copy_in_progress"] = False
-        row = context.get("row")
-        workflow_value = context.get("workflow_value")
-        destination_display = context.get("destination_display") or destination
-        note = context.get("note") or f"Found in Global Repo; downloaded to {destination_display}."
-        expected_path = context.get("expected_path") or destination
-        source = context.get("source") or ""
-
-        if not success:
-            self._handle_model_copy_failed(destination or "Copy failed.")
-            return
-
-        system_debug(
-            "[Validation] Global Repo copy completed | "
-            f"source='{source}' destination='{expected_path}'"
+        destination_display = state.destination_display or self._format_model_display_path(
+            destination, models_root
         )
+        note = state.resolve_method
+        if not note:
+            if state.kind == "copy":
+                note = f"Found in Global Repo; downloaded to {destination_display}."
+            else:
+                label = state.file_name or os.path.basename(destination) or "model"
+                note = f"Downloaded {label} to {destination_display}."
         row_info["subtitle_override"] = note
         row_info["resolve_method"] = row_info.get("resolve_method") or note
-        if isinstance(row, int):
+        row_index = row_info.get("row_index")
+        status_label = "Copied" if state.kind == "copy" else "Resolved"
+        if isinstance(row_index, int):
             self._mark_model_resolved(
-                row,
+                row_index,
                 "Resolved",
                 destination_display,
                 note,
                 workflow_value,
-                resolved_path=expected_path,
+                resolved_path=destination,
             )
-            self._record_resolved_model(expected_path, "Copied", row_info, workflow_value, note)
+            self._record_resolved_model(destination, status_label, row_info, workflow_value, note)
         issue_row = row_info.get("issue_row")
-        if isinstance(issue_row, IssueRow):
-            issue_row.mark_as_successful(
-                row_info.get("success_text") or "Resolved",
-                detail=note,
-            )
         button = row_info.get("button")
+        if isinstance(issue_row, IssueRow):
+            issue_row.mark_as_successful(row_info.get("success_text") or "Resolved", detail=note)
         if button and button is not getattr(issue_row, "btn_resolve", None):
             button.setEnabled(False)
             button.setText("Resolved")
+        system_debug(
+            "[Validation] Model transfer completed | "
+            f"kind='{state.kind}' destination='{destination}' workflow='{workflow_value}'"
+        )
+        self._unsubscribe_transfer(row_info)
         self._refresh_models_issue_status()
         self._update_overall_state()
         if self._workflow_folder:
             try:
                 write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
             except Exception as exc:
-                system_warning(f"Failed to persist resolve status after model copy: {exc}")
-        self._cleanup_model_copy_worker()
+                system_warning(f"Failed to persist resolve status after transfer: {exc}")
         self._continue_auto_resolve_queue()
 
-    def _handle_model_download_finished(self, success: bool, destination: str) -> None:
-        context = self._model_download_context or {}
-        row_info = context.get("row_info") or {}
-        row_info["download_in_progress"] = False
-        row = context.get("row")
-        workflow_value = context.get("workflow_value")
-        destination_display = context.get("destination_display") or destination
-        note = context.get("note") or f"Downloaded to {destination_display}."
-        expected_path = context.get("expected_path") or destination
-        url = context.get("url") or ""
-        if not workflow_value:
-            reference = row_info.get("reference") or {}
-            models_root = row_info.get("models_root") or ""
-            comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
-            workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+    def _handle_transfer_error(self, row_info: Dict[str, Any], state: TransferState) -> None:
+        message = state.error or "Transfer failed."
+        issue_row = row_info.get("issue_row")
+        button = row_info.get("button")
+        if isinstance(issue_row, IssueRow):
+            issue_row.reset_to_idle()
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(True)
+        self._set_issue_row_subtitle(row_info, message)
+        system_debug(
+            "[Validation] Model transfer failed | "
+            f"kind='{state.kind}' destination='{state.destination}' "
+            f"url='{state.url or ''}' error='{message}'"
+        )
+        self._unsubscribe_transfer(row_info)
+        self._refresh_models_issue_status()
+        self._update_overall_state()
+        self._continue_auto_resolve_queue()
 
-        if not success:
-            self._handle_model_download_failed(destination or "Download failed.")
+    def _handle_transfer_update(self, row_info: Dict[str, Any], state: TransferState) -> None:
+        row_info["expected_path"] = state.destination
+        if state.in_progress:
+            self._render_transfer_progress(row_info, state)
             return
-
-        system_debug(
-            "[Validation] URL model download completed | "
-            f"url='{url}' destination='{expected_path}'"
-        )
-        row_info["subtitle_override"] = note
-        row_info["resolve_method"] = row_info.get("resolve_method") or note
-        if isinstance(row, int):
-            self._mark_model_resolved(
-                row,
-                "Resolved",
-                destination_display,
-                note,
-                workflow_value,
-                resolved_path=expected_path,
-            )
-            self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value, note)
-        issue_row = row_info.get("issue_row")
-        if isinstance(issue_row, IssueRow):
-            issue_row.mark_as_successful(
-                row_info.get("success_text") or "Resolved",
-                detail=note,
-            )
-        button = row_info.get("button")
-        if button and button is not getattr(issue_row, "btn_resolve", None):
-            button.setEnabled(False)
-            button.setText("Resolved")
-        self._refresh_models_issue_status()
-        self._update_overall_state()
-        if self._workflow_folder:
-            try:
-                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
-            except Exception as exc:
-                system_warning(f"Failed to persist resolve status after URL download: {exc}")
-        self._cleanup_model_download_worker()
-        self._continue_auto_resolve_queue()
-
-    def _handle_model_download_failed(self, message: str) -> None:
-        context = self._model_download_context or {}
-        row_info = context.get("row_info") or {}
-        row_info["download_in_progress"] = False
-        message = message or "Download failed."
-        url = context.get("url") or ""
-        destination = context.get("expected_path") or ""
-        system_debug(
-            "[Validation] URL model download failed | "
-            f"url='{url}' destination='{destination}' message='{message}'"
-        )
-        issue_row = row_info.get("issue_row")
-        if isinstance(issue_row, IssueRow):
-            issue_row.reset_to_idle()
-        self._set_issue_row_subtitle(row_info, message)
-        button = row_info.get("button")
-        if button and button is not getattr(issue_row, "btn_resolve", None):
-            button.setEnabled(True)
-        self._cleanup_model_download_worker()
-        self._refresh_models_issue_status()
-        self._update_overall_state()
-        self._continue_auto_resolve_queue()
-
-    def _handle_model_copy_failed(self, message: str) -> None:
-        context = self._model_copy_context or {}
-        row_info = context.get("row_info") or {}
-        row_info["copy_in_progress"] = False
-        message = message or "Copy failed."
-        source = context.get("source") or ""
-        destination = context.get("expected_path") or ""
-        system_debug(
-            "[Validation] Global Repo copy failed | "
-            f"source='{source}' destination='{destination}' message='{message}'"
-        )
-        issue_row = row_info.get("issue_row")
-        if isinstance(issue_row, IssueRow):
-            issue_row.reset_to_idle()
-        self._set_issue_row_subtitle(row_info, message)
-        button = row_info.get("button")
-        if button and button is not getattr(issue_row, "btn_resolve", None):
-            button.setEnabled(True)
-        self._cleanup_model_copy_worker()
-        self._refresh_models_issue_status()
-        self._update_overall_state()
-        self._continue_auto_resolve_queue()
+        if state.error:
+            self._handle_transfer_error(row_info, state)
+            return
+        self._handle_transfer_success(row_info, state)
 
     def _select_candidate_path(
         self,
@@ -3160,14 +3066,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         row_info = rows.get(row)
         if not row_info or row_info.get("resolved"):
             return
-        if row_info.get("copy_in_progress"):
-            system_debug("[Validation] Model copy already in progress; skipping duplicate resolve trigger.")
-            return
-        if row_info.get("download_in_progress"):
-            system_debug("[Validation] Model download already in progress; skipping duplicate resolve trigger.")
-            return
         issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
+        active_state = self._active_transfer_for_row(row_info, include_completed=True)
+        if active_state:
+            self._subscribe_to_transfer(row_info, active_state.destination)
+            self._handle_transfer_update(row_info, active_state)
+            if active_state.in_progress or not active_state.error:
+                return
         if isinstance(issue_row, IssueRow):
             issue_row.start_install_animation()
         if button and button is not getattr(issue_row, "btn_resolve", None):
@@ -3201,12 +3107,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
         row_info = rows.get(row)
         if not row_info or row_info.get("resolved"):
-            return
-        if row_info.get("copy_in_progress"):
-            system_debug("[Validation] Model copy already in progress; skipping duplicate resolve trigger.")
-            return
-        if row_info.get("download_in_progress"):
-            system_debug("[Validation] Model download already in progress; skipping duplicate resolve trigger.")
             return
         issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
@@ -3699,6 +3599,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
     def _handle_connection_status_changed(self, connected: bool) -> None:
         self._connection_online = bool(connected)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        self._teardown_transfers()
+        super().closeEvent(event)
 
     def _handle_restart_state_changed(self, restarting: bool) -> None:
         if restarting:
