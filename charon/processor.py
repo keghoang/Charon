@@ -1214,6 +1214,20 @@ def process_charonop_node():
                 return candidate
             return find_read_node_for_parent()
 
+        def _collect_target_reads():
+            targets = []
+            try:
+                for candidate in iter_candidate_read_nodes():
+                    try:
+                        parent_val = read_node_parent_id(candidate)
+                    except Exception:
+                        parent_val = ""
+                    if parent_val == charon_node_id:
+                        targets.append(candidate)
+            except Exception:
+                pass
+            return targets
+
         def apply_status_color(state: str, read_node_override=None):
             tile_color = status_to_tile_color(state)
             gl_color = status_to_gl_color(state)
@@ -1281,17 +1295,9 @@ def process_charonop_node():
                 candidate = find_linked_read_node()
                 if candidate is not None:
                     targets.append(candidate)
-
-            try:
-                for candidate in iter_candidate_read_nodes():
-                    try:
-                        parent_val = read_node_parent_id(candidate)
-                    except Exception:
-                        parent_val = ""
-                    if parent_val == charon_node_id and candidate not in targets:
-                        targets.append(candidate)
-            except Exception:
-                pass
+            for candidate in _collect_target_reads():
+                if candidate not in targets:
+                    targets.append(candidate)
 
             try:
                 recreate_knob = node.knob('charon_recreate_read')
@@ -2045,6 +2051,8 @@ def process_charonop_node():
 
             current_node_state = lifecycle
             apply_status_color(current_node_state)
+            for candidate in _collect_target_reads():
+                apply_status_color(current_node_state, candidate)
 
             payload = load_status_payload()
             runs = ensure_history(payload)
