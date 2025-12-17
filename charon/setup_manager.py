@@ -38,15 +38,8 @@ class SetupManager:
 
     def _log(self, message: str) -> None:
         """Internal logging helper."""
-        try:
-            base_dir = get_charon_temp_dir()
-            debug_dir = os.path.join(base_dir, "debug")
-            os.makedirs(debug_dir, exist_ok=True)
-            log_path = os.path.join(debug_dir, "setup_manager.log")
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
-        except Exception:
-            pass
+        # File logging disabled per request
+        return
 
     def _run_command(self, cmd: List[str], timeout: int = 600) -> Tuple[bool, str]:
         """Runs a command and returns (success, stdout/stderr/error_msg)."""

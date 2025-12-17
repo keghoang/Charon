@@ -106,18 +106,8 @@ STYLESHEET = f"""
 
 
 def _debug_log(message: str) -> None:
-    """Append a debug message for setup wizard to the Charon debug folder."""
-    try:
-        base_dir = get_charon_temp_dir()
-        debug_dir = os.path.join(base_dir, "debug")
-        os.makedirs(debug_dir, exist_ok=True)
-        log_path = os.path.join(debug_dir, "first_time_setup_debug.txt")
-        path = Path(log_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(f"{message}\n")
-    except Exception:
-        pass
+    """Setup wizard file logging disabled."""
+    return
 
 
 class FirstTimeSetupWorker(QtCore.QObject):
