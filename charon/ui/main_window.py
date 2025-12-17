@@ -472,100 +472,12 @@ class CharonWindow(QtWidgets.QWidget):
             self.create_camera_button.setVisible(checked)
         if hasattr(self, 'generate_cameras_button'):
             self.generate_cameras_button.setVisible(checked)
-        if hasattr(self, 'debug_input_gen_button'):
-            self.debug_input_gen_button.setVisible(checked)
+
             
         from .. import preferences
         preferences.set_preference("3d_mode_enabled", checked)
 
-    def _on_debug_generate_inputs_clicked(self):
-        """Debug: Render individual camera views from rig and display."""
-        host = str(self.host).lower()
-        if host != "nuke":
-            return
-            
-        try:
-            import nuke
-        except ImportError:
-            return
-            
-        rig_group = nuke.toNode("Charon_Coverage_Rig")
-        if not rig_group:
-            QtWidgets.QMessageBox.warning(self, "Missing Rig", "Charon_Coverage_Rig not found.")
-            return
-            
-        contact_sheet = None
-        with rig_group:
-            contact_sheet = nuke.toNode("ContactSheet1")
-            if not contact_sheet:
-                for n in nuke.allNodes("ContactSheet"):
-                    contact_sheet = n
-                    break
-        
-        if not contact_sheet:
-            QtWidgets.QMessageBox.warning(self, "Error", "ContactSheet not found in rig.")
-            return
-            
-        from ..paths import get_charon_temp_dir
-        import uuid
-        import os
-        temp_dir = os.path.join(get_charon_temp_dir(), 'debug_inputs')
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        from .. import preferences
-        aces_enabled = preferences.get_preference("aces_mode_enabled", False)
-        # Import helper from processor (requires relative import or full path)
-        from ..processor import _apply_aces_pre_write_transform
-        
-        rendered_reads = []
-        
-        for i in range(contact_sheet.inputs()):
-            inp = contact_sheet.input(i)
-            if not inp: continue
-            
-            path = os.path.join(temp_dir, f"debug_view_{i}_{str(uuid.uuid4())[:6]}.png").replace("\\", "/")
-            
-            with rig_group:
-                # Use standard Write node logic
-                w = nuke.createNode("Write", inpanel=False)
-                
-                source = inp
-                transformed = _apply_aces_pre_write_transform(source, aces_enabled)
-                
-                w.setInput(0, transformed)
-                if aces_enabled:
-                    w['raw'].setValue(True)
-                
-                w['file'].setValue(path)
-                w['file_type'].setValue("png")
-                
-                try:
-                    nuke.execute(w, nuke.frame(), nuke.frame())
-                finally:
-                    nuke.delete(w)
-                    if transformed != source:
-                        nuke.delete(transformed)
-                        
-            r = nuke.createNode("Read")
-            r['file'].setValue(path)
-            rendered_reads.append(r)
-            
-        if rendered_reads:
-            start_x = rig_group.xpos() + 300
-            start_y = rig_group.ypos()
-            
-            cs = nuke.createNode("ContactSheet")
-            cs['width'].setValue(3072)
-            cs['height'].setValue(2048)
-            cs['rows'].setValue(2)
-            cs['columns'].setValue(3)
-            cs['gap'].setValue(10)
-            cs['roworder'].setValue("TopBottom")
-            cs.setXYpos(start_x, start_y + 200)
-            
-            for idx, r in enumerate(rendered_reads):
-                r.setXYpos(start_x + (idx * 100), start_y)
-                cs.setInput(idx, r)
+
 
     def _on_create_camera_clicked(self):
         """Create a camera framing the selected geometry."""
@@ -1052,15 +964,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         info_layout.addWidget(self.aces_toggle_button)
         
-        # Debug Button
-        self.debug_input_gen_button = QtWidgets.QPushButton("🐞 Inputs", info_container)
-        self.debug_input_gen_button.setToolTip("Debug: Generate Step 2 Input Images")
-        self.debug_input_gen_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.debug_input_gen_button.setFixedHeight(24)
-        self.debug_input_gen_button.setStyleSheet(self._aces_off_style)
-        self.debug_input_gen_button.clicked.connect(self._on_debug_generate_inputs_clicked)
-        self.debug_input_gen_button.setVisible(False)
-        info_layout.addWidget(self.debug_input_gen_button)
+
         
         content_layout.addWidget(info_container)
         
