@@ -41,6 +41,7 @@ class FolderPanel(QtWidgets.QWidget):
         self.folder_view.horizontalHeader().setHighlightSections(False)
         self.folder_view.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.folder_view.horizontalHeader().setFixedHeight(30)
+        self.folder_view.setFrameShape(QtWidgets.QFrame.NoFrame)
         
         # Connect mouse signals for drag tracking
         self.folder_view.installEventFilter(self)
@@ -49,8 +50,24 @@ class FolderPanel(QtWidgets.QWidget):
         self.folder_model = FolderTableModel()
         self.folder_view.setModel(self.folder_model)
         
+        # Wrap view in a rounded container
+        container = QtWidgets.QFrame()
+        container.setObjectName("FolderFrame")
+        container.setStyleSheet("""
+            QFrame#FolderFrame {
+                border: 1px solid #171a1f;
+                border-radius: 8px;
+                background: #262a2e;
+            }
+        """)
+        container.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        container_layout = QtWidgets.QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.addWidget(self.folder_view)
+        
         # Add view to layout
-        self.layout.addWidget(self.folder_view)
+        self.layout.addWidget(container)
 
 
     def set_host(self, host):

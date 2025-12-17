@@ -84,7 +84,7 @@ class TagBar(QtWidgets.QWidget):
         # Create layout
         self.layout = QtWidgets.QVBoxLayout(self)
         # Add top margin to align with table headers (accounting for panel title)
-        self.layout.setContentsMargins(2, 24, 2, 2)
+        self.layout.setContentsMargins(2, 0, 2, 2)
         self.layout.setSpacing(4)
         
         # Scroll area for dynamic tags

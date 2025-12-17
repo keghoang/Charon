@@ -87,8 +87,50 @@ class ScriptTableView(QtWidgets.QTableView):
         self.setMouseTracking(True)
         existing_style = self.styleSheet() or ''
         focusless_style = 'QTableView::item:focus { outline: none; }'
+        header_style = """
+        QHeaderView {
+            background: #37393f;
+            border: 1px solid #171a1f;
+            border-bottom: 0px;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            margin: 0px;
+            padding: 0px;
+        }
+        QHeaderView::section {
+            background: #37393f;
+            color: palette(windowText);
+            border: none;
+            padding: 4px 6px;
+            margin: 0px;
+        }
+        """
+        table_style = """
+        QTableView {
+            background: #262a2e;
+            alternate-background-color: #1f2226;
+            color: #f4f4f5;
+            selection-background-color: #84a8de;
+            selection-color: #0f1114;
+            border: none;
+            border-radius: 0px;
+            padding: 0px;
+        }
+        QTableCornerButton::section {
+            background: #37393f;
+            border: 1px solid #171a1f;
+            border-bottom: 0px;
+            border-top-left-radius: 8px;
+            margin: 0px;
+            padding: 0px;
+        }
+        """
         if focusless_style not in existing_style:
             combined_style = focusless_style if not existing_style else '{}\n{}'.format(existing_style, focusless_style)
+            combined_style = '{}\n{}\n{}'.format(combined_style, header_style, table_style)
+            self.setStyleSheet(combined_style)
+        else:
+            combined_style = '{}\n{}\n{}'.format(existing_style, header_style, table_style)
             self.setStyleSheet(combined_style)
         self.setAcceptDrops(True)
         
@@ -403,6 +445,45 @@ class FolderTableView(QtWidgets.QTableView):
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.verticalHeader().hide()
         self.horizontalHeader().show()
+        header_style = """
+        QHeaderView {
+            background: #37393f;
+            border: 1px solid #171a1f;
+            border-bottom: 0px;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            margin: 0px;
+            padding: 0px;
+        }
+        QHeaderView::section {
+            background: #37393f;
+            color: palette(windowText);
+            border: none;
+            padding: 4px 6px;
+            margin: 0px;
+        }
+        """
+        table_style = """
+        QTableView {
+            background: #262a2e;
+            alternate-background-color: #1f2226;
+            color: #f4f4f5;
+            selection-background-color: #84a8de;
+            selection-color: #0f1114;
+            border: none;
+            border-radius: 0px;
+            padding: 0px;
+        }
+        QTableCornerButton::section {
+            background: #37393f;
+            border: 1px solid #171a1f;
+            border-bottom: 0px;
+            border-top-left-radius: 8px;
+            margin: 0px;
+            padding: 0px;
+        }
+        """
+        self.setStyleSheet(f"{header_style}\n{table_style}")
         
         # Set uniform row height
         self.verticalHeader().setDefaultSectionSize(30)
