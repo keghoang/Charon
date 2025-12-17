@@ -972,6 +972,200 @@ def _apply_seed_control(node, seed_spec, control_spec) -> Dict[str, Any]:
     return updates
 
 
+def _run_3d_texturing_step2_logic(
+    node,
+    workflow_data: Dict[str, Any],
+    comfy_client: ComfyUIClient,
+    update_progress,
+    temp_dir: str,
+    connected_inputs: Dict[int, Any],
+):
+    try:
+        import nuke
+    except ImportError:
+        raise RuntimeError('Nuke is required for 3D Texturing Step 2.')
+
+    log_debug('Starting 3D Texturing - Step 2 logic...')
+    
+    # 1. Locate Resources
+    rig_group = nuke.toNode("Charon_Coverage_Rig")
+    if not rig_group:
+        raise RuntimeError("Charon_Coverage_Rig not found. Please run Step 1 (Generate Coverage) first.")
+        
+    contact_sheet = None
+    with rig_group:
+        contact_sheet = nuke.toNode("ContactSheet1")
+        if not contact_sheet:
+            for n in nuke.allNodes("ContactSheet"):
+                contact_sheet = n
+                break
+    
+    if not contact_sheet:
+        raise RuntimeError("ContactSheet not found inside Charon_Coverage_Rig.")
+        
+    camera_views = []
+    for i in range(contact_sheet.inputs()):
+        inp = contact_sheet.input(i)
+        if inp:
+            camera_views.append((i, inp))
+            
+    if not camera_views:
+        raise RuntimeError("No camera views found connected to ContactSheet in rig.")
+        
+    # 2. Identify Init Image
+    init_image_node = connected_inputs.get(0)
+    if not init_image_node:
+        raise RuntimeError("Input 0 (Init Image) must be connected for Step 2.")
+        
+    update_progress(0.1, "Rendering init image")
+    init_image_path = os.path.join(temp_dir, f'step2_init_{str(uuid.uuid4())[:8]}.png').replace('\\', '/')
+    _render_nuke_node(init_image_node, init_image_path)
+    init_image_upload = comfy_client.upload_image(init_image_path)
+    
+    # 3. Identify Workflow Targets
+    set_targets = build_set_targets(workflow_data)
+    target_init = set_targets.get('charoninput_init_image')
+    target_coverage = set_targets.get('charoninput_coverage_rig')
+    
+    # Fallback to LoadImage nodes if SetNodes not found (simplified heuristic)
+    load_images = []
+    if not target_init or not target_coverage:
+        for nid, ndata in workflow_data.items():
+            if ndata.get('class_type') == 'LoadImage':
+                load_images.append(nid)
+        if len(load_images) >= 2:
+            if not target_init: target_init = (load_images[0], 'image')
+            if not target_coverage: target_coverage = (load_images[1], 'image')
+
+    if not target_init or not target_coverage:
+        raise RuntimeError("Could not identify CharonInput_init_image or CharonInput_coverage_rig targets in workflow.")
+
+    results = []
+    
+    for idx, (cam_index, view_node) in enumerate(camera_views):
+        progress_base = 0.2 + (0.8 * (idx / len(camera_views)))
+        update_progress(progress_base, f"Processing view {idx+1}/{len(camera_views)}")
+        
+        # Render View
+        view_path = os.path.join(temp_dir, f'step2_view_{idx}_{str(uuid.uuid4())[:8]}.png').replace('\\', '/')
+        with rig_group:
+            _render_nuke_node(view_node, view_path)
+        view_upload = comfy_client.upload_image(view_path)
+        
+        # Prepare Workflow
+        prompt = copy.deepcopy(workflow_data)
+        _assign_to_workflow(prompt, target_init[0], init_image_upload)
+        _assign_to_workflow(prompt, target_coverage[0], view_upload)
+        
+        # Execute
+        prompt_id = comfy_client.submit_workflow(prompt)
+        if not prompt_id:
+            raise Exception("Failed to submit workflow to ComfyUI")
+            
+        # Wait for result (Simplified wait loop)
+        output_file = _wait_for_single_image(comfy_client, prompt_id, timeout=300)
+        if output_file:
+            # Download/Copy result
+            ext = os.path.splitext(output_file)[1]
+            local_out = allocate_charon_output_path(
+                _normalize_node_id(_safe_knob_value(node, "charon_node_id")),
+                "step2",
+                ext,
+                "user",
+                "TexturingStep2",
+                "2D",
+                f"View_{idx}"
+            )
+            success = comfy_client.download_file(output_file, local_out)
+            if success:
+                results.append(local_out)
+            else:
+                log_debug(f"Failed to download result for view {idx}", "WARNING")
+        else:
+            log_debug(f"No output for view {idx}", "WARNING")
+
+    if results:
+        update_progress(1.0, "Creating Contact Sheet", extra={'batch_outputs': results}) # Store results in extra for potential use
+        nuke.executeInMainThread(lambda: _create_step2_contact_sheet(node, results))
+    else:
+        raise Exception("No results generated from Step 2 execution.")
+
+def _render_nuke_node(node, path):
+    import nuke
+    w = nuke.createNode("Write", inpanel=False)
+    w.setInput(0, node)
+    w['file'].setValue(path)
+    w['file_type'].setValue("png")
+    # Ensure alpha is handled if needed, but assuming standard render
+    try:
+        nuke.execute(w, nuke.frame(), nuke.frame())
+    finally:
+        nuke.delete(w)
+
+def _assign_to_workflow(workflow, node_id, filename):
+    node = workflow.get(str(node_id))
+    if node:
+        inputs = node.setdefault('inputs', {})
+        inputs['image'] = filename
+
+def _wait_for_single_image(client, prompt_id, timeout=300):
+    start = time.time()
+    while time.time() - start < timeout:
+        history = client.get_history(prompt_id)
+        if history and prompt_id in history:
+            outputs = history[prompt_id].get('outputs', {})
+            for nid, out_data in outputs.items():
+                images = out_data.get('images', [])
+                if images:
+                    return images[0].get('filename')
+            return None
+        time.sleep(1.0)
+    return None
+
+def _create_step2_contact_sheet(charon_node, image_paths):
+    import nuke
+    
+    # Calculate layout (same as coverage rig: 3 cols, 2 rows)
+    # 0:Init, 1:Right, 2:Back, 3:Left, 4:Top, 5:Bottom
+    # Row 1: Init, Right, Back (0, 1, 2)
+    # Row 2: Left, Top, Bottom (3, 4, 5) ? 
+    # Actually coverage rig layout was:
+    # ("Init",   0,   0,   0, 0) -> 0
+    # ("Right",  90,  0,   1, 0) -> 1
+    # ("Back",   180, 0,   2, 0) -> 2
+    # ("Left",   270, 0,   3, 0) -> 3
+    # ("Top",    0,   90,  0, 1) -> 4
+    # ("Bottom", 0,   -90, 1, 1) -> 5
+    # Grid X/Y logic was: x + y*4. 
+    # Row 0: Init(0), Right(1), Back(2), Left(3) -- Wait, grid_x goes up to 3.
+    # Ah, the user's previous code had:
+    # x_pos = (grid_x + grid_y * 4) * 200
+    # The contact sheet uses inputs in order.
+    # We will just connect them in order.
+    
+    start_x = charon_node.xpos() + 200
+    start_y = charon_node.ypos()
+    
+    reads = []
+    for idx, path in enumerate(image_paths):
+        r = nuke.createNode("Read")
+        r['file'].setValue(path.replace('\\', '/'))
+        r.setXYpos(start_x + (idx * 100), start_y)
+        reads.append(r)
+        
+    cs = nuke.createNode("ContactSheet")
+    cs.setXYpos(start_x, start_y + 200)
+    cs['width'].setValue(3072)
+    cs['height'].setValue(2048)
+    cs['rows'].setValue(2)
+    cs['columns'].setValue(3)
+    cs['gap'].setValue(10)
+    cs['roworder'].setValue("TopBottom")
+    
+    for i, r in enumerate(reads):
+        cs.setInput(i, r)
+
+
 def process_charonop_node():
     try:
         import nuke  # type: ignore
@@ -2116,6 +2310,60 @@ def process_charonop_node():
             raise RuntimeError('Missing workflow data on CharonOp node')
 
         workflow_data = json.loads(workflow_data_str)
+
+        is_step2 = False
+        try:
+            from .metadata_manager import get_charon_config
+            check_path = workflow_path or node.metadata('charon/workflow_path')
+            if check_path and os.path.exists(check_path):
+                conf = get_charon_config(os.path.dirname(check_path))
+                if conf and conf.get('is_3d_texturing_step2'):
+                    is_step2 = True
+        except Exception as step2_err:
+            log_debug(f"Step 2 check failed: {step2_err}", "WARNING")
+
+        if is_step2:
+            def step2_runner():
+                try:
+                    initialize_status('Starting 3D Texturing - Step 2')
+                    _charon_window, comfy_client, comfy_path = _resolve_comfy_environment()
+                    if not comfy_client:
+                        raise RuntimeError("ComfyUI client unavailable")
+                    
+                    connected_inputs = {}
+                    total_inputs = node.inputs()
+                    for index in range(total_inputs):
+                        input_node = node.input(index)
+                        if input_node is not None:
+                            connected_inputs[index] = input_node
+                            
+                    temp_root_val = node.knob('charon_temp_dir').value()
+                    
+                    prompt_data = workflow_data
+                    if not is_api_prompt(workflow_data):
+                        initialize_status('Converting Step 2 Workflow')
+                        prompt_data = runtime_convert_workflow(workflow_data, comfy_path)
+                        
+                    _run_3d_texturing_step2_logic(
+                        node, 
+                        prompt_data, 
+                        comfy_client, 
+                        lambda p, s, **k: update_progress(p, s, extra=k.get('extra')), 
+                        temp_root_val,
+                        connected_inputs
+                    )
+                    
+                    update_progress(1.0, "Step 2 Completed")
+                    
+                except Exception as exc:
+                    log_debug(f"Step 2 failed: {exc}", "ERROR")
+                    update_progress(-1.0, f"Error: {exc}", error=str(exc))
+
+            bg_thread = threading.Thread(target=step2_runner)
+            bg_thread.daemon = True
+            bg_thread.start()
+            return
+
         input_mapping = json.loads(input_mapping_str)
         parameter_specs = _load_parameter_specs(node)
         workflow_is_api = is_api_prompt(workflow_data)
