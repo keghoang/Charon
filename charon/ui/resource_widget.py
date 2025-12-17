@@ -145,14 +145,18 @@ class ResourceWidget(QWidget):
         self.monitor.start()
 
     def _update_anim(self):
-        self.anim_dots = (self.anim_dots + 1) % 4
+        self.anim_dots = (self.anim_dots % 3) + 1
         self.flush_feedback.setText(f"Flushing{'.' * self.anim_dots}")
 
     def _flush_vram(self):
         self.pre_flush_vram = self.current_total_vram_gb
         self.flush_btn.setEnabled(False)
-        self.flush_feedback.setText("Flushing")
+        self.flush_feedback.setText("Flushing...")
+        self.anim_dots = 0
         self.anim_timer.start(300)
+        
+        from ..charon_logger import system_debug
+        system_debug(f"Flushing VRAM. Pre-flush usage: {self.pre_flush_vram:.2f} GB")
         
         self.worker = FlushWorker()
         self.worker_thread = QThread()
@@ -176,8 +180,10 @@ class ResourceWidget(QWidget):
 
     def _show_flush_result(self):
         diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
-        self.flush_feedback.setText(f"Freed {diff:.2f}GB")
+        from ..charon_logger import system_debug
+        system_debug(f"Flush complete. Post-flush usage: {self.current_total_vram_gb:.2f} GB. Freed: {diff:.2f} GB")
         
+        self.flush_feedback.setText(f"Freed {diff:.2f}GB")
         self.flush_btn.setEnabled(True)
         QTimer.singleShot(6000, lambda: self.flush_feedback.setText(""))
 
