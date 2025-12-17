@@ -1223,10 +1223,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             status_text = "Resolved" if resolved_flag else "Missing"
             status_item = QtWidgets.QTableWidgetItem(status_text)
             self._apply_status_style(status_item, status_text)
+            if resolved_flag and resolve_method:
+                status_item.setText(f"{status_text}\n{resolve_method}")
+                status_item.setToolTip(resolve_method)
             table.setItem(row, 1, status_item)
             location_text = display_source or name or "Not provided"
-            if resolved_flag and resolve_method:
-                location_text = f"{location_text} — {resolve_method}"
             location_item = QtWidgets.QTableWidgetItem(location_text)
             url_value = reference.get("url") or (raw_data.get("url") if isinstance(raw_data, dict) else "")
             tooltip_parts = [location_text]
@@ -1446,7 +1447,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
             name_text = package_display
             if resolve_method:
-                name_text = f"{package_display} — {resolve_method}"
+                name_text = f"{package_display}\n{resolve_method}"
             name_item = QtWidgets.QTableWidgetItem(name_text)
             tooltip_parts = [repo_url or package_display]
             if resolve_method:
@@ -1492,7 +1493,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "dependency": None,
                     "resolved": False,
                     "missing_nodes": missing_nodes,
-                    "resolve_method": resolve_method,
+                    "resolve_method": resolve_method or "Installed",
                 }
             else:
                 placeholder_widget = QtWidgets.QWidget()
@@ -1508,7 +1509,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "dependency": None,
                     "resolved": True,
                     "missing_nodes": [],
-                    "resolve_method": resolve_method,
+                    "resolve_method": resolve_method or "Installed",
                 }
             row += 1
 
@@ -2414,15 +2415,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     if not table:
                         continue
                     # Status column update
-                        status_item = table.item(r_idx, 1)
-                        if isinstance(status_item, QtWidgets.QTableWidgetItem):
-                            resolved_label = "Resolved"
-                            method_text = row_info.get("resolve_method") or ""
-                            if method_text:
-                                resolved_label = f"{resolved_label} — {method_text}"
-                                status_item.setToolTip(method_text)
-                            status_item.setText(resolved_label)
-                            self._apply_status_style(status_item, "Resolved")
+                    status_item = table.item(r_idx, 0)
+                    if isinstance(status_item, QtWidgets.QTableWidgetItem):
+                        resolved_label = "Resolved"
+                        method_text = row_info.get("resolve_method") or ""
+                        if method_text:
+                            resolved_label = f"{resolved_label}\\n{method_text}"
+                            status_item.setToolTip(method_text)
+                        status_item.setText(resolved_label)
+                        self._apply_status_style(status_item, "Resolved")
                     # Package column update (header row only)
                     if r_idx == package_row:
                         pkg_item = table.item(r_idx, 2)
@@ -2765,14 +2766,25 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         *,
         prompt_restart: bool = True,
     ) -> None:
+        method_detail = row_info.get("resolve_method") or note or "Installed"
+        row_info["resolve_method"] = method_detail
         status_item = row_info.get("status_item")
         if isinstance(status_item, QtWidgets.QTableWidgetItem):
+            resolved_label = "Resolved"
+            if method_detail:
+                resolved_label = f"{resolved_label}\n{method_detail}"
+                status_item.setToolTip(method_detail)
             self._apply_status_style(status_item, "Resolved")
+            status_item.setText(resolved_label)
 
         package_item = row_info.get("package_item")
         package_name = row_info.get("package_name") or "Installed"
         if isinstance(package_item, QtWidgets.QTableWidgetItem):
-            package_item.setText(f"{package_name} (installed)")
+            display_text = f"{package_name} (installed)"
+            if method_detail:
+                display_text = f"{display_text}\n{method_detail}"
+                package_item.setToolTip(method_detail)
+            package_item.setText(display_text)
             package_item.setForeground(QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR)))
 
         button = row_info.get("button")
