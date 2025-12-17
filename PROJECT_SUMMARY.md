@@ -1,93 +1,66 @@
-# Charon – ComfyUI ⇄ Nuke Integration
+# Charon - ComfyUI x Nuke Integration
 
 ## 1. High-Level Overview
-Charon is a modular Nuke add-on that bridges Nuke’s node graph to ComfyUI’s API workflows. The tool now lives as a small launcher script (`main.py`) plus a `charon_core/` package that owns all functionality:
+Charon is a Nuke add-on that bridges the node graph to ComfyUI's API workflows. The project now consists of a launcher script (`main.py`) and a single `charon/` package that owns every subsystem:
 
-- **UI (`charon_core/ui.py`)** – PySide2/6 panel that manages workflow browsing, connection status, caching, and CharonOp node generation.
-- **Workflow pipeline (`charon_core/workflow_pipeline.py`)** – Mandatory external conversion that shells into ComfyUI’s embedded Python, loads every custom node, runs Seth Robinson’s converter, flattens `SetNode/GetNode` pairs, and emits API-ready prompts. No heuristic fallbacks remain; failures raise immediately with detailed logs.
-- **Workflow analysis (`charon_core/workflow_analysis.py`)** – Two sets of helpers: one for raw UI JSON (used to build knobs and display summaries) and one for converted API graphs.
-- **Path utilities (`charon_core/paths.py`)** – Discovers ComfyUI install paths, extends `sys.path`, creates temp dirs (`D:\Nuke\charon\{temp,results,status,debug}`), and resolves embedded python executables.
-- **Node factory (`charon_core/node_factory.py`)** + **processor script (`charon_core/processor_script.py`)** – Build CharonOp group nodes, generate the embedded PyScript that renders inputs, uploads images, monitors results, and drops Read nodes back into the graph.
-- **Workflow loader (`charon_core/workflow_loader.py`)** – Small helpers to list preset JSON workflows and read files without conversion.
-- **HTTP client (`charon_core/comfy_client.py`)** – Minimal urllib-based REST client for ComfyUI (`/upload/image`, `/prompt`, `/history`, `/view`). Used by the processing script and panel tests.
+- **UI (`charon/ui/`)** - PySide6 panels and widgets for workflow browsing, metadata editing, and CharonOp orchestration.
+- **Workflow runtime (`charon/workflow_runtime.py`)** - Discovers workflows, loads bundles, and spawns CharonOps.
+- **Conversion pipeline (`charon/workflow_pipeline.py`, `charon/workflow_converter.py`)** - Shells into ComfyUI's embedded Python, loads custom nodes, flattens Set/Get pairs, and emits API-ready prompts.
+- **Analysis helpers (`charon/workflow_analysis.py`)** - Derives knob definitions and summaries for UI and converted graphs.
+- **Processing path (`charon/processor.py`, `charon/node_factory.py`, `charon/scene_nodes_runtime.py`)** - Builds CharonOp nodes, drives ComfyUI submissions, and manages result ingestion.
+- **Infrastructure (`charon/paths.py`, `charon/preferences.py`, `charon/config.py`, `charon/comfy_client.py`)** - Filesystem resolution, persisted settings, and REST utilities.
 
-## 2. Workflow
-1. **Launch** – In Nuke’s Script Editor run:
+Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay under `charon/resources/`.
+
+## 2. Typical Workflow
+1. **Launch** - In Nuke's Script Editor run:
    ```python
    import sys; sys.path.insert(0, r"D:\Coding\Nuke_ComfyUI")
    exec(open(r"D:\Coding\Nuke_ComfyUI\main.py").read(), globals())
    ```
-   The entry script imports `charon_core.create_charon_panel()` and ensures a single instance is reused.
-2. **Panel** – On init the panel:
-   - Creates logs (`self.log(...)` prints `[HH:MM:SS] [LEVEL] message` into the console).
-   - Stores caches (`self.workflow_cache`, `self.current_workflow_path/name`, raw JSON).
-   - Builds the UI (connection controls, workflow dropdown + custom loader, status display, CharonOp generator).
-   - Adds a “Scene Nodes” tab that lists every CharonOp in the current script, surfaces each node’s live `charon_status`, and recenters the graph when a row is selected.
-   - Extends `sys.path` using the value in “ComfyUI Path” (defaults to `D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat`).
-   - Auto tests the connection via `ComfyUIClient.test_connection()`.
-3. **Workflow selection** – Selecting a preset/custom JSON:
-   - Loads the raw UI JSON via `workflow_loader.load_workflow`. No conversion occurs here.
-   - Caches the path + raw data (`self.workflow_cache` entry) but defers heavy conversion.
-   - Uses `workflow_analysis.analyze_ui_workflow_inputs` and `workflow_display_text_ui` to populate knob metadata and summary text (SetNode names drive CharonOp input titles, e.g. `CR_input_depth → Depth`).
-4. **Generate CharonOp** – When “Generate CharonOp Node” is pressed:
-   - Calls `create_charon_group_node`, which:
-     * Builds a Nuke Group node using sanitized workflow name (`CharonOp_<workflow>`).
-     * Drops `Input` nodes equal to the discovered inputs, labels them with friendly names.
-     * Adds knobs (`workflow_data`, `input_mapping`, `charon_temp_dir`, Process/Menu buttons, info text).
-     * Positions the node at the centroid of the currently selected nodes; if none, uses the root graph center.
-     * Stores the raw UI JSON (`workflow_data`) and input metadata (`input_mapping`) inside the node.
-     * The embedded process button points to the string generated by `get_charonop_process_script_fixed()`, which renders inputs, uploads images, injects them into the converted workflow, submits to `/prompt`, polls `/history`, downloads results, and wires a Read node.
-5. **Process with ComfyUI** – Inside the embedded process script:
-   - Converts the raw UI JSON to API using `CharonPanel.convert_workflow_on_request()` (a cached call to `workflow_pipeline.convert_workflow`).
-   - The conversion pipeline uses external Comfy python: loads all custom nodes, runs `WorkflowConverter.convert_to_api`, flattens `SetNode/GetNode` to direct connections, preserves widget values (`aov`, `seed`, `steps`, etc.), and removes helper nodes.
-   - Uploaded input images are assigned to the converted graph (handles `LoadImage`, `SetNode` pairs, etc.).
-   - Results and errors are written to `D:\Nuke\charon\results\charon_result_<timestamp>.json`. Successful runs also drop `Read` nodes automatically and clean temp files.
+   `main.py` ensures the repo is on `sys.path`, configures logging, and calls `charon.main.launch()`.
+2. **Panel initialisation** - The panel:
+   - Extends `sys.path` with the configured ComfyUI directory via `paths.extend_sys_path_with_comfy`.
+   - Caches workflow folders, metadata, and raw JSON in memory.
+   - Populates the Workflows tab, Scene Nodes tab, and footer connection controls.
+   - Locates or prompts for the ComfyUI launcher, then runs `_check_connection()` with `ComfyUIClient`.
+3. **Workflow selection** - Choosing a workflow calls `workflow_runtime.load_workflow_bundle()` which:
+   - Validates the folder is inside `config.WORKFLOW_REPOSITORY_ROOT`.
+   - Reads `.charon.json` metadata plus `workflow.json` payload.
+   - Analyses inputs via `workflow_analysis.analyze_ui_workflow_inputs` to build knob descriptors.
+4. **Create CharonOp** - Pressing **Grab Workflow**:
+   - Invokes `workflow_runtime.spawn_charon_node()`.
+   - `node_factory.create_charon_group_node()` builds a Group node, adds input knobs, stores the raw UI workflow, injects process/import scripts, and aligns the node in the graph.
+5. **Process with ComfyUI** - The embedded button executes `charon.processor.process_charonop_node()`:
+   - Loads the bundle from the node's knobs.
+   - Converts to API format when needed via `workflow_runtime.convert_workflow()`.
+   - Uploads inputs through `ComfyUIClient`, submits the prompt, polls `/history`, and downloads outputs.
+   - Updates `charon_status`, writes prompt dumps, and creates Read nodes for results.
 
-## 3. Key Implementation Details
-- **Strict external conversion** – `convert_with_external_python(..., strict=True)` shells into `python_embeded/python.exe`, injects `workflow_converter.py`, and executes the conversion. Failures (missing python, missing converter, non-zero exit) raise `RuntimeError` with console logs. The shell script deletes temporary runner/IO files afterwards. Conversion logs include stdout/stderr to ease debugging.
-- **Set/Get flattening** – `flatten_set_get_nodes` processes the UI graph’s `links` array to map `SetNode` outputs to their upstream sources. During conversion the API prompt references only native nodes (`LoadImage`, `SaveImage`, custom nodes). Any `GetNode`/`SetNode` entries are removed from the final prompt.
-- **Caching & debug dumps** – `self.workflow_cache[path] = {"prompt": converted, "debug_path": file}` stores the converted prompt. `write_debug_prompt` saves JSON snapshots (e.g. `rgb2x_albedo_GET_converted.json`), mirrored in console prints, so prompt mismatches are easy to reproduce outside Nuke.
-- **Deferred conversion** – Raw UI JSON is analysed for knob names, but conversion is only triggered at process time (and cached). This eliminates the lag when browsing workflows.
-- **Node placement** – Newly generated CharonOp nodes appear near selected nodes, improving user ergonomics.
-- **Panel reuse** – `charon_core/__init__.py` keeps a singleton panel instance; subsequent loads simply raise the existing window instead of reinitializing caches/connections.
-- **Runtime status tracking** – Each generated CharonOp stores a hidden `charon_status` knob that is updated by the processing script (`Processing`, `Completed`, `Error`), allowing the UI overview tab to reflect live progress.
-- **Error transparency** – Console log messages highlight missing dependencies (e.g. custom nodes failing to import) but those don’t block converted prompts. All crucial errors now bubble up with full stack traces.
+## 3. Key Paths & Directories
+- Workflows live under `\buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows` (per `config.WORKFLOW_REPOSITORY_ROOT`).
+- Runtime artifacts are written to `D:\Nuke\charon\{temp,exports,results,status,debug}` via helpers in `charon/paths.py`.
+- Preferences persist in `%LOCALAPPDATA%\Charon\plugins\charon\preferences.json`.
 
-## 4. Current Repository Layout
-```
-main.py                      # thin launcher
-charon_core/
-  __init__.py                # singleton entry point
-  comfy_client.py            # REST client
-  node_factory.py            # CharonOp builder
-  paths.py                   # path + temp helpers
-  processor_script.py        # embedded process menu script
-  ui.py                      # PySide panel logic + caching
-  workflow_analysis.py       # UI/API workflow inspection
-  workflow_loader.py         # preset discovery
-  workflow_pipeline.py       # strict conversion pipeline (external/in-process)
-  workflow_converter.py      # Seth Robinson converter (vendored copy)
-workflows/                   # preset JSON workflows
-D:\Nuke\charon\              # runtime temp/output/debug directory
-```
+## 4. Developing and Testing
+- Use `python tools\populate_dummy_workflows.py` to seed sample workflows.
+- Reload the panel in-place by clearing cached `charon.*` modules and re-running `main.py`.
+- Run the conversion smoke test:
+  ```powershell
+  python -c "from charon.workflow_runtime import load_workflow_bundle, convert_workflow;  bundle = load_workflow_bundle(r'workflows\rgb2x_albedo_GET');  convert_workflow(bundle['workflow'], comfy_path=r'D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat')"
+  ```
+- Manual QA checklist:
+  1. Launch panel from Nuke.
+  2. Grab a workflow and spawn a CharonOp.
+  3. Press **Process with ComfyUI**; verify status transitions, prompt dump, and Read node creation.
+  4. Inspect `D:\Nuke\charon\results` for outputs.
 
-## 5. Recent Fixes & QoL Enhancements
-- Replaced monolithic script with modular `charon_core` package for maintainability.
-- Enforced external conversion path; removed heuristic fallback; raises explicit errors with logging.
-- Added caching for both raw UI JSON and converted prompts; conversions run only when needed.
-- Deferred conversion from workflow selection to process time, eliminating UI lag.
-- Added UI workflow analysis (`analyze_ui_workflow_inputs`) to keep CharonOp knob names in sync with `SetNode` conventions (`CR_input_*` → friendly labels).
-- Auto-position CharonOp nodes near user selections; fallback to graph center if none.
-- Ensured converted prompts are logged and saved (`D:\Nuke\charon\debug\*.json`) for reproducible debugging.
-- Stabilized panel lifecycle: caches initialized before workflow loading, existing panel instances reused on relaunch.
-- Added node overview tab with refresh shortcut, status coloring, and graph focus helpers to keep multi-Charon workflows organized.
+## 5. Packaging Notes
+- The repository is now package-ready: importers depend only on `charon/` (no `charon_core` links remain).
+- `charon/__main__.py` supports launching via `python -m charon` for quick prototyping outside Nuke.
+- When distributing, bundle the `charon` package plus `main.py`; optional docs can ship from `docs/`.
 
 ## 6. Next Steps
-- Optional: capture raw UI JSON + cached prompt on the CharonOp node so third parties can relaunch conversion without reopening the panel.
-- Optional: introduce conversion job queue / progress UI if future workflows become heavier.
-- Optional: provide a CLI utility for testing conversions outside Nuke using the same `charon_core.workflow_pipeline`.
-### Prototype Prompt Caching (2025-10-22)
-- The prototype processor now saves the converted API prompt in each workflow�s `_API_conversion/` folder and stores the source workflow hash plus prompt path on the CharonOp node.
-- When `Process with ComfyUI` runs again, it reuses that cached prompt if the stored hash still matches the UI workflow, avoiding another external conversion run.
-- Editing metadata through the prototype triggers `update_galt_config`, which now clears `_API_conversion/` so the next processing run reconverts and rebuilds parameter bindings.
-- Manual test: grab a workflow, process it twice to confirm the second run logs �Using cached prompt,� then edit metadata and process again to verify a fresh conversion occurs before caching the new prompt.
+- Formalise shared output management utilities and log artifact destinations.
+- Add instrumentation in the processor path (`metadata_read`, `conversion_start`, `conversion_success`, `output_written`).
+- Document failure modes (missing repository, invalid JSON, conversion errors) and surface clear UI messaging.
