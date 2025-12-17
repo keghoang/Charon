@@ -974,8 +974,7 @@ class ConnectionSettingsPopover(QtWidgets.QDialog):
         )
         self._suspend_autoclose = False
         if file_path:
-            self.path_edit.setText(file_path)
-            self.path_selected.emit(file_path.strip())
+            self.path_edit.setText(file_path.strip())
         self.show()
         self.raise_()
         self.activateWindow()
@@ -996,9 +995,6 @@ class ConnectionSettingsPopover(QtWidgets.QDialog):
         self.path_edit.selectAll()
 
     def closeEvent(self, event) -> None:
-        current = self.path_edit.text().strip()
-        if current != self._initial_path:
-            self.path_selected.emit(current)
         super().closeEvent(event)
         ConnectionSettingsPopover.clear_active_popover(self)
 
