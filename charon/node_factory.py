@@ -98,93 +98,6 @@ def create_charon_group_node(
 
     parameter_knobs, normalized_parameters = _prepare_parameter_controls(nuke, parameters or [])
 
-    workflow_knob = nuke.Text_Knob("workflow_data", "Workflow Data", json.dumps(workflow_data))
-    _hide_knob(workflow_knob, nuke)
-    node.addKnob(workflow_knob)
-
-    inputs_knob = nuke.Text_Knob("input_mapping", "Input Mapping", json.dumps(inputs))
-    _hide_knob(inputs_knob, nuke)
-    node.addKnob(inputs_knob)
-
-    parameters_knob = nuke.Text_Knob("charon_parameters", "Parameter Mapping", json.dumps(normalized_parameters))
-    _hide_knob(parameters_knob, nuke)
-    node.addKnob(parameters_knob)
-
-    temp_knob = nuke.String_Knob("charon_temp_dir", "Temp Directory", temp_dir)
-    _hide_knob(temp_knob, nuke)
-    node.addKnob(temp_knob)
-
-    status_knob = nuke.String_Knob("charon_status", "Status", "Ready")
-    _hide_knob(status_knob, nuke)
-    node.addKnob(status_knob)
-
-    progress_knob = nuke.Double_Knob("charon_progress", "Progress")
-    progress_knob.setRange(0.0, 1.0)
-    progress_knob.setValue(0.0)
-    _hide_knob(progress_knob, nuke)
-    node.addKnob(progress_knob)
-
-    prompt_id_knob = nuke.String_Knob("charon_prompt_id", "Prompt ID", "")
-    _hide_knob(prompt_id_knob, nuke)
-    node.addKnob(prompt_id_knob)
-
-    prompt_path_knob = nuke.String_Knob("charon_prompt_path", "Prompt Path", "")
-    _hide_knob(prompt_path_knob, nuke)
-    node.addKnob(prompt_path_knob)
-
-    last_output_knob = nuke.String_Knob("charon_last_output", "Last Output Path", "")
-    _hide_knob(last_output_knob, nuke)
-    node.addKnob(last_output_knob)
-
-    workflow_name_knob = nuke.String_Knob("charon_workflow_name", "Workflow Name", workflow_name)
-    _hide_knob(workflow_name_knob, nuke)
-    node.addKnob(workflow_name_knob)
-
-    path_value = workflow_path or ""
-    path_knob = nuke.String_Knob("workflow_path", "Workflow Path", path_value)
-    _hide_knob(path_knob, nuke)
-    node.addKnob(path_knob)
-
-    source_path_value = source_workflow_path or path_value
-    source_path_knob = nuke.String_Knob(
-        "charon_source_workflow_path",
-        "Source Workflow Path",
-        source_path_value or "",
-    )
-    _hide_knob(source_path_knob, nuke)
-    node.addKnob(source_path_knob)
-
-    validated_knob = nuke.Int_Knob("charon_validated", "Validated", 1 if validated else 0)
-    validated_knob.setFlag(nuke.NO_ANIMATION)
-    _hide_knob(validated_knob, nuke)
-    node.addKnob(validated_knob)
-
-    try:
-        local_state_payload = json.dumps(local_state or {})
-    except Exception:
-        local_state_payload = "{}"
-    local_state_knob = nuke.Text_Knob("charon_local_state", "Local Workflow State", local_state_payload)
-    _hide_knob(local_state_knob, nuke)
-    node.addKnob(local_state_knob)
-
-    node_id_value = _generate_charon_node_id()
-    node_id_knob = nuke.String_Knob("charon_node_id", "Node ID", node_id_value)
-    _hide_knob(node_id_knob, nuke)
-    node.addKnob(node_id_knob)
-
-    try:
-        link_anchor_value = int(node_id_value, 16) / float(16 ** len(node_id_value))
-    except Exception:
-        link_anchor_value = time.time() % 1.0
-    link_anchor_knob = nuke.Double_Knob("charon_link_anchor", "Charon Link Anchor")
-    link_anchor_knob.setValue(link_anchor_value)
-    _hide_knob(link_anchor_knob, nuke)
-    node.addKnob(link_anchor_knob)
-
-    read_id_knob = nuke.String_Knob("charon_read_node_id", "Linked Read Node ID", "")
-    _hide_knob(read_id_knob, nuke)
-    node.addKnob(read_id_knob)
-
     try:
         setup_tab = node.knob("User")
     except Exception:
@@ -236,10 +149,6 @@ def create_charon_group_node(
         pass
     batch_knob.setFlag(nuke.STARTLINE)
     node.addKnob(batch_knob)
-
-    actions_label = nuke.Text_Knob("charon_actions_header", "", "Actions")
-    actions_label.setFlag(nuke.STARTLINE)
-    node.addKnob(actions_label)
 
     process_knob = nuke.PyScript_Knob("process", "Execute")
     process_knob.setCommand(process_script)
@@ -364,6 +273,94 @@ def create_charon_group_node(
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)
 
+    node_id_value = _generate_charon_node_id()
+
+    workflow_knob = nuke.Text_Knob("workflow_data", "Workflow Data", json.dumps(workflow_data))
+    _hide_knob(workflow_knob, nuke)
+    node.addKnob(workflow_knob)
+
+    inputs_knob = nuke.Text_Knob("input_mapping", "Input Mapping", json.dumps(inputs))
+    _hide_knob(inputs_knob, nuke)
+    node.addKnob(inputs_knob)
+
+    parameters_knob = nuke.Text_Knob("charon_parameters", "Parameter Mapping", json.dumps(normalized_parameters))
+    _hide_knob(parameters_knob, nuke)
+    node.addKnob(parameters_knob)
+
+    temp_knob = nuke.String_Knob("charon_temp_dir", "Temp Directory", temp_dir)
+    _hide_knob(temp_knob, nuke)
+    node.addKnob(temp_knob)
+
+    status_knob = nuke.String_Knob("charon_status", "Status", "Ready")
+    _hide_knob(status_knob, nuke)
+    node.addKnob(status_knob)
+
+    progress_knob = nuke.Double_Knob("charon_progress", "Progress")
+    progress_knob.setRange(0.0, 1.0)
+    progress_knob.setValue(0.0)
+    _hide_knob(progress_knob, nuke)
+    node.addKnob(progress_knob)
+
+    prompt_id_knob = nuke.String_Knob("charon_prompt_id", "Prompt ID", "")
+    _hide_knob(prompt_id_knob, nuke)
+    node.addKnob(prompt_id_knob)
+
+    prompt_path_knob = nuke.String_Knob("charon_prompt_path", "Prompt Path", "")
+    _hide_knob(prompt_path_knob, nuke)
+    node.addKnob(prompt_path_knob)
+
+    last_output_knob = nuke.String_Knob("charon_last_output", "Last Output Path", "")
+    _hide_knob(last_output_knob, nuke)
+    node.addKnob(last_output_knob)
+
+    workflow_name_knob = nuke.String_Knob("charon_workflow_name", "Workflow Name", workflow_name)
+    _hide_knob(workflow_name_knob, nuke)
+    node.addKnob(workflow_name_knob)
+
+    path_value = workflow_path or ""
+    path_knob = nuke.String_Knob("workflow_path", "Workflow Path", path_value)
+    _hide_knob(path_knob, nuke)
+    node.addKnob(path_knob)
+
+    source_path_value = source_workflow_path or path_value
+    source_path_knob = nuke.String_Knob(
+        "charon_source_workflow_path",
+        "Source Workflow Path",
+        source_path_value or "",
+    )
+    _hide_knob(source_path_knob, nuke)
+    node.addKnob(source_path_knob)
+
+    validated_knob = nuke.Int_Knob("charon_validated", "Validated", 1 if validated else 0)
+    validated_knob.setFlag(nuke.NO_ANIMATION)
+    _hide_knob(validated_knob, nuke)
+    node.addKnob(validated_knob)
+
+    try:
+        local_state_payload = json.dumps(local_state or {})
+    except Exception:
+        local_state_payload = "{}"
+    local_state_knob = nuke.Text_Knob("charon_local_state", "Local Workflow State", local_state_payload)
+    _hide_knob(local_state_knob, nuke)
+    node.addKnob(local_state_knob)
+
+    node_id_knob = nuke.String_Knob("charon_node_id", "Node ID", node_id_value)
+    _hide_knob(node_id_knob, nuke)
+    node.addKnob(node_id_knob)
+
+    try:
+        link_anchor_value = int(node_id_value, 16) / float(16 ** len(node_id_value))
+    except Exception:
+        link_anchor_value = time.time() % 1.0
+    link_anchor_knob = nuke.Double_Knob("charon_link_anchor", "Charon Link Anchor")
+    link_anchor_knob.setValue(link_anchor_value)
+    _hide_knob(link_anchor_knob, nuke)
+    node.addKnob(link_anchor_knob)
+
+    read_id_knob = nuke.String_Knob("charon_read_node_id", "Linked Read Node ID", "")
+    _hide_knob(read_id_knob, nuke)
+    node.addKnob(read_id_knob)
+
     info_lines = ["Inputs Required:"]
     for input_def in inputs:
         info_lines.append(f"- {input_def.get('name', 'Input')} : {input_def.get('description', '')}")
@@ -378,9 +375,6 @@ def create_charon_group_node(
 
     ready_tile = status_to_tile_color("Ready")
     ready_gl = status_to_gl_color("Ready") or (0.0, 0.0, 0.0)
-    debug_text = f"Status=Ready | tile=0x{ready_tile:08X} | gl=" + ",".join(f"{channel:.3f}" for channel in ready_gl)
-    color_debug_knob = nuke.Text_Knob("charon_color_debug", "Color Debug", debug_text)
-    node.addKnob(color_debug_knob)
 
     status_payload = _build_default_status_payload(
         workflow_name=workflow_name,
