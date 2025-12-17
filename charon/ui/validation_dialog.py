@@ -1852,7 +1852,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             reference["resolve_status"] = "success"
             reference["resolve_method"] = method_detail
             reference["resolve_failed"] = ""
-        if note:
+        # Avoid duplicating the resolve method in a separate note when already resolved.
+        if note and lower_status not in {"resolved", "copied"}:
             self._append_issue_note("models", note)
         # Update backing payload so reopen pulls resolved state from cache.
         issues = self._payload.get("issues") if isinstance(self._payload, dict) else None
