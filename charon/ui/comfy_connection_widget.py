@@ -13,6 +13,8 @@ from ..paths import extend_sys_path_with_comfy
 import urllib.request
 import urllib.error
 
+from ..comfy_restart import send_shutdown_signal
+
 try:  # PySide6 helper to check lifetime of wrapped objects
     from shiboken6 import isValid as _qt_is_valid  # type: ignore
 except Exception:  # pragma: no cover - fallback
@@ -565,28 +567,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._set_status("checking", False)
 
     def _send_shutdown_signal(self) -> bool:
-        endpoints = [
-            ("POST", f"{self._DEFAULT_URL}/system/shutdown"),
-            ("POST", f"{self._DEFAULT_URL}/shutdown"),
-            ("GET", f"{self._DEFAULT_URL}/system/shutdown"),
-            ("GET", f"{self._DEFAULT_URL}/shutdown"),
-            ("GET", f"{self._DEFAULT_URL}/manager/reboot"),
-        ]
-        last_error = None
-        for method, url in endpoints:
-            try:
-                req = urllib.request.Request(url, method=method)
-                with urllib.request.urlopen(req, timeout=5):
-                    return True
-            except Exception as exc:
-                last_error = exc
-                # Manager reboot may close the connection before responding; treat connection reset as success.
-                msg = str(exc).lower()
-                if "/manager/reboot" in url and ("connection reset" in msg or "forcibly closed" in msg):
-                    return True
-                continue
-        system_warning(f"ComfyUI shutdown request failed: {last_error}")
-        return False
+        return send_shutdown_signal(self._DEFAULT_URL)
     def _terminate_managed_process(self) -> bool:
         process = self._managed_process
         if process is None:

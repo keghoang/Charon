@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import urllib.request
+import urllib.error
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from ..qt_compat import QtWidgets, QtGui, QtCore
-from ..charon_logger import system_error, system_info
+from ..charon_logger import system_error, system_info, system_warning
 from .. import preferences
+from ..comfy_client import ComfyUIClient
+from ..comfy_restart import send_shutdown_signal
 from ..dependency_check import (
     PREF_DEPENDENCIES_VERIFIED,
     _module_available,
     _playwright_available,
-    ensure_manager_security_level,
 )
-from ..paths import get_default_comfy_launch_path, resolve_comfy_environment
+from ..paths import get_default_comfy_launch_path, resolve_comfy_environment, get_charon_temp_dir
 
 COLORS = {
     "bg_main": "#212529",
@@ -122,6 +127,55 @@ def _run_command_silent(cmd: List[str], timeout: int = 600) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def _has_kjnodes(custom_nodes_dir: str) -> bool:
+    """Detect an existing ComfyUI-KJNodes install by folder name."""
+    try:
+        for entry in os.listdir(custom_nodes_dir):
+            path = os.path.join(custom_nodes_dir, entry)
+            if os.path.isdir(path) and entry.lower() == "comfyui-kjnodes":
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _has_manager(custom_nodes_dir: str) -> bool:
+    """Detect an existing ComfyUI-Manager install by folder name."""
+    try:
+        for entry in os.listdir(custom_nodes_dir):
+            path = os.path.join(custom_nodes_dir, entry)
+            if os.path.isdir(path) and entry.lower() == "comfyui-manager":
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _debug_log(message: str) -> None:
+    """Append a debug message for setup wizard to the Charon debug folder."""
+    try:
+        base_dir = get_charon_temp_dir()
+        debug_dir = os.path.join(base_dir, "debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        log_path = os.path.join(debug_dir, "first_time_setup_debug.txt")
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(f"{message}\n")
+    except Exception:
+        pass
+
+
+def _has_comfyui_charon(custom_nodes_dir: str) -> bool:
+    """Detect an existing ComfyUI-Charon install by folder name."""
+    try:
+        for entry in os.listdir(custom_nodes_dir):
+            path = os.path.join(custom_nodes_dir, entry)
+            if os.path.isdir(path) and entry.lower() == "comfyui-charon":
+                return True
+    except OSError:
+        return False
+    return False
+
+
 class FirstTimeSetupWorker(QtCore.QObject):
     progress_changed = QtCore.Signal(int, str)
     finished = QtCore.Signal(bool, list, str)
@@ -144,22 +198,19 @@ class FirstTimeSetupWorker(QtCore.QObject):
             self.finished.emit(False, [], msg)
             return
 
-        try:
-            ensure_manager_security_level(
-                desired_level="weak",
-                comfy_path_override=self.comfy_path,
-            )
-            manager_path = os.path.join(
-                comfy_dir or "",
-                "user",
-                "default",
-                "ComfyUI-Manager",
-                "config.ini",
-            )
-            messages.append(f"Manager security set to weak ({manager_path})")
-        except Exception as exc:  # pragma: no cover - defensive path
-            system_error(f"Failed to enforce manager security level: {exc}")
-            messages.append("Manager security: FAILED")
+        custom_nodes_dir = os.path.join(comfy_dir or "", "custom_nodes")
+        manager_dir = os.path.join(custom_nodes_dir, "ComfyUI-Manager")
+        kjnodes_dir = os.path.join(custom_nodes_dir, "ComfyUI-KJNodes")
+        charon_dir = os.path.join(custom_nodes_dir, "ComfyUI-Charon")
+        charon_src = Path(__file__).resolve().parents[2] / "custom_nodes" / "comfyUI" / "ComfyUI-Charon"
+        missing_manager = False
+        missing_kjnodes = False
+        missing_charon = False
+        if comfy_dir:
+            os.makedirs(custom_nodes_dir, exist_ok=True)
+            missing_manager = not _has_manager(custom_nodes_dir)
+            missing_kjnodes = not _has_kjnodes(custom_nodes_dir)
+            missing_charon = not _has_comfyui_charon(custom_nodes_dir)
 
         needs_playwright = not _playwright_available(python_exe)
         needs_trimesh = not _module_available(python_exe, "trimesh")
@@ -168,11 +219,44 @@ class FirstTimeSetupWorker(QtCore.QObject):
         if not needs_trimesh:
             messages.append("trimesh already installed (ComfyUI embedded env)")
 
+        statuses = {
+            "playwright": "missing" if needs_playwright else "found",
+            "trimesh": "missing" if needs_trimesh else "found",
+            "manager": "missing" if missing_manager else "found",
+            "kjnodes": "missing" if missing_kjnodes else "found",
+            "charon": "missing" if missing_charon else "found",
+        }
+
+        def _status_lines() -> List[str]:
+            return [
+                f"Check Playwright: {statuses['playwright']}",
+                f"Check trimesh: {statuses['trimesh']}",
+                f"Check ComfyUI-Manager: {statuses['manager']}",
+                f"Check KJNodes: {statuses['kjnodes']}",
+                f"Check ComfyUI-Charon: {statuses['charon']}",
+            ]
+
+        def _emit_status(progress: int, action: str) -> None:
+            lines = _status_lines()
+            status_block = "\n".join(lines)
+            message = action or ""
+            if status_block:
+                if message:
+                    message = f"{message}\n{status_block}"
+                else:
+                    message = status_block
+            _debug_log(f"[progress {progress}] {message}")
+            self.progress_changed.emit(progress, message)
+
+        _emit_status(10, "Checking dependencies...")
+
         tasks: List[Tuple[str, List[str]]] = []
+
+        # Order: Playwright -> trimesh -> ComfyUI-Manager -> KJNodes
         if needs_playwright:
             tasks.append(
                 (
-                    "Installing Playwright (ComfyUI embedded env)...",
+                    "Installing Playwright...",
                     [python_exe, "-m", "pip", "install", "playwright"],
                 )
             )
@@ -185,34 +269,126 @@ class FirstTimeSetupWorker(QtCore.QObject):
         if needs_trimesh:
             tasks.append(
                 (
-                    "Installing trimesh (ComfyUI embedded env)...",
+                    "Installing trimesh...",
                     [python_exe, "-m", "pip", "install", "trimesh"],
                 )
             )
+        if missing_manager:
+            statuses["manager"] = "installing"
+            tasks.append(
+                (
+                    "Cloning ComfyUI-Manager...",
+                    [
+                        "git",
+                        "clone",
+                        "https://github.com/Comfy-Org/ComfyUI-Manager",
+                        manager_dir,
+                    ],
+                )
+            )
+        else:
+            messages.append("ComfyUI-Manager already installed")
+
+        if missing_kjnodes:
+            statuses["kjnodes"] = "installing"
+            tasks.append(
+                (
+                    "Cloning ComfyUI-KJNodes...",
+                    [
+                        "git",
+                        "clone",
+                        "https://github.com/kijai/ComfyUI-KJNodes",
+                        kjnodes_dir,
+                    ],
+                )
+            )
+        else:
+            messages.append("ComfyUI-KJNodes already installed")
+        if missing_charon:
+            if charon_src.exists():
+                statuses["charon"] = "installing"
+                tasks.append(
+                    (
+                        "Installing ComfyUI-Charon...",
+                        None,  # handled inline without spawning a new interpreter
+                    )
+                )
+            else:
+                messages.append("ComfyUI-Charon source missing in repo; skip install.")
+        else:
+            messages.append("ComfyUI-Charon already installed")
 
         if not tasks:
-            self.progress_changed.emit(60, "Dependencies already installed.")
-            self.progress_changed.emit(95, "Finalizing setup...")
+            _emit_status(60, "Dependencies already installed.")
+            _emit_status(95, "Finalizing setup...")
+            _debug_log("no tasks; finishing early")
             self.finished.emit(True, messages or ["Dependencies already available."], "")
             return
 
-        progress_marker = 20
-        increment = 60 // max(len(tasks), 1)
+        start_progress = 10
+        task_band = 70
+        task_count = max(len(tasks), 1)
+        step_size = task_band / float(task_count)
         success = True
 
-        for label, cmd in tasks:
-            progress_marker = min(90, progress_marker + increment)
-            self.progress_changed.emit(progress_marker, label)
-            ok, err = _run_command_silent(cmd)
+        for idx, (label, cmd) in enumerate(tasks):
+            pre_progress = int(min(95, start_progress + idx * step_size))
+            post_progress = int(min(95, start_progress + (idx + 1) * step_size))
+            if "Playwright" in label:
+                statuses["playwright"] = "installing"
+            elif "trimesh" in label:
+                statuses["trimesh"] = "installing"
+            elif "ComfyUI-Manager" in label:
+                statuses["manager"] = "installing"
+            elif "KJNodes" in label:
+                statuses["kjnodes"] = "installing"
+            elif "ComfyUI-Charon" in label:
+                statuses["charon"] = "installing"
+            _emit_status(pre_progress, label)
+            ok = True
+            err = ""
+            if cmd is None and "ComfyUI-Charon" in label:
+                try:
+                    Path(charon_dir).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.rmtree(charon_dir, ignore_errors=True)
+                    shutil.copytree(charon_src, charon_dir)
+                except Exception as exc:
+                    ok = False
+                    err = str(exc)
+            else:
+                ok, err = _run_command_silent(cmd)
+            _debug_log(f"[task] {label} -> ok={ok} err={err}")
             if ok:
                 messages.append(label.replace("...", "").rstrip("."))
+                if "Playwright" in label:
+                    statuses["playwright"] = "found"
+                elif "trimesh" in label:
+                    statuses["trimesh"] = "found"
+                elif "ComfyUI-Manager" in label:
+                    statuses["manager"] = "found"
+                elif "KJNodes" in label:
+                    statuses["kjnodes"] = "found"
+                elif "ComfyUI-Charon" in label:
+                    statuses["charon"] = "found"
+                _emit_status(post_progress, label.replace("...", "").rstrip(".") + " completed")
                 continue
             success = False
             error_message = err or "Unknown failure"
             messages.append(f"{label}: FAILED ({error_message})")
+            if "Playwright" in label:
+                statuses["playwright"] = "failed"
+            elif "trimesh" in label:
+                statuses["trimesh"] = "failed"
+            elif "ComfyUI-Manager" in label:
+                statuses["manager"] = "failed"
+            elif "KJNodes" in label:
+                statuses["kjnodes"] = "failed"
+            elif "ComfyUI-Charon" in label:
+                statuses["charon"] = "failed"
+            _emit_status(post_progress, f"{label}: FAILED")
             break
 
-        self.progress_changed.emit(95, "Finalizing setup...")
+        _emit_status(95, "Finalizing setup...")
         self.finished.emit(success, messages, error_message)
 
 
@@ -274,6 +450,11 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.setup_completed = False
         self.worker_thread: Optional[QtCore.QThread] = None
         self.worker: Optional[FirstTimeSetupWorker] = None
+        self.comfy_running_preinstall = False
+        self.restart_armed = False
+        self.restart_ready = False
+        self.restart_seen_down = False
+        self.restart_timer: Optional[QtCore.QTimer] = None
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(30, 30, 30, 30)
@@ -399,6 +580,24 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.pbar.setValue(0)
         layout.addWidget(self.pbar)
 
+        self.install_status_label = QtWidgets.QLabel("")
+        self.install_status_label.setStyleSheet(f"color: {COLORS['text_sub']}; margin-top: 8px;")
+        self.install_status_label.setWordWrap(True)
+        self.install_status_label.setVisible(True)
+        self.install_status_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self.install_status_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.MinimumExpanding
+        )
+        self.install_status_label.setMinimumHeight(120)
+        layout.addWidget(self.install_status_label)
+
+        self.install_ready_label = QtWidgets.QLabel("")
+        self.install_ready_label.setStyleSheet(f"color: {COLORS['success']}; margin-top: 10px;")
+        self.install_ready_label.setVisible(False)
+        self.install_ready_label.setWordWrap(True)
+        self.install_ready_label.setAlignment(QtCore.Qt.AlignCenter)
+        layout.addWidget(self.install_ready_label)
+
         layout.addStretch()
         self.stack.addWidget(page)
 
@@ -406,15 +605,6 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         if self.progress_val < self.progress_target:
             self.progress_val += 2
             self.pbar.setValue(self.progress_val)
-        self._sync_desc_with_progress()
-
-    def _sync_desc_with_progress(self) -> None:
-        if self.progress_val < 30:
-            self.install_desc.setText("Downloading requirements...")
-        elif self.progress_val < 70:
-            self.install_desc.setText("Installing packages...")
-        elif self.progress_val < 95:
-            self.install_desc.setText("Finalizing setup...")
 
     def setup_step3_ready(self) -> None:
         page = QtWidgets.QWidget()
@@ -465,6 +655,30 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
                 self.progress_timer.start(100)
                 self._start_installation()
                 return
+            if self.comfy_running_preinstall and not self.restart_ready:
+                if not self.restart_armed:
+                    self.restart_armed = True
+                    self.btn_next.setText("Restarting...")
+                    self.btn_next.setEnabled(False)
+                    self.install_ready_label.setText(
+                        "Sending restart request to ComfyUI..."
+                    )
+                    self.install_ready_label.setVisible(True)
+                    self.restart_seen_down = False
+                    try:
+                        self._trigger_restart_request()
+                        self._start_restart_monitor()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        system_error(f"ComfyUI restart request failed: {exc}")
+                        self.restart_armed = False
+                        self.restart_seen_down = False
+                        self._stop_restart_timer()
+                        self.install_ready_label.setText(
+                            "Could not send restart request. Restart ComfyUI manually, then click Restart ComfyUI again."
+                        )
+                        self.btn_next.setEnabled(True)
+                        self.btn_next.setText("Restart ComfyUI")
+                return
             self.current_step = 3
             self.stack.setCurrentIndex(2)
             self.header_icon.setPixmap(get_icon("header_success").pixmap(40, 40))
@@ -482,6 +696,12 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.progress_val = 0
         self.progress_target = 5
         self.pbar.setValue(0)
+        self.install_ready_label.setVisible(False)
+        self.restart_armed = False
+        self.restart_ready = False
+        self.restart_seen_down = False
+        self._stop_restart_timer()
+        self.comfy_running_preinstall = self._is_comfy_running()
 
         if not self.comfy_path:
             QtWidgets.QMessageBox.warning(
@@ -525,7 +745,13 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
     def _apply_worker_progress(self, target: int, message: str) -> None:
         self.progress_target = max(self.progress_target, target)
         if message:
-            self.install_desc.setText(message)
+            if "\n" in message:
+                first, rest = message.split("\n", 1)
+                self.install_desc.setText(first.strip())
+                self.install_status_label.setText(rest.strip())
+            else:
+                self.install_desc.setText(message.strip())
+            self.install_status_label.setVisible(True)
         if not self.progress_timer.isActive():
             self.progress_timer.start()
         if self.progress_val == 0 and self.progress_target > 0:
@@ -543,7 +769,10 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         if not success:
             self.install_desc.setText(f"Setup failed: {error}")
             self.btn_next.setEnabled(True)
+            self.install_ready_label.setVisible(False)
             self.btn_next.setText("Retry")
+            if self.install_status_label.text():
+                self.install_status_label.setVisible(True)
             if error:
                 QtWidgets.QMessageBox.critical(
                     self,
@@ -559,19 +788,92 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         except Exception as exc:  # pragma: no cover - defensive path
             system_error(f"Failed to persist first-time setup preferences: {exc}")
 
-        self.install_desc.setText(summary or "Setup complete.")
+        self.install_desc.setText(summary or "Installation finished.")
         self.pbar.setValue(100)
+        self.install_ready_label.setVisible(True)
+        self.setup_completed = True
+        if self.comfy_running_preinstall:
+            self.install_ready_label.clear()
+            self.install_ready_label.setVisible(False)
+            self.btn_next.setEnabled(True)
+            self.btn_next.setText("Restart ComfyUI")
+            return
+        self.install_ready_label.setText("Dependencies installed. Click Next to continue.")
         self.btn_next.setEnabled(True)
         self.btn_next.setText("Next")
-        self.setup_completed = True
-        QtCore.QTimer.singleShot(200, self.go_next)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.requestInterruption()
         if self.progress_timer.isActive():
             self.progress_timer.stop()
+        self._stop_restart_timer()
         super().closeEvent(event)
+
+    def _is_comfy_running(self) -> bool:
+        try:
+            client = ComfyUIClient()
+            return bool(client.test_connection())
+        except Exception:
+            return False
+
+    def _send_shutdown_signal(self) -> bool:
+        return send_shutdown_signal("http://127.0.0.1:8188")
+
+    def _trigger_restart_request(self) -> None:
+        try:
+            sent = self._send_shutdown_signal()
+        except Exception as exc:  # pragma: no cover - defensive
+            sent = False
+            system_error(f"ComfyUI restart request crashed: {exc}")
+            _debug_log(f"restart request crashed: {exc}")
+        if sent:
+            self.install_ready_label.setText("Restart request sent. Waiting for ComfyUI to shut down...")
+            self.install_ready_label.setVisible(True)
+        else:
+            self.install_ready_label.setText(
+                "Could not send shutdown to ComfyUI. Please restart it manually, then click Restart ComfyUI again."
+            )
+            self.install_ready_label.setVisible(True)
+            self.btn_next.setEnabled(True)
+            self.btn_next.setText("Restart ComfyUI")
+            self.restart_armed = False
+            self._stop_restart_timer()
+
+    def _start_restart_monitor(self) -> None:
+        try:
+            self._stop_restart_timer()
+            self.restart_timer = QtCore.QTimer(self)
+            self.restart_timer.setInterval(1500)
+            self.restart_timer.timeout.connect(self._poll_restart_monitor)
+            self.restart_timer.start()
+        except Exception as exc:  # pragma: no cover - defensive
+            system_error(f"Failed to start restart monitor: {exc}")
+            self.restart_timer = None
+            _debug_log(f"restart monitor failed: {exc}")
+
+    def _poll_restart_monitor(self) -> None:
+        running = self._is_comfy_running()
+        if not self.restart_seen_down and not running:
+            self.restart_seen_down = True
+            self.install_ready_label.setText("Waiting for ComfyUI to come back online...")
+            self.install_ready_label.setVisible(True)
+            return
+        if self.restart_seen_down and running:
+            self.restart_ready = True
+            self._stop_restart_timer()
+            self.btn_next.setEnabled(True)
+            self.btn_next.setText("Next")
+            self.install_ready_label.setText("ComfyUI restarted. Click Next to continue.")
+            self.install_ready_label.setVisible(True)
+
+    def _stop_restart_timer(self) -> None:
+        if self.restart_timer is not None:
+            try:
+                self.restart_timer.stop()
+            except Exception:
+                pass
+            self.restart_timer = None
 
 
 def show_dialog() -> None:
