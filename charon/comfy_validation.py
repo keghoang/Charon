@@ -618,15 +618,17 @@ def validate_comfy_environment(
     ping_url: str = DEFAULT_PING_URL,
     use_cache: bool = True,
     force: bool = False,
+    include_environment: bool = True,
 ) -> ValidationResult:
     comfy_path = (comfy_path or "").strip()
     started = time.time()
     cache_key = _cache_key_for_path(comfy_path)
+    result_comfy_path = comfy_path if include_environment else ""
 
     workflow_info = _extract_workflow_context(workflow_bundle)
     issues: List[ValidationIssue] = []
 
-    if not comfy_path:
+    if include_environment and not comfy_path:
         issues.append(
             ValidationIssue(
                 key="environment",
@@ -641,7 +643,7 @@ def validate_comfy_environment(
         )
         finished = time.time()
         result = ValidationResult(
-            comfy_path=comfy_path,
+            comfy_path=result_comfy_path,
             issues=issues,
             started_at=started,
             finished_at=finished,
@@ -653,14 +655,15 @@ def validate_comfy_environment(
         return result
 
     env_info = resolve_comfy_environment(comfy_path)
-    issues.append(_validate_environment(comfy_path, env_info))
+    if include_environment:
+        issues.append(_validate_environment(comfy_path, env_info))
     custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(env_info, workflow_bundle)
     issues.append(custom_nodes_issue)
     issues.append(_validate_models_browser(env_info, workflow_bundle, browser_payload))
 
     finished = time.time()
     result = ValidationResult(
-        comfy_path=comfy_path,
+        comfy_path=result_comfy_path,
         issues=issues,
         started_at=started,
         finished_at=finished,
@@ -1025,6 +1028,11 @@ def _validate_models_browser(
         "found": [],
     }
 
+    ignored_roots: List[str] = []
+    if comfy_dir:
+        # Avoid surfacing transient output directories as attempted search paths.
+        ignored_roots.append(os.path.abspath(os.path.join(comfy_dir, "output")))
+
     def _is_within_roots(candidate: str, roots: Iterable[str]) -> bool:
         candidate = (candidate or "").strip()
         if not candidate:
@@ -1034,6 +1042,25 @@ def _validate_models_browser(
         except Exception:
             return False
         for root in roots or []:
+            if not root:
+                continue
+            try:
+                root_abs = os.path.abspath(root)
+                if os.path.commonpath([candidate_abs, root_abs]) == root_abs:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _is_ignored_dir(candidate: str) -> bool:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return False
+        try:
+            candidate_abs = os.path.abspath(candidate)
+        except Exception:
+            return False
+        for root in ignored_roots:
             if not root:
                 continue
             try:
@@ -1093,7 +1120,16 @@ def _validate_models_browser(
         if not isinstance(key, str):
             continue
         if isinstance(value, (list, tuple, set)):
-            paths = [os.path.abspath(str(item)) for item in value if isinstance(item, str)]
+            paths: List[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                abs_item = os.path.abspath(item)
+                if _is_ignored_dir(abs_item):
+                    continue
+                paths.append(abs_item)
+            if not paths:
+                continue
             normalized_paths[key] = paths
     data["paths"] = normalized_paths
     data["model_paths"] = normalized_paths
@@ -1139,7 +1175,7 @@ def _validate_models_browser(
             filtered_dirs = [
                 os.path.abspath(path)
                 for path in attempted_dirs
-                if _is_within_roots(path, allowed_roots)
+                if _is_within_roots(path, allowed_roots) and not _is_ignored_dir(path)
             ]
             if filtered_dirs:
                 entry["attempted_directories"] = filtered_dirs
