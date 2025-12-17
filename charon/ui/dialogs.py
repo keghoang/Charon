@@ -1091,11 +1091,14 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _update_workflow_default(self, data, new_value):
         if not self._workflow_path or not os.path.exists(self._workflow_path):
+            system_debug("Workflow path invalid or missing")
             return
 
         node_id = data.get("node_id")
         key = data.get("attribute_key")
         aliases = data.get("aliases") or []
+        
+        system_debug(f"Updating default for node {node_id}, key {key} to {new_value}")
         
         try:
             import json
@@ -1137,13 +1140,16 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                     with open(self._workflow_path, 'w', encoding='utf-8') as f:
                         json.dump(workflow, f, indent=2)
                     
+                    system_debug("Workflow file updated. Refreshing parameters...")
                     _store_cached_parameters(self._workflow_path, None)
                     self._populate_input_mapping_preview()
-                    system_debug(f"Updated default value for {key} to {new_value}")
                 else:
                     QtWidgets.QMessageBox.warning(self, "Update Failed", "Could not locate parameter in workflow JSON structure.")
+            else:
+                system_debug(f"Target node {node_id} not found in workflow")
 
         except Exception as e:
+            system_debug(f"Exception during workflow update: {e}")
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to update workflow: {e}")
 
     def _update_step2_visibility(self, is_3d_texturing: bool) -> None:
