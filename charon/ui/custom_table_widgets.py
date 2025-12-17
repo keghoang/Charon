@@ -1,3 +1,5 @@
+from typing import Callable, Optional
+
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, AlignLeft, AlignVCenter, exec_menu
 from ..script_table_model import ScriptTableModel
 from ..folder_table_model import FolderTableModel
@@ -19,6 +21,8 @@ class ScriptTableView(QtWidgets.QTableView):
     openFolderRequested = QtCore.Signal(str)
     script_run = QtCore.Signal(str)
     script_validate = QtCore.Signal(str)
+    script_show_validation_payload = QtCore.Signal(str)
+    script_revalidate = QtCore.Signal(str)
     mousePressed = QtCore.Signal()
     mouseReleased = QtCore.Signal()
     createScriptInCurrentFolder = QtCore.Signal()
@@ -27,6 +31,7 @@ class ScriptTableView(QtWidgets.QTableView):
     def __init__(self, parent=None):
         super(ScriptTableView, self).__init__(parent)
         self.host = "None"
+        self._advanced_mode_provider: Optional[Callable[[], bool]] = None
         
         # Configure table appearance
         self.setShowGrid(False)
@@ -105,7 +110,11 @@ class ScriptTableView(QtWidgets.QTableView):
             self.horizontalHeader().setSectionResizeMode(
                 ScriptTableModel.COL_NAME, QtWidgets.QHeaderView.Stretch
             )
-            
+
+    def set_advanced_mode_provider(self, provider: Optional[Callable[[], bool]]) -> None:
+        """Register a callback returning whether advanced mode is enabled."""
+        self._advanced_mode_provider = provider
+
     def _emit_script_signal(self, index, signal):
         """Emit the provided signal with the script path resolved from the index."""
         if not index.isValid():
@@ -224,7 +233,21 @@ class ScriptTableView(QtWidgets.QTableView):
             return
             
         script_path = script.path
-        
+        column = source_index.column()
+        state = "idle"
+        if hasattr(source_model, "get_validation_state"):
+            try:
+                state = source_model.get_validation_state(script_path)
+            except Exception:
+                state = "idle"
+
+        advanced_mode = False
+        if callable(self._advanced_mode_provider):
+            try:
+                advanced_mode = bool(self._advanced_mode_provider())
+            except Exception:
+                advanced_mode = False
+
         # Create context menu
         menu = QtWidgets.QMenu(self)
         
@@ -250,7 +273,18 @@ class ScriptTableView(QtWidgets.QTableView):
             bookmark_action = menu.addAction("Bookmark")
             bookmark_action.triggered.connect(lambda: self.bookmarkRequested.emit(script_path))
             
-        menu.addSeparator()
+        if column == ScriptTableModel.COL_VALIDATE:
+            revalidate_action = menu.addAction("Revalidate")
+            revalidate_action.setEnabled(state != "validating")
+            revalidate_action.triggered.connect(lambda: self.script_revalidate.emit(script_path))
+            if advanced_mode:
+                raw_action = menu.addAction("Show Raw Validation Payload")
+                raw_action.triggered.connect(
+                    lambda: self.script_show_validation_payload.emit(script_path)
+                )
+            menu.addSeparator()
+        else:
+            menu.addSeparator()
         
         # Metadata actions
         if script.has_metadata():

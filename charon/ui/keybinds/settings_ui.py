@@ -184,6 +184,25 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self._settings_widgets["run_at_startup"] = run_checkbox
 
 
+        # Advanced User Mode row (checkbox)
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Advanced User Mode"))
+        advanced_checkbox = QtWidgets.QCheckBox()
+        advanced_checkbox.setChecked(app_settings.get("advanced_user_mode", "off") == "on")
+        advanced_checkbox.stateChanged.connect(
+            lambda state, box=advanced_checkbox: self._on_checkbox_changed("advanced_user_mode", box.isChecked())
+        )
+        container = QtWidgets.QWidget()
+        container_layout = QtWidgets.QHBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setAlignment(QtCore.Qt.AlignCenter)
+        container_layout.addWidget(advanced_checkbox)
+        container.setFixedWidth(VALUE_COLUMN_WIDTH)
+        table.setCellWidget(row, 1, container)
+        self._settings_widgets["advanced_user_mode"] = advanced_checkbox
+
+
         # Always on Top row (checkbox)
         row = table.rowCount()
         table.insertRow(row)
