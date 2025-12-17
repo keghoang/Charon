@@ -1,17 +1,27 @@
 import hashlib
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 LOG_FILENAME = "conversion_log.md"
 CONVERTED_SUFFIX = "_converted.json"
-CACHE_FOLDER_NAME = "_API_conversion"
+CACHE_FOLDER_NAME = ".charon_cache"
+LEGACY_CACHE_FOLDER_NAME = "_API_conversion"
 
 
 def _conversion_dir(folder_path: str) -> Path:
-    return Path(folder_path) / CACHE_FOLDER_NAME
+    base = Path(folder_path)
+    new_dir = base / CACHE_FOLDER_NAME
+    legacy_dir = base / LEGACY_CACHE_FOLDER_NAME
+    if legacy_dir.exists() and not new_dir.exists():
+        try:
+            shutil.move(str(legacy_dir), str(new_dir))
+        except OSError:
+            return legacy_dir
+    return new_dir
 
 
 def _log_path(folder_path: str) -> Path:
@@ -72,7 +82,7 @@ def load_cached_conversion(folder_path: str, workflow_hash: str) -> Optional[Dic
 
 def write_conversion_cache(folder_path: str, workflow_path: str, workflow_hash: str, prompt_path: str) -> str:
     """
-    Record the conversion info and ensure the converted prompt lives under _API_conversion.
+    Record the conversion info and ensure the converted prompt lives under .charon_cache.
     Returns the stored prompt path.
     """
     conversion_dir = _conversion_dir(folder_path)

@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import os
+import subprocess
+import tempfile
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from . import preferences, paths
+from .node_introspection import (
+    NodeLibraryUnavailable,
+    collect_workflow_widget_bindings,
+)
 
 
 @dataclass(frozen=True)
@@ -14,6 +25,8 @@ class ExposableAttribute:
     value: Any
     value_type: str
     preview: str
+    aliases: Tuple[str, ...] = field(default_factory=tuple)
+    node_default: Any = None
 
 
 @dataclass(frozen=True)
@@ -59,8 +72,9 @@ def discover_prompt_widget_parameters(
     """
     Return a tuple of nodes containing prompt-style widget values that may be exposed.
 
-    The current heuristic targets nodes whose title includes "Prompt" (case-insensitive)
-    and scans their ``widgets_values`` list for string entries.
+    Preference is given to ComfyUI's live node definitions when available so parameter
+    names and types remain deterministic. When the node library cannot be reached, the
+    function falls back to scanning ``widgets_values`` for simple scalar values.
 
     Args:
         workflow_document: Parsed workflow JSON content.
@@ -69,6 +83,223 @@ def discover_prompt_widget_parameters(
         Tuple of :class:`ExposableNode` entries. Empty when nothing matches.
     """
 
+    resolved = _discover_with_node_library(workflow_document)
+    if resolved:
+        return resolved
+
+    resolved = _discover_with_external_process(workflow_document)
+    if resolved:
+        return resolved
+
+    return _discover_with_widget_heuristic(workflow_document)
+
+
+def _discover_with_node_library(
+    workflow_document: Dict[str, Any]
+) -> Tuple[ExposableNode, ...]:
+    try:
+        bindings = collect_workflow_widget_bindings(workflow_document)
+    except NodeLibraryUnavailable:
+        return tuple()
+    except Exception:
+        # Any unexpected error should fall back to the legacy heuristic.
+        return tuple()
+
+    if not bindings:
+        return tuple()
+
+    node_lookup: Dict[str, Dict[str, Any]] = {
+        node_id: node_data for node_id, node_data in _iter_workflow_nodes(workflow_document)
+    }
+    aggregated: Dict[str, Dict[str, Any]] = {}
+
+    for binding in bindings:
+        spec = binding.spec
+        key = (spec.name or "").strip()
+        if not key:
+            continue
+
+        entry = aggregated.setdefault(
+            binding.node_id,
+            {"attributes": OrderedDict(), "node_type": spec.node_type},
+        )
+        attributes: OrderedDict[str, ExposableAttribute] = entry["attributes"]
+        if key in attributes:
+            continue
+
+        aliases: Tuple[str, ...] = ()
+        if binding.source == "widgets_values" and binding.source_index is not None:
+            aliases = (f"widgets_values[{binding.source_index}]",)
+
+        value_type = spec.value_type or "string"
+        label = _format_binding_label(spec.name, value_type)
+        attributes[key] = ExposableAttribute(
+            key=key,
+            label=label,
+            value=binding.value,
+            value_type=value_type,
+            preview=_format_attribute_preview(binding.value),
+            aliases=aliases,
+            node_default=spec.default,
+        )
+
+    nodes: List[ExposableNode] = []
+    for node_id, entry in aggregated.items():
+        attr_map = entry.get("attributes")
+        if not attr_map:
+            continue
+        node_data = node_lookup.get(node_id) or {}
+        node_name = _resolve_node_name(node_id, node_data, entry.get("node_type"))
+        nodes.append(
+            ExposableNode(
+                node_id=node_id,
+                name=node_name,
+                attributes=tuple(attr_map.values()),
+            )
+        )
+
+    nodes.sort(key=lambda item: item.name.lower())
+    return tuple(nodes)
+
+
+def _format_binding_label(name: str, value_type: str) -> str:
+    if not name:
+        return value_type or "Value"
+    display = name
+    if "_" in name and name.islower():
+        display = name.replace("_", " ").title()
+    if value_type:
+        return f"{display} ({value_type})"
+    return display
+
+
+def _discover_with_external_process(
+    workflow_document: Dict[str, Any]
+) -> Tuple[ExposableNode, ...]:
+    comfy_path = preferences.get_preference("comfyui_launch_path", "") or paths.get_default_comfy_launch_path()
+    if not comfy_path:
+        return tuple()
+
+    env_info = paths.resolve_comfy_environment(comfy_path)
+    python_exe = env_info.get("python_exe")
+    comfy_dir = env_info.get("comfy_dir")
+    if not python_exe or not comfy_dir or not os.path.exists(python_exe):
+        return tuple()
+
+    script_path = Path(__file__).resolve().parents[1] / "tools" / "inspect_workflow_widgets.py"
+    if not script_path.exists():
+        return tuple()
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
+        json.dump(workflow_document, handle)
+        temp_input = handle.name
+
+    repo_root = Path(__file__).resolve().parents[1]
+    extra_paths = [str(comfy_dir), str(repo_root)]
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [existing, *extra_paths]))
+
+    command = [python_exe, str(script_path), "--json", temp_input]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            cwd=str(repo_root),
+            env=env,
+            check=False,
+        )
+    finally:
+        try:
+            os.remove(temp_input)
+        except OSError:
+            pass
+
+    if result.returncode != 0:
+        return tuple()
+
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        return tuple()
+
+    payload = None
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+    if not isinstance(payload, list):
+        return tuple()
+
+    node_lookup: Dict[str, Dict[str, Any]] = {
+        node_id: node_data for node_id, node_data in _iter_workflow_nodes(workflow_document)
+    }
+    aggregated: Dict[str, Dict[str, Any]] = {}
+
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        node_id = str(entry.get("node_id") or "")
+        key = str(entry.get("name") or "").strip()
+        if not node_id or not key:
+            continue
+
+        value_type = str(entry.get("value_type") or "string")
+        entry_bucket = aggregated.setdefault(
+            node_id,
+            {"attributes": OrderedDict(), "node_type": entry.get("node_type")},
+        )
+        attributes: OrderedDict[str, ExposableAttribute] = entry_bucket["attributes"]
+        if key in attributes:
+            continue
+
+        aliases: Tuple[str, ...] = ()
+        source = entry.get("source")
+        source_index = entry.get("source_index")
+        if source == "widgets_values" and isinstance(source_index, int):
+            aliases = (f"widgets_values[{source_index}]",)
+
+        label = _format_binding_label(key, value_type)
+        attributes[key] = ExposableAttribute(
+            key=key,
+            label=label,
+            value=entry.get("value"),
+            value_type=value_type,
+            preview=_format_attribute_preview(entry.get("value")),
+            aliases=aliases,
+            node_default=entry.get("default"),
+        )
+
+    nodes: List[ExposableNode] = []
+    for node_id, entry in aggregated.items():
+        attr_map = entry.get("attributes")
+        if not attr_map:
+            continue
+        node_data = node_lookup.get(node_id) or {}
+        node_name = _resolve_node_name(node_id, node_data, entry.get("node_type"))
+        nodes.append(
+            ExposableNode(
+                node_id=node_id,
+                name=node_name,
+                attributes=tuple(attr_map.values()),
+            )
+        )
+
+    nodes.sort(key=lambda item: item.name.lower())
+    return tuple(nodes)
+
+
+def _discover_with_widget_heuristic(
+    workflow_document: Dict[str, Any]
+) -> Tuple[ExposableNode, ...]:
     candidates: List[ExposableNode] = []
     for node_id, node_data in _iter_workflow_nodes(workflow_document):
         widgets_values = node_data.get("widgets_values")
@@ -77,9 +308,9 @@ def discover_prompt_widget_parameters(
 
         attributes: List[ExposableAttribute] = []
         for index, value in enumerate(widgets_values):
-            if not isinstance(value, str):
+            if not _is_supported_widget_value(value):
                 continue
-            if not value.strip():
+            if isinstance(value, str) and not value.strip():
                 continue
 
             value_type = _infer_value_type(value)
@@ -95,9 +326,7 @@ def discover_prompt_widget_parameters(
             )
 
         if attributes:
-            title = node_data.get("title")
-            type_name = node_data.get("type") or node_data.get("class_type")
-            node_name = (title or type_name or "").strip() or f"Node {node_id}"
+            node_name = _resolve_node_name(node_id, node_data, node_data.get("type") or node_data.get("class_type"))
             candidates.append(
                 ExposableNode(
                     node_id=node_id,
@@ -107,6 +336,18 @@ def discover_prompt_widget_parameters(
             )
 
     return tuple(candidates)
+
+
+def _resolve_node_name(node_id: str, node_data: Dict[str, Any], node_type_hint: Any) -> str:
+    title = node_data.get("title") or node_data.get("name")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+
+    type_name = node_data.get("type") or node_data.get("class_type") or node_type_hint
+    if isinstance(type_name, str) and type_name.strip():
+        return type_name.strip()
+
+    return f"Node {node_id}"
 
 
 def _infer_value_type(value: Any) -> str:
@@ -127,6 +368,17 @@ def _format_attribute_preview(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _is_supported_widget_value(value: Any) -> bool:
+    """Return True when the widget value can be exposed to the user."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        return True
+    return False
 
 
 def _iter_workflow_nodes(
