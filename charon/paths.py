@@ -11,9 +11,6 @@ from .utilities import get_current_user_slug
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHARON_DIR = r"D:\Nuke\charon"
-DEFAULT_COMFYUI_LAUNCH_PATH = (
-    r"D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat"
-)
 RESOURCE_DIR = os.path.join(os.path.dirname(__file__), "resources")
 
 WORK_FOLDER_TEMPLATE = "{user}"
@@ -28,7 +25,8 @@ OUTPUT_DIRECTORY_TEMPLATE = os.path.join("{category}", "{workflow}", "CharonOp_{
 
 
 def get_default_comfy_launch_path():
-    return DEFAULT_COMFYUI_LAUNCH_PATH
+    # Default to an empty value; users must supply a ComfyUI launch path in settings.
+    return ""
 
 
 def _normalize_charon_root(base_dir: Optional[str]) -> str:

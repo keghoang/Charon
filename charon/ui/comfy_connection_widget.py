@@ -433,72 +433,51 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
         extend_sys_path_with_comfy(path)
         base_dir = path if os.path.isdir(path) else os.path.dirname(path)
+        if not base_dir:
+            base_dir = os.getcwd()
+        task_name = f"Charon_ComfyUI_{int(time.time())}"
+        create_cmd = [
+            "schtasks",
+            "/create",
+            "/tn",
+            task_name,
+            "/tr",
+            f'cmd /c cd /d "{base_dir}" && "{path}"',
+            "/sc",
+            "once",
+            "/st",
+            "00:00",
+            "/f",
+        ]
+        run_cmd = ["schtasks", "/run", "/tn", task_name]
+        delete_cmd = ["schtasks", "/delete", "/tn", task_name, "/f"]
 
         try:
-            lower_path = path.lower()
-            disable_flag = "--disable-auto-launch"
-            creation_flags = 0
-            if os.name == "nt":
-                creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) | getattr(
-                    subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-                )
-            env = os.environ.copy()
-            env.setdefault("COMFYUI_DISABLE_AUTO_LAUNCH", "1")
-
-            if lower_path.endswith(".bat"):
-                python_exe = os.path.join(base_dir, "python_embeded", "python.exe")
-                main_script = os.path.join(base_dir, "ComfyUI", "main.py")
-                if os.path.exists(python_exe) and os.path.exists(main_script):
-                    cmd_line = [
-                        python_exe,
-                        "-s",
-                        main_script,
-                        "--windows-standalone-build",
-                        disable_flag,
-                    ]
-                    process = subprocess.Popen(
-                        cmd_line,
-                        cwd=base_dir,
-                        shell=False,
-                        creationflags=creation_flags,
-                        env=env,
-                    )
-                else:
-                    cmd_line = ["cmd.exe", "/c", path, disable_flag]
-                    process = subprocess.Popen(
-                        cmd_line,
-                        cwd=base_dir,
-                        shell=False,
-                        creationflags=creation_flags,
-                        env=env,
-                    )
-            elif lower_path.endswith(".py"):
-                cmd_line = ["python", path, "--api", disable_flag]
-                process = subprocess.Popen(
-                    cmd_line,
-                    cwd=base_dir,
-                    shell=False,
-                    creationflags=creation_flags,
-                    env=env,
-                )
-            else:
-                cmd_line = [path, disable_flag]
-                process = subprocess.Popen(
-                    cmd_line,
-                    cwd=base_dir,
-                    shell=False,
-                    creationflags=creation_flags,
-                    env=env,
-                )
-            self._managed_process = process
+            create_result = subprocess.run(create_cmd, check=True, capture_output=True, text=True)
+            run_result = subprocess.run(run_cmd, check=True, capture_output=True, text=True)
+            subprocess.run(delete_cmd, check=False, capture_output=True, text=True)
+            self._managed_process = None
             self._launch_in_progress = True
             self._launch_started_at = time.time()
             self._managed_launch = True
             self._restart_pending = False
             self._set_status("launching", self._connected)
-            system_info(f"Launched ComfyUI from {path}")
-        except Exception as exc:  # pragma: no cover - subprocess errors
+            system_info(
+                f"Launched ComfyUI via Task Scheduler ({task_name}) from {path}: "
+                f"{create_result.stdout} {run_result.stdout}"
+            )
+        except subprocess.CalledProcessError as exc:
             self._managed_process = None
+            self._launch_in_progress = False
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Launch ComfyUI",
+                f"Failed to launch ComfyUI via Task Scheduler.\n\nCommand: {' '.join(exc.cmd)}\nError: {exc.stderr or exc}",
+            )
+            system_error(f"Task Scheduler launch failed: {exc} / {exc.stderr}")
+        except Exception as exc:  # pragma: no cover - defensive path
+            self._managed_process = None
+            self._launch_in_progress = False
             QtWidgets.QMessageBox.critical(self, "Launch ComfyUI", f"Failed to launch ComfyUI:\n{exc}")
             system_error(f"Failed to launch ComfyUI from {path}: {exc}")
 
