@@ -1230,7 +1230,13 @@ class CharonWindow(QtWidgets.QWidget):
         self.aces_toggle_button.setStyleSheet(action_style)
         self.aces_toggle_button.setToolTip("Toggle ACEScg color space handling for ComfyUI integration")
         self.aces_toggle_button.toggled.connect(self._on_aces_toggle_changed)
-        self.actions_layout.insertWidget(0, self.aces_toggle_button) # Insert at position 0 (leftmost)
+        
+        # Insert to the left of Refresh
+        refresh_index = self.actions_layout.indexOf(self.header_refresh_button)
+        if refresh_index >= 0:
+            self.actions_layout.insertWidget(refresh_index, self.aces_toggle_button)
+        else:
+            self.actions_layout.addWidget(self.aces_toggle_button)
 
         settings_icon, settings_box = _make_symbol_icon("⏣")
         self.header_settings_button = QtWidgets.QPushButton("Settings", self.actions_container)
