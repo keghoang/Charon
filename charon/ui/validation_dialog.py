@@ -1226,6 +1226,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if resolved_flag and resolve_method:
                 status_item.setText(f"{status_text}\n{resolve_method}")
                 status_item.setToolTip(resolve_method)
+                status_item.setTextAlignment(
+                    QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+                )
+            else:
+                status_item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             table.setItem(row, 1, status_item)
             location_text = display_source or name or "Not provided"
             location_item = QtWidgets.QTableWidgetItem(location_text)
