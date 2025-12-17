@@ -200,7 +200,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if restart_required:
                     return "⚠ ComfyUI Restart required"
                 if state == "installing":
-                    return "Installing..."
+                    dots = "." * (phase % 4)
+                    return f"⌛ Installing{dots}"
                 if state == "validated":
                     return "✔ Ready"
                 if state == "needs_resolve":
