@@ -1173,6 +1173,21 @@ class CharonWindow(QtWidgets.QWidget):
                 background-color: {COLOR_ACTION_PRESSED};
             }}
         """
+        self._default_action_style = action_style
+        self._aces_on_style = """
+            QPushButton {
+                padding: 0px 16px;
+                margin: 0px;
+                border: 1px solid #2f9e44;
+                border-radius: 4px;
+                background-color: #37b24d;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #40c057;
+            }
+        """
 
         def _make_symbol_icon(symbol: str, scale: float = 1.1):
             base_size = self.font().pointSizeF()
@@ -1223,7 +1238,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.actions_layout.addWidget(self.header_refresh_button)
 
         # ACEScg Toggle Button
-        self.aces_toggle_button = QtWidgets.QPushButton("ACEScg", self.actions_container)
+        self.aces_toggle_button = QtWidgets.QPushButton("ACES Off", self.actions_container)
         self.aces_toggle_button.setCheckable(True)
         self.aces_toggle_button.setFixedHeight(button_height)
         self.aces_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1532,6 +1547,16 @@ QPushButton#NewWorkflowButton:pressed {{
         from .. import preferences
         preferences.set_preference("aces_mode_enabled", checked)
         system_debug(f"ACEScg mode toggled: {checked}")
+        
+        if hasattr(self, 'aces_toggle_button'):
+            if checked:
+                self.aces_toggle_button.setText("ACES On")
+                if hasattr(self, '_aces_on_style'):
+                    self.aces_toggle_button.setStyleSheet(self._aces_on_style)
+            else:
+                self.aces_toggle_button.setText("ACES Off")
+                if hasattr(self, '_default_action_style'):
+                    self.aces_toggle_button.setStyleSheet(self._default_action_style)
     
     def _run_script_by_path(self, script_path: str):
         """Run a script by its path - delegates to execute_script."""
