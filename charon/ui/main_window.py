@@ -834,6 +834,7 @@ class CharonWindow(QtWidgets.QWidget):
         info_container = QtWidgets.QWidget()
         info_layout = QtWidgets.QHBoxLayout(info_container)
         info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(8) # Standard spacing
         
         # Left side: Labels stacked vertically
         labels_container = QtWidgets.QWidget()
@@ -886,8 +887,6 @@ class CharonWindow(QtWidgets.QWidget):
         self.generate_cameras_button.setVisible(False)
         info_layout.addWidget(self.generate_cameras_button)
         
-        info_layout.addSpacing(8)
-        
         # Right side: 3D Mode Toggle
         self.mode_3d_button = QtWidgets.QPushButton("3D Mode", info_container)
         self.mode_3d_button.setCheckable(True)
@@ -912,8 +911,6 @@ class CharonWindow(QtWidgets.QWidget):
         self.mode_3d_button.toggled.connect(self._on_3d_mode_toggled)
         info_layout.addWidget(self.mode_3d_button)
         
-        info_layout.addSpacing(8)
-
         # ACEScg Toggle Button
         self._aces_off_style = """
             QPushButton {
@@ -941,6 +938,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.aces_toggle_button = QtWidgets.QPushButton("ACES Off", info_container)
         self.aces_toggle_button.setCheckable(True)
         self.aces_toggle_button.setFixedHeight(24)
+        self.aces_toggle_button.setFixedWidth(80)
         self.aces_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.aces_toggle_button.setStyleSheet(self._aces_off_style)
         self.aces_toggle_button.setToolTip("Toggle ACEScg color space handling for ComfyUI integration")
