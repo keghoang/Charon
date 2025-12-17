@@ -4,6 +4,47 @@ try:
 except ImportError:
     from . import config
 
+STATUS_COLOR_MAP = {
+    "ready": "#565656",
+    "processing": "#d0a23f",
+    "completed": "#3d995b",
+    "error": "#c94d4d",
+}
+
+
+def _normalize_status_key(state):
+    key = (state or "").strip().lower()
+    if not key:
+        return "ready"
+    if "error" in key or "fail" in key:
+        return "error"
+    if "complete" in key or "done" in key:
+        return "completed"
+    if any(word in key for word in ("process", "upload", "run", "running", "working")):
+        return "processing"
+    return "ready"
+
+
+def resolve_status_color_hex(state):
+    key = _normalize_status_key(state)
+    return STATUS_COLOR_MAP.get(key, STATUS_COLOR_MAP["ready"])
+
+
+def hex_to_tile_color(hex_color):
+    if not hex_color:
+        return 0
+    value = hex_color.lstrip("#")
+    if len(value) != 6:
+        return 0
+    try:
+        return int(value, 16)
+    except ValueError:
+        return 0
+
+
+def status_to_tile_color(state):
+    return hex_to_tile_color(resolve_status_color_hex(state))
+
 def md_to_html(md_text, base_path=None):
     """
     Markdown to HTML converter with support for:

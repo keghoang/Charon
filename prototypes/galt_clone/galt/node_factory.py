@@ -2,6 +2,8 @@ import json
 import time
 import uuid
 
+from .utilities import status_to_tile_color
+
 
 def sanitize_name(name):
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
@@ -241,6 +243,11 @@ def create_charon_group_node(
         node.setMetaData("charon/workflow_path", workflow_path or "")
         node.setMetaData("charon/node_id", node_id_value)
         node.setMetaData("charon/read_node_id", "")
+    except Exception:
+        pass
+
+    try:
+        node["tile_color"].setValue(status_to_tile_color("Ready"))
     except Exception:
         pass
 

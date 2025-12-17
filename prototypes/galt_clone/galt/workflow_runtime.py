@@ -15,6 +15,7 @@ from .workflow_analysis import analyze_ui_workflow_inputs, analyze_workflow_inpu
 from .node_factory import create_charon_group_node
 from .paths import get_charon_temp_dir
 from .workflow_pipeline import convert_workflow as _pipeline_convert_workflow
+from .utilities import status_to_tile_color
 
 
 # NOTE:
@@ -390,6 +391,19 @@ def import_output():
         except Exception:
             stored_read_id = ''
 
+    status_state = 'Ready'
+    try:
+        payload_raw = node.metadata('charon/status_payload')
+    except Exception:
+        payload_raw = None
+    if payload_raw:
+        try:
+            payload_data = json.loads(payload_raw)
+        except Exception:
+            payload_data = None
+        if isinstance(payload_data, dict):
+            status_state = payload_data.get('state') or payload_data.get('status') or status_state
+
     knob = node.knob('charon_last_output')
     output_path = knob.value().strip() if knob else ''
     if not output_path:
@@ -480,6 +494,20 @@ def import_output():
 
     _ensure_info_tab(read_node, parent_id, read_id)
     _assign_read_label(read_node, parent_id, read_id)
+
+    tile_color = status_to_tile_color(status_state)
+    try:
+        node["tile_color"].setValue(tile_color)
+    except Exception:
+        pass
+    try:
+        read_node["tile_color"].setValue(tile_color)
+    except Exception:
+        pass
+    try:
+        read_node["gl_color"].setValue(tile_color)
+    except Exception:
+        pass
 
     try:
         anchor_knob = node.knob('charon_link_anchor')
