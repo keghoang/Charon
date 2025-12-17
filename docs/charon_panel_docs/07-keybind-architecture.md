@@ -149,7 +149,7 @@ Shows when assigning a global keybind that conflicts with local:
 1. Click Settings button
 2. Go to Charon Keybinds tab
 3. Click "Edit" button to modify keybinds
-4. Command mode toggle (F2 by default) is now in this tab
+4. Command mode toggle (F3 by default) is now in this tab
 5. Click "Reset to Defaults" to restore original keybinds
 
 ### Hotkey Cleanup

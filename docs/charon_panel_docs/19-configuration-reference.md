@@ -143,8 +143,7 @@ CACHE_VALIDATION_TTL = 600  # 10 minutes
 
 Global UI toggles live in `APP_SETTING_DEFINITIONS` (`config.py`). Each key is scoped per host (Maya, Nuke, Standalone, etc.) and persisted in the user settings database.
 
-- `run_at_startup` / `startup_mode` / `always_on_top`: Classic window-management options surfaced in the Settings dialog.
-- `advanced_user_mode`: Unlocks optional expert features such as the *Show Raw Validation Payload* entry in the Script Panel. Defaults to `"off"` to keep production builds streamlined.
+- `debug_logging`: Toggle verbose logging per host.
 
 The settings dialog reads and writes these keys through `KeybindManager.get_all_app_settings()` so any new definition appears automatically without additional wiring.
 
@@ -171,7 +170,7 @@ CUSTOM_ICON_NAMES = ["icon.png", "icon.jpg"]
 DEFAULT_LOCAL_KEYBINDS = {
     "run_script": "Ctrl+Return",
     "quick_search": "F4", 
-    "tiny_mode": "F2",
+    "tiny_mode": "F3",
     "refresh": "F5",
     "close_dialogs": "Escape"
 }

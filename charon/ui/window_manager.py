@@ -70,7 +70,7 @@ class WindowManager:
         version = get_host_version(host)
         version_str = f" {version}" if version else ""
         
-        system_info(f"Creating Charon window for host: {host}{version_str}")
+        system_debug(f"Creating Charon window for host: {host}{version_str}")
         
         # Get host configuration with fallback
         host_config = WindowManager.get_host_config(host)

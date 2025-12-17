@@ -21,12 +21,6 @@ def main():
     from charon import main as charon_main
 
     window = charon_main.launch()
-    if window:
-        print("Charon panel ready.")
-        print("=" * 60)
-        print("Workflows tab: manage repository folders and spawn CharonOps.")
-        print("Charon tab: monitor spawned nodes, trigger runs, and import outputs.")
-        print("=" * 60)
     return window
 
 

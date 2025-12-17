@@ -279,10 +279,18 @@ class TinyModeWidget(QtWidgets.QWidget):
         if mark_primed:
             self._primed = True
         normalized = list(infos) if infos else []
-        self._latest_infos = sorted(normalized, key=self._priority_key)
-        self._info_lookup = {
-            info.name: info for info in normalized if getattr(info, "name", None)
-        }
+        previous_order = {info.name: idx for idx, info in enumerate(self._latest_infos)}
+        current_order = {info.name: idx for idx, info in enumerate(normalized)}
+
+        # Preserve a stable display order to avoid nodes jumping around as they finish.
+        self._latest_infos = sorted(
+            normalized,
+            key=lambda info: (
+                previous_order.get(info.name, len(previous_order) + current_order.get(info.name, 0)),
+                info.name.lower(),
+            ),
+        )
+        self._info_lookup = {info.name: info for info in normalized if getattr(info, "name", None)}
         if normalized:
             self._has_displayed_nodes = True
             self._empty_refresh_count = 0
@@ -401,22 +409,6 @@ class TinyModeWidget(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.warning(self, "Execute CharonOp", "Process knob not found.")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Execute CharonOp", f"Failed to execute node: {exc}")
-
-    def _priority_key(self, info: runtime.SceneNodeInfo) -> tuple:
-        state_lower = (info.state or "").lower()
-        if info.progress < 0 or state_lower == "error":
-            rank = 0
-        elif state_lower == "processing":
-            rank = 1
-        elif info.progress > 0:
-            rank = 2
-        elif info.progress >= 1.0 or state_lower == "completed":
-            rank = 3
-        else:
-            rank = 4
-        updated = float(info.updated_at or 0.0)
-        progress = float(info.progress if info.progress >= 0 else 0.0)
-        return (rank, -updated, -progress)
 
     # ------------------------------------------------------------------ Helpers
 

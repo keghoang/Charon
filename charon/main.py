@@ -25,7 +25,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     detected_host = host_override or utilities.detect_host()
     # Set global debug mode (CLI flag takes precedence over stored preference)
     config.DEBUG_MODE = bool(debug)
-    system_info(f"Host detected/forced as: {detected_host}")
+    system_debug(f"Host detected/forced as: {detected_host}")
     
     # Setup paths - either from script_paths or global_path or config default
     if script_paths:
@@ -44,7 +44,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
             debug_pref = user_settings_db.get_app_setting_for_host("debug_logging", detected_host, default="off")
             config.DEBUG_MODE = str(debug_pref).lower() == "on"
             if config.DEBUG_MODE:
-                system_info(f"Debug logging enabled via settings for host '{detected_host}'.")
+                system_debug(f"Debug logging enabled via settings for host '{detected_host}'.")
         except Exception as exc:
             system_error(f"Failed to apply debug logging preference: {exc}")
     elif debug:
@@ -58,7 +58,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     if not os.path.exists(global_repo):
         try:
             os.makedirs(global_repo)
-            system_info(f"Created directory: {global_repo}")
+            system_debug(f"Created directory: {global_repo}")
         except Exception as e:
             system_error(f"Error creating directory {global_repo}: {str(e)}")
     

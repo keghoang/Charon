@@ -9,6 +9,8 @@ from .charon_logger import system_debug, system_error, system_info
 from .paths import get_default_comfy_launch_path, resolve_comfy_environment
 from . import preferences
 
+PREF_DEPENDENCIES_VERIFIED = "dependencies_verified"
+
 QT_AVAILABLE = False
 try:
     from PySide6 import QtWidgets, QtCore  # type: ignore
@@ -138,6 +140,10 @@ def check_and_prompt(parent=None) -> None:
     Check for ComfyUI dependencies and prompt the user to install when missing.
     Installs occur in the ComfyUI embedded Python environment.
     """
+    if preferences.get_preference(PREF_DEPENDENCIES_VERIFIED, False):
+        system_debug("Dependency check skipped; previously verified.")
+        return
+
     prefs = preferences.load_preferences()
     comfy_path = prefs.get("comfyui_launch_path") or get_default_comfy_launch_path()
     env = resolve_comfy_environment(comfy_path)
@@ -155,6 +161,7 @@ def check_and_prompt(parent=None) -> None:
 
     if not comfy_missing:
         system_info("Dependency check: all optional dependencies already available (trimesh/playwright).")
+        preferences.set_preference(PREF_DEPENDENCIES_VERIFIED, True)
         return
 
     prompt_lines = ["Optional dependencies are missing:", *[f"- {item}" for item in comfy_missing], "", "Install them now?"]
@@ -233,3 +240,9 @@ def check_and_prompt(parent=None) -> None:
                 )
             except Exception:
                 pass
+
+    # Mark verified only when nothing is missing or all installs succeeded.
+    if comfy_missing and results:
+        failed = any("FAILED" in entry.upper() or "skipped" in entry.lower() for entry in results)
+        if not failed:
+            preferences.set_preference(PREF_DEPENDENCIES_VERIFIED, True)

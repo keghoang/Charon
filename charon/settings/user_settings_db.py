@@ -646,6 +646,17 @@ def get_or_create_local_keybinds():
             'enabled': bool(row[2])
         }
         existing_actions.add(action_name)
+
+    # Migration: update tiny_mode default keybind from F2 to F3 when unchanged by user.
+    tiny_entry = keybinds.get("tiny_mode")
+    if tiny_entry:
+        seq_normalized = (tiny_entry.get("key_sequence") or "").strip().upper()
+        if seq_normalized == "F2":
+            cursor.execute(
+                "UPDATE local_keybind_settings SET key_sequence = ? WHERE action_name = 'tiny_mode'",
+                ("F3",),
+            )
+            tiny_entry["key_sequence"] = "F3"
     
     # Check for any missing default keybinds and add them
     for action, default_config in DEFAULT_LOCAL_KEYBINDS.items():
