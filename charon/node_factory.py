@@ -24,7 +24,7 @@ def create_charon_group_node(
     process_script,
     workflow_path=None,
     parameters=None,
-    import_script=None,
+    recreate_script=None,
     auto_import_default=True,
 ):
     inputs = list(inputs or [])
@@ -176,34 +176,6 @@ def create_charon_group_node(
     setup_label = nuke.Text_Knob("charon_setup_label", "Processing Controls", "")
     node.addKnob(setup_label)
 
-    import_knob = nuke.PyScript_Knob("import_output", "Import Output")
-    import_knob.setCommand(import_script or "nuke.message('Import script unavailable.')")
-    import_knob.setFlag(nuke.STARTLINE)
-    node.addKnob(import_knob)
-
-    process_knob = nuke.PyScript_Knob("process", "Process with ComfyUI")
-    process_knob.setCommand(process_script)
-    process_knob.setFlag(nuke.STARTLINE)
-    node.addKnob(process_knob)
-
-    reuse_knob = nuke.Boolean_Knob(
-        "charon_reuse_output",
-        "Update future iteration in the same Read node",
-        True,
-    )
-    reuse_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        reuse_knob.setValue(1)
-    except Exception:
-        pass
-    try:
-        reuse_knob.setTooltip(
-            "When enabled, successful runs update the last Read node instead of creating a new one."
-        )
-    except Exception:
-        pass
-    node.addKnob(reuse_knob)
-
     batch_knob = nuke.Int_Knob("charon_batch_count", "Batch Count", 1)
     batch_knob.setFlag(nuke.NO_ANIMATION)
     try:
@@ -218,7 +190,45 @@ def create_charon_group_node(
         batch_knob.setTooltip("Number of times to submit the workflow (unique seed per batch).")
     except Exception:
         pass
+    batch_knob.setFlag(nuke.STARTLINE)
     node.addKnob(batch_knob)
+
+    recreate_knob = nuke.PyScript_Knob("charon_recreate_read", "Recreate Read Node")
+    recreate_knob.setCommand(recreate_script or "nuke.message('Recreate helper unavailable.')")
+    recreate_knob.setFlag(nuke.STARTLINE)
+    try:
+        recreate_knob.setEnabled(False)
+    except Exception:
+        pass
+    node.addKnob(recreate_knob)
+
+    process_knob = nuke.PyScript_Knob("process", "Execute")
+    process_knob.setCommand(process_script)
+    process_knob.setFlag(nuke.STARTLINE)
+    try:
+        process_knob.setColor(0x2E8BFEFF)
+    except Exception:
+        pass
+    node.addKnob(process_knob)
+
+    reuse_knob = nuke.Boolean_Knob(
+        "charon_reuse_output",
+        "Update future iteration in the same Read node",
+        True,
+    )
+    reuse_knob.setFlag(nuke.NO_ANIMATION)
+    reuse_knob.setFlag(nuke.STARTLINE)
+    try:
+        reuse_knob.setValue(1)
+    except Exception:
+        pass
+    try:
+        reuse_knob.setTooltip(
+            "When enabled, successful runs update the last Read node instead of creating a new one."
+        )
+    except Exception:
+        pass
+    node.addKnob(reuse_knob)
 
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)

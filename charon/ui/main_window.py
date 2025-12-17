@@ -39,6 +39,7 @@ from ..cache_manager import get_cache_manager
 from ..execution.result import ExecutionStatus
 from ..charon_logger import system_info, system_debug, system_warning, system_error
 from ..icon_manager import get_icon_manager
+from ..paths import get_charon_temp_dir
 
 
 BANNER_IMAGE_PATH = Path(__file__).resolve().parent.parent / "resources" / "banner.png"
@@ -427,13 +428,6 @@ class CharonWindow(QtWidgets.QWidget):
         # Add 4px margin to align with the folder panel's content
         refresh_layout.setContentsMargins(4, 0, 4, 0)
         
-        # Add Tiny button on the left
-        self.tiny_btn = QtWidgets.QPushButton("Tiny")
-        self.tiny_btn.setToolTip("Switch to Tiny Mode (F2)")
-        self.tiny_btn.setMaximumWidth(config.UI_SMALL_BUTTON_WIDTH)
-        self.tiny_btn.clicked.connect(self.enter_tiny_mode)
-        refresh_layout.addWidget(self.tiny_btn)
-        
         refresh_layout.addStretch()  # Push other buttons to the right
         
         self.refresh_btn = QtWidgets.QPushButton("Refresh")
@@ -656,24 +650,22 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout = QtWidgets.QHBoxLayout()
         footer_layout.setContentsMargins(4, 0, 4, 4)
 
-        self.debug_toggle_button = QtWidgets.QPushButton(parent)
-        self.debug_toggle_button.setObjectName("charonDebugToggleButton")
-        small_width = int(getattr(config, "UI_SMALL_BUTTON_WIDTH", 60) * 1.2)
-        standard_width = max(getattr(config, "UI_BUTTON_WIDTH", 80), 110)
-        self.debug_toggle_button.setMinimumWidth(small_width)
-        self.debug_toggle_button.setMaximumWidth(standard_width)
-        self.debug_toggle_button.setSizePolicy(
-            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed
+        self.project_label = QtWidgets.QLabel(parent)
+        self.project_label.setObjectName("charonProjectLabel")
+        self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.project_label.setWordWrap(False)
+        self.project_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
         )
-        self.debug_toggle_button.clicked.connect(self._toggle_debug_mode)
-        footer_layout.addWidget(self.debug_toggle_button)
+        self.project_label.setMinimumWidth(280)
+        footer_layout.addWidget(self.project_label, 1)
 
         footer_layout.addStretch()
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
         footer_layout.addWidget(self.comfy_connection_widget)
         main_layout.addLayout(footer_layout)
-        self._refresh_debug_toggle_button()
+        self._refresh_project_display()
 
         # Initialize and populate folders
         self.current_base = self.global_path
@@ -694,8 +686,8 @@ class CharonWindow(QtWidgets.QWidget):
             self.execution_history_panel
         )
 
-        # Ensure debug toggle matches current configuration after shared components load
-        self._refresh_debug_toggle_button()
+        # Ensure project details stay updated after shared components load
+        self._refresh_project_display()
         
         # Connect tiny mode signals
         self.tiny_mode_widget.exit_tiny_mode.connect(self.exit_tiny_mode)
@@ -742,31 +734,27 @@ class CharonWindow(QtWidgets.QWidget):
             'settings': self.open_settings
         }
 
-    def _toggle_debug_mode(self):
-        """Toggle runtime debug logging and refresh the footer button state."""
-        current = bool(getattr(config, "DEBUG_MODE", False))
-        new_state = not current
-        try:
-            setattr(config, "DEBUG_MODE", new_state)
-        except Exception as exc:
-            system_warning(f"Could not toggle debug mode: {exc}")
+    def _refresh_project_display(self):
+        """Update the footer label with project context derived from BUCK env vars."""
+        label = getattr(self, "project_label", None)
+        if label is None:
             return
 
-        self._refresh_debug_toggle_button()
-        state_label = "enabled" if new_state else "disabled"
-        system_info(f"Debug logging {state_label}.")
-
-    def _refresh_debug_toggle_button(self):
-        """Ensure the footer debug toggle reflects the current mode."""
-        button = getattr(self, "debug_toggle_button", None)
-        if button is None:
+        project_path = os.environ.get("BUCK_PROJECT_PATH", "").strip()
+        if project_path:
+            project_name = Path(project_path).name or project_path
+            label.setText(f"Project: {project_name}")
+            label.setToolTip(project_path)
             return
 
-        is_enabled = bool(getattr(config, "DEBUG_MODE", False))
-        button.setText("Debug: On" if is_enabled else "Debug: Off")
-        button.setToolTip(
-            "Disable verbose logging output" if is_enabled else "Enable verbose logging output"
-        )
+        work_root = os.environ.get("BUCK_WORK_ROOT", "").strip()
+        if work_root:
+            destination = os.path.join(work_root, "Work")
+        else:
+            destination = os.path.join(get_charon_temp_dir(), "results")
+        destination = os.path.normpath(destination)
+        label.setText(f"Project not Found, saving outputs to {destination}")
+        label.setToolTip(destination)
     
     def _on_keybind_triggered(self, keybind_type: str, keybind_id: str):
         """Handle keybind trigger from keybind manager."""
@@ -1000,16 +988,10 @@ class CharonWindow(QtWidgets.QWidget):
     def _on_folders_loaded(self, folders):
         """Handle loaded folders from async loader."""
         user_slug = get_current_user_slug()
-
-        # Ensure the user's folder exists if the repository is reachable
+        user_dir_exists = False
         if user_slug and self.current_base and os.path.isdir(self.current_base):
             user_dir = os.path.join(self.current_base, user_slug)
-            if not os.path.isdir(user_dir):
-                try:
-                    os.makedirs(user_dir, exist_ok=True)
-                    system_info(f"Created workflow folder for user: {user_dir}")
-                except Exception as exc:
-                    system_error(f"Could not create user workflow folder {user_dir}: {exc}")
+            user_dir_exists = os.path.isdir(user_dir)
 
         display_folders = []
 
@@ -1024,7 +1006,7 @@ class CharonWindow(QtWidgets.QWidget):
         normal_folders = {
             name for name in folders if name and (not user_slug or name.lower() != user_slug)
         }
-        if user_slug:
+        if user_slug and user_dir_exists:
             normal_folders.add(user_slug)
 
         display_folders.extend(sorted(normal_folders, key=str.lower))
@@ -1033,7 +1015,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.folder_panel.update_folders(display_folders)
 
         # Prefer selecting the user's folder if nothing is selected yet
-        if not self.folder_panel.get_selected_folder() and user_slug:
+        if not self.folder_panel.get_selected_folder() and user_slug and user_dir_exists:
             if any(name.lower() == user_slug for name in display_folders):
                 self.folder_panel.select_folder(user_slug)
                 return

@@ -49,7 +49,7 @@
 
 ## Testing Guidelines
 - No automated suite exists yet; rely on manual verification:
-  - Panel flow: load a preset under `workflows/`, spawn a CharonOp, press **Process with ComfyUI**, confirm conversion, submission, status transitions (`Ready -> Processing -> Completed`), and asset ingestion. Inspect `D:\Nuke\charon\debug` and `...\results` as needed.
+  - Panel flow: load a preset under `workflows/`, spawn a CharonOp, press **Execute**, confirm conversion, submission, status transitions (`Ready -> Processing -> Completed`), and asset ingestion. Inspect `D:\Nuke\charon\debug` and `...\results` as needed.
   - Conversion path: after touching `workflow_pipeline.py` or `workflow_analysis.py`, rerun the smoke test with Set/Get heavy presets and capture stdout/stderr.
   - Sample data: regenerate demo workflows with `python tools\populate_dummy_workflows.py` when a clean slate is required.
 

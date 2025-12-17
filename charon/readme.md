@@ -1,136 +1,26 @@
-# Charon - Simple Script Sharing Tool
-Charon is an internal tool that helps you easily browse, run, and share simple scripts with your colleagues.
-This tool is built and maintained by **AlexD**. Feedback and bug reports are welcome.
+# Charon Workflow Panel
+Charon helps you discover studio-ready workflows, drop them into Nuke, and drive ComfyUI renders without leaving the panel. The tool is built and maintained by **Kien**.
 
-**Host Apps supported:** Maya, Nuke, Windows  
-**Script types supported:** Python, mel  
-**Python requirement:** 3.7 (for compatibility with our supported software)
+## What You Can Do
+- Browse the curated workflow library with metadata, tags, and previews.
+- Inspect parameters, dependencies, and prompt text before committing.
+- Spawn CharonOps in your script with a single click.
+- Submit jobs to ComfyUI and watch status roll from `Ready -> Processing -> Completed`.
 
-## Getting Started
+## Fast Workflow Run
+1. **Browse**: Locate a workflow from the left folder tree or use Quick Search (`Ctrl+F`).
+2. **Review**: Check the metadata panel for descriptions, dependencies, and notes.
+3. **Grab**: Click **Grab Workflow** (or double-click the entry) to create a CharonOp in the current script.
+4. **Process**: On the CharonOp, press **Execute** to convert, submit, and monitor results.
+5. **Inspect**: Open the Execution History tab to review logs, outputs, and retry if needed.
 
-### Creating Scripts
-Right-click in any folder (empty space) and select **"New Script"** to create a new script with metadata.
+## Essential Controls
+- `Ctrl+R` Refresh repository index and metadata cache.
+- `Ctrl+Enter` Process the selected workflow immediately.
+- `F4` Toggle Quick Search anywhere in the panel.
+- `Space` Open the workflow readme for notes and troubleshooting.
 
-### Running Scripts
-- **Browse Mode** (default): Double-click or press Ctrl+Enter to run
-- **Command Mode** (F2): Single-click to instantly run scripts
-
-### Organizing Scripts
-- **Bookmark** frequently used scripts (right-click → Add Bookmark)
-- **Assign Hotkeys** to scripts for quick access (right-click → Assign Hotkey)
-- **Use Tags** to categorize and filter scripts
-
-## Keyboard Shortcuts
-
-### Navigation
-| Hotkey       | Action                           |
-|--------------|----------------------------------|
-| Arrow Keys   | Navigate folders and scripts     |
-| Backspace    | Go to parent folder              |
-| Tab          | Focus folders panel              |
-| Escape       | Clear selection / Close dialogs  |
-
-### Quick Actions
-| Hotkey       | Action                           |
-|--------------|----------------------------------|
-| F2           | Toggle Command Mode              |
-| F4           | Toggle Quick Search              |
-| Ctrl+Enter   | Run selected script              |
-| Ctrl+R       | Refresh current folder           |
-| Ctrl+O       | Open script folder in explorer   |
-| Spacebar     | Open/Create readme               |
-| Delete       | Remove bookmark (in Bookmarks)   |
-
-### Global Hotkeys
-| Hotkey       | Action                           |
-|--------------|----------------------------------|
-| (Custom)     | Run assigned scripts from anywhere |
-
-## Features
-
-### Command Mode
-Press **F2** to toggle Command Mode - a streamlined interface for rapid script execution:
-- Smaller, more compact window stays out of your way
-- **F4** Quick Search finds and runs scripts immediately (no navigation needed)
-- Single-click to run any script
-- Yellow highlight indicates Command Mode is active
-
-### Bookmarks
-Bookmark your frequently used scripts for quick access:
-- Right-click any script → **Add Bookmark** (or **Remove Bookmark**)
-- A special **★ Bookmarks** folder appears when you have bookmarks
-- Press Delete in the Bookmarks folder to remove selected bookmark
-
-### Script Hotkeys
-Assign global hotkeys to run scripts from anywhere:
-- Right-click a script → **Assign Hotkey**
-- Press your desired key combination
-- Works even when Charon isn't focused
-- Remove with right-click → **Remove Hotkey**
-
-### Tags
-Organize scripts with tags:
-- Right-click → **Manage Tags** to add/remove tags
-- Use the tag bar at the bottom to filter scripts
-- Scripts can have multiple tags
-
-### Right-Click Menu
-Access all features through the context menu:
-- **Open Folder** - Open in file explorer
-- **Add/Remove Bookmark** - Quick access management
-- **Assign/Remove Hotkey** - Global hotkey assignment
-- **Create/Edit Metadata** - Configure script settings
-- **Manage Tags** - Organize with tags
-- **Open/Create Readme** - Documentation
-
-## ⚠️ Important Warnings
-
-### Threading and UI Scripts
-- **UI/Widget scripts**: Always run on the **main thread** (set `"run_on_main": true` in metadata)
-- **Background scripts**: Perfect for data processing, but **CANNOT** create Qt/PySide widgets
-- **Maya users**: Qt widgets in background threads will freeze Maya - always use main thread for UI
-
-
-## Markdown Rendering
-
-Charon automatically detects `readme.md` files and supports limited Markdown:
-
-### Headers
-Use `#`, `##`, `###` for different header levels
-```markdown
-# Header 1
-## Header 2
-### Header 3
-```
-
-### Bullet Lists
-Start lines with `-` for bullet points
-```markdown
-- Item 1
-- Item 2
-  - Nested item
-```
-
-### Images
-Embed images:
-```markdown
-- Single image: `<img>screenshot.png</img>`
-- Multiple images: `<img>first_image.png, second_image.png</img>`
-```
-<img>../charon_icon.png</img>
-
-### Links
-Add clickable links:
-```markdown
-<link>https://example.com, Click here</link>
-```
-<link>https://google.com, Click here</link>
-
-### Code Blocks
-Wrap code in triple backticks to ignore all other styling.
-```python
-print("Hello from Charon!")
-```
-
-
-🙂
+## Helpful Tips
+- Use the Tag Bar to filter down to lighting, look-dev, or utility workflows.
+- Preferences live under **Settings -> Workflows**; keep the ComfyUI path pointed at the portable bundle.
+- Debug artifacts land in `D:\Nuke\charon\debug`; include them when reporting issues.

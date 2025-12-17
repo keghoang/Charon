@@ -42,22 +42,12 @@ def _resolve_root(base_path: Optional[str] = None) -> str:
 def discover_workflows(base_path: Optional[str] = None) -> List[Tuple[str, str, Optional[Dict[str, Any]]]]:
     """
     Return a list of (folder_name, folder_path, metadata) for each workflow directory.
-    Ensures the current user's folder exists so the UI always sees it, even if empty.
     """
     root = _resolve_root(base_path)
     results: List[Tuple[str, str, Optional[Dict[str, Any]]]] = []
 
     if not os.path.isdir(root):
         return results
-
-    user_slug = get_current_user_slug()
-    user_folder = os.path.join(root, user_slug)
-    if not os.path.isdir(user_folder):
-        try:
-            os.makedirs(user_folder, exist_ok=True)
-            system_debug(f"Created workflow folder for user: {user_folder}")
-        except Exception as exc:
-            system_error(f"Could not create workflow folder {user_folder}: {exc}")
 
     try:
         entries = sorted(
@@ -151,7 +141,7 @@ def spawn_charon_node(
 
     temp_dir = get_charon_temp_dir()
     process_script = _build_processor_script()
-    import_script = _build_import_output_script()
+    recreate_script = _build_recreate_read_script()
 
     charon_meta = metadata.get("charon_meta") or {}
     raw_parameters = (
@@ -182,7 +172,7 @@ def spawn_charon_node(
         inputs=inputs,
         temp_dir=temp_dir,
         process_script=process_script,
-        import_script=import_script,
+        recreate_script=recreate_script,
         workflow_path=workflow_path,
         parameters=parameter_specs,
         auto_import_default=auto_import,
@@ -220,66 +210,15 @@ def _build_processor_script() -> str:
     )
 
 
-def _build_import_output_script() -> str:
-    return """# CharonOp Import Output
-import os
-import nuke
-
-
-def _safe_knob_value(owner, name):
-    try:
-        knob = owner.knob(name)
-    except Exception:
-        knob = None
-    if knob is None:
-        return ''
-    try:
-        return knob.value()
-    except Exception:
-        return ''
-
-
-def _import_output():
-    node = nuke.thisNode()
-    output_path = _safe_knob_value(node, 'charon_last_output')
-    if not output_path:
-        nuke.message('No output path available yet.')
-        return
-
-    output_path = str(output_path).strip()
-    if not output_path:
-        nuke.message('Output path is empty.')
-        return
-
-    if not os.path.exists(output_path):
-        nuke.message('Output file not found:\n{0}'.format(output_path))
-        return
-
-    normalized = output_path.replace('\\', '/')
-
-    def _create_read():
-        read_node = nuke.createNode('Read')
-        read_node['file'].setValue(normalized)
-        try:
-            read_node.setXpos(node.xpos() + 200)
-            read_node.setYpos(node.ypos())
-        except Exception:
-            pass
-        try:
-            read_node.setSelected(True)
-        except Exception:
-            pass
-
-    try:
-        nuke.executeInMainThread(_create_read)
-    except Exception:
-        _create_read()
-
-
+def _build_recreate_read_script() -> str:
+    return """# CharonOp Recreate Read Node
 try:
-    _import_output()
+    from charon.processor import recreate_missing_read_node
 except Exception as exc:
-    nuke.message('Failed to import output: {0}'.format(exc))
+    import nuke
+    nuke.message('Charon processor unavailable: {0}'.format(exc))
+else:
+    recreate_missing_read_node()
 """
 
 
