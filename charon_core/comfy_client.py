@@ -118,6 +118,48 @@ class ComfyUIClient:
             logger.error("Failed to get history: %s", exc)
             return None
 
+    def get_queue_status(self):
+        """Get current queue status and progress info."""
+        try:
+            request = urllib.request.Request(f"{self.base_url}/queue")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if response.getcode() == 200:
+                    return json.loads(response.read().decode("utf-8"))
+            return None
+        except Exception as exc:
+            logger.error("Failed to get queue status: %s", exc)
+            return None
+
+    def get_progress_for_prompt(self, prompt_id):
+        """Get progress percentage for a specific prompt ID."""
+        queue_data = self.get_queue_status()
+        if not queue_data:
+            return 0.0
+        
+        # Check running queue for current progress
+        running = queue_data.get("queue_running", [])
+        for item in running:
+            if len(item) >= 2 and item[1] == prompt_id:
+                # If it's running, assume 50% progress (could enhance with more detailed progress)
+                return 0.5
+        
+        # Check pending queue
+        pending = queue_data.get("queue_pending", [])
+        for item in pending:
+            if len(item) >= 2 and item[1] == prompt_id:
+                return 0.0  # Still pending
+        
+        # If not in queues, check history for completion
+        history = self.get_history(prompt_id)
+        if history and prompt_id in history:
+            status = history[prompt_id].get("status", {}).get("status_str")
+            if status == "success":
+                return 1.0
+            elif status == "error":
+                return -1.0  # Use negative to indicate error
+        
+        return 0.0
+
     def wait_for_completion(self, prompt_id, check_interval=1.0):
         start = time.time()
         while time.time() - start < self.timeout:

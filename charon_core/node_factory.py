@@ -119,14 +119,22 @@ def create_charon_group_node(
         pass
     node.addKnob(last_output_knob)
 
-    if workflow_path:
-        path_knob = nuke.String_Knob("workflow_path", "Workflow Path", workflow_path)
-        path_knob.setFlag(nuke.NO_ANIMATION)
-        try:
-            path_knob.setFlag(nuke.INVISIBLE)
-        except Exception:
-            pass
-        node.addKnob(path_knob)
+    workflow_name_knob = nuke.String_Knob("charon_workflow_name", "Workflow Name", workflow_name)
+    workflow_name_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        workflow_name_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(workflow_name_knob)
+
+    path_value = workflow_path or ""
+    path_knob = nuke.String_Knob("workflow_path", "Workflow Path", path_value)
+    path_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        path_knob.setFlag(nuke.INVISIBLE)
+    except Exception:
+        pass
+    node.addKnob(path_knob)
 
     process_knob = nuke.PyScript_Knob("process", "Process with ComfyUI")
     process_knob.setCommand(process_script)
@@ -148,6 +156,8 @@ def create_charon_group_node(
         "progress": 0.0,
         "message": "Awaiting processing",
         "updated_at": time.time(),
+        "workflow_name": workflow_name,
+        "workflow_path": workflow_path or "",
         "auto_import": True,
         "runs": [],
     }
@@ -157,6 +167,11 @@ def create_charon_group_node(
         pass
     try:
         node.setMetaData("charon/auto_import", "1")
+    except Exception:
+        pass
+    try:
+        node.setMetaData("charon/workflow_name", workflow_name)
+        node.setMetaData("charon/workflow_path", workflow_path or "")
     except Exception:
         pass
 
