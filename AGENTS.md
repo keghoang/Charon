@@ -72,7 +72,7 @@ The legacy `charon_core` package has been retired. All runtime code now lives in
 1. Metadata Alignment - complete
    - `.charon.json` handling (metadata manager, dialogs, seeding script) trimmed to the supported schema; samples regenerated.
 2. Repository Hardening - complete
-   - `config.WORKFLOW_REPOSITORY_ROOT` anchors discovery to `\buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows`. Folder loader injects the user slug, invalidates caches, and blocks traversal outside the Charon tree.
+   - `config.WORKFLOW_REPOSITORY_ROOT` anchors discovery to `\buck\globalprefs\SHARED\CODE\Charon_repo\workflows`. Folder loader injects the user slug, invalidates caches, and blocks traversal outside the Charon tree.
 3. Runtime Helpers - complete
    - `workflow_runtime.py` exposes `discover_workflows`, `load_workflow_bundle`, `convert_workflow`, and `spawn_charon_node`; conversion helpers live alongside it.
 4. UI Wiring - complete
@@ -87,6 +87,6 @@ The legacy `charon_core` package has been retired. All runtime code now lives in
    - Pending: add structured logs (`metadata_read`, `conversion_start`, etc.), exercise the full Grab/Process loop, and document failure handling (missing repo, invalid JSON, conversion errors).
 
 ### Guardrails & Notes
-- Never touch directories above `\buck\globalprefs\SHARED\CODE\Galt_repo\kien\Charon\workflows`.
+- Never touch directories above `\buck\globalprefs\SHARED\CODE\Charon_repo\workflows`.
 - Centralize configuration in `charon/config.py` instead of scattering constants.
 - Record manual verification (launcher run, empty-repo test, Grab/Process flow) in commit messages for traceability.

@@ -1581,7 +1581,7 @@ class CharonWindow(QtWidgets.QWidget):
             parts = script_path.replace('\\', '/').split('/')
             # Find "charon_repo" or similar base indicator
             for i, part in enumerate(parts):
-                if part in ["galt_repo", "Galt_repo", "CODE"]:
+                if part in ["charon_repo", "Charon_repo", "galt_repo", "Galt_repo", "CODE"]:
                     if i + 1 < len(parts):
                         relative_path = '/'.join(parts[i+1:])
                         break
