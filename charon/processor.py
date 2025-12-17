@@ -4699,7 +4699,11 @@ def _create_generic_result_group(charon_node, image_paths):
     safe_name = "".join(c if c.isalnum() else "_" for c in charon_node.name())
     group = nuke.createNode("Group")
     group.setName(f"Charon_ContactSheet_{safe_name}")
+    group['tile_color'].setValue(0xFFFF00FF)
     group.setXYpos(charon_node.xpos() + 200, charon_node.ypos() + 100)
+    try:
+        group['lock_connections'].setValue(True)
+    except: pass
     
     # Register new name on parent
     try:
