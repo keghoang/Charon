@@ -13,6 +13,8 @@ class CompactResourceBar(QWidget):
         
         self.label = QLabel(label_text)
         self.label.setStyleSheet("color: #aaa; font-size: 10px; font-weight: bold;")
+        self.label.setFixedWidth(32) # Fixed width for alignment
+        self.label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.label)
         
         self.bar = QProgressBar()

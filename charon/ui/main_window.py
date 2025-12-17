@@ -671,6 +671,16 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.setSpacing(4)
         footer_layout.setVerticalSpacing(0)
 
+        # Left Column: Project Label (Created first for font reference)
+        self.project_label = QtWidgets.QLabel(parent)
+        self.project_label.setObjectName("charonProjectLabel")
+        self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.project_label.setWordWrap(False)
+        self.project_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self.project_label.setMinimumWidth(280)
+
         # Left Column: GPU Label (Row 0) - Aligned Bottom to match GPU bars
         self.gpu_label = QtWidgets.QLabel(parent)
         self.gpu_label.setObjectName("charonGpuLabel")
@@ -680,17 +690,9 @@ class CharonWindow(QtWidgets.QWidget):
         gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
+        
+        # Add to layout: GPU on top (Row 0), Project on bottom (Row 1)
         footer_layout.addWidget(self.gpu_label, 0, 0, Qt.AlignLeft | Qt.AlignBottom)
-
-        # Left Column: Project Label (Row 1)
-        self.project_label = QtWidgets.QLabel(parent)
-        self.project_label.setObjectName("charonProjectLabel")
-        self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.project_label.setWordWrap(False)
-        self.project_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
-        self.project_label.setMinimumWidth(280)
         footer_layout.addWidget(self.project_label, 1, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
         # Spacer Column (Row 0-1, Col 1)
