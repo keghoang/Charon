@@ -230,6 +230,11 @@ def _local_repo_root(ensure: bool = True) -> str:
     return repo_root
 
 
+def get_local_repository_root(ensure: bool = True) -> str:
+    """Return the root directory for the per-user Charon repository mirror."""
+    return _local_repo_root(ensure)
+
+
 def get_local_workflow_root(ensure: bool = True) -> str:
     root = os.path.join(_local_repo_root(ensure), LOCAL_WORKFLOW_DIR)
     if ensure:
@@ -536,4 +541,37 @@ def validation_raw_path(remote_folder: str, *, ensure_parent: bool = False) -> P
 def validation_resolve_log_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
     cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
     return cache_root / "validation_resolve_log.json"
+
+
+def reset_local_repository() -> bool:
+    """
+    Remove and recreate the per-user Charon_repo_local mirror.
+
+    Returns True on success, False when the directory could not be cleared.
+    """
+    repo_root = Path(_local_repo_root(ensure=False))
+    if not repo_root.exists():
+        try:
+            repo_root.mkdir(parents=True, exist_ok=True)
+            (repo_root / LOCAL_WORKFLOW_DIR).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            system_warning(f"Failed to initialize local repository at {repo_root}: {exc}")
+            return False
+        return True
+
+    try:
+        shutil.rmtree(repo_root)
+    except OSError as exc:
+        system_warning(f"Failed to remove local repository at {repo_root}: {exc}")
+        return False
+
+    try:
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / LOCAL_WORKFLOW_DIR).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        system_warning(f"Failed to recreate local repository at {repo_root}: {exc}")
+        return False
+
+    system_debug(f"Reset local repository cache at {repo_root}")
+    return True
 
