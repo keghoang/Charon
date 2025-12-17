@@ -1240,7 +1240,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         resolved = bool(result.resolved)
         note = "; ".join(result.resolved or result.failed or result.notes or [])
-        if note:
+        # Only surface notes when something failed; success already shows detail in the row.
+        if note and result.failed:
             self._append_issue_note("custom_nodes", note)
         if not resolved and result.failed:
             QtWidgets.QMessageBox.warning(
