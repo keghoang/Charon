@@ -1150,8 +1150,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                             updated = True
                 
                 if updated:
+                    system_debug(f"Writing workflow to {self._workflow_path}. Keys: {list(workflow.keys())}")
                     with open(self._workflow_path, 'w', encoding='utf-8') as f:
                         json.dump(workflow, f, indent=2)
+                    
+                    if os.path.getsize(self._workflow_path) == 0:
+                        system_debug("CRITICAL: Workflow file is empty after write!")
                     
                     system_debug("Workflow file updated. Refreshing parameters...")
                     _invalidate_parameter_cache(self._workflow_path)
