@@ -22,6 +22,8 @@ class WindowManager:
     
     This consolidates all window creation logic from __init__.py and main.py into one place.
     """
+
+    _ACTIVE_WINDOW: Optional[GaltWindow] = None
     
     @staticmethod
     def create_window(
@@ -46,6 +48,19 @@ class WindowManager:
         Returns:
             GaltWindow instance (or docked container in Maya/Nuke)
         """
+        # Reuse existing window if one already exists
+        existing_window = WindowManager._get_existing_window()
+        if existing_window:
+            if global_path and hasattr(existing_window, "global_path") and existing_window.global_path != global_path:
+                existing_window.global_path = global_path
+            existing_window.show()
+            try:
+                existing_window.raise_()
+                existing_window.activateWindow()
+            except Exception:
+                pass
+            return existing_window
+
         # Auto-detect host if not provided
         if not host:
             host = detect_host()
@@ -124,6 +139,8 @@ class WindowManager:
             # Focus the window after showing
             window.raise_()
             window.activateWindow()
+
+        WindowManager._register_active_window(window)
             
         return window
     
@@ -274,7 +291,43 @@ class WindowManager:
         except Exception as e:
             system_error(f"Failed to create Nuke panel: {str(e)}")
             system_info("Falling back to standalone window")
-            return WindowManager._create_standalone("Nuke", None, global_path, True, xoffset, yoffset)
+        return WindowManager._create_standalone("Nuke", None, global_path, True, xoffset, yoffset)
+    
+    @staticmethod
+    def _get_existing_window() -> Optional[GaltWindow]:
+        def is_galt_window(widget):
+            return getattr(widget, "_charon_is_galt_window", False) or getattr(widget, "objectName", lambda: "")() == "CharonGaltWindow"
+
+        cached = WindowManager._ACTIVE_WINDOW
+        if cached and is_galt_window(cached):
+            return cached
+
+        app = QtWidgets.QApplication.instance()
+        if app:
+            for widget in app.topLevelWidgets():
+                if is_galt_window(widget):
+                    WindowManager._register_active_window(widget)
+                    return widget
+
+        WindowManager._ACTIVE_WINDOW = None
+        return None
+    
+    @staticmethod
+    def _register_active_window(window: GaltWindow) -> None:
+        WindowManager._ACTIVE_WINDOW = window
+        try:
+            system_debug(f"Registered active Galt window id={id(window)}")
+        except Exception:
+            pass
+        try:
+            window.destroyed.connect(lambda *_: WindowManager._on_window_destroyed(window))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _on_window_destroyed(window: GaltWindow) -> None:
+        if WindowManager._ACTIVE_WINDOW is window:
+            WindowManager._ACTIVE_WINDOW = None
     
     @staticmethod
     def get_host_config(host: str) -> Dict[str, Any]:
