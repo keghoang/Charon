@@ -571,7 +571,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             if script_path:
                 task_command = f'"{script_path}"'
                 used_task_script = True
-                system_warning(
+                system_debug(
                     "Task Scheduler /tr exceeded 261 characters; using cached launcher script."
                 )
             else:
