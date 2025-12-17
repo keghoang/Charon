@@ -709,11 +709,23 @@ class ScriptPanel(QtWidgets.QWidget):
         """Force validation state to passed for a workflow."""
         if not script_path:
             return
+        payload = {
+            "state": "validated",
+            "message": "Validation overridden",
+            "timestamp": time.time(),
+            "overridden": True,
+            "issues": [],
+            "comfy_path": self._resolve_comfy_path(),
+        }
         try:
-            self.script_model.set_validation_state(script_path, "validated", payload={"overridden": True})
+            self.script_model.set_validation_state(script_path, "validated", payload=payload)
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "Override Failed", str(exc))
             return
+        try:
+            save_ui_validation_status(script_path, "validated", payload)
+        except Exception:
+            pass
         system_debug(f"[Validation] Override set to Passed for {script_path}")
 
     def _load_workflow_bundle_safe(self, script_path: str):
