@@ -21,7 +21,7 @@ from ..validation_resolver import (
 )
 from ..validation_cache import load_validation_log, save_validation_log
 from ..workflow_overrides import replace_workflow_model_paths, save_workflow_override
-from ..workflow_local_store import append_validation_resolve_entry
+from ..workflow_local_store import append_validation_resolve_entry, write_validation_resolve_status
 
 
 SUCCESS_COLOR = "#228B22"
@@ -441,6 +441,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_node_package_map: Optional[Dict[str, str]] = None
 
         self._sanitize_custom_node_issue()
+        self._sanitize_model_issue()
         self._build_ui()
         if self._restart_required:
             self._show_restart_cta("ComfyUI")
@@ -461,6 +462,79 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if not isinstance(data, dict):
                 continue
 
+            data.pop("raw_missing", None)
+            missing_source = data.get("missing_packs") or []
+            normalized_packs: list[dict] = []
+            missing_names: list[str] = []
+            missing_repos: list[str] = []
+            unresolved_repos: list[str] = []
+            node_repo_map: dict[str, str] = {}
+            node_package_map: dict[str, str] = {}
+            node_meta_map: dict[str, dict] = {}
+            unresolved_nodes: list[str] = []
+            existing_missing = [
+                str(entry).strip()
+                for entry in data.get("missing") or []
+                if isinstance(entry, str) and str(entry).strip()
+            ]
+
+            if isinstance(missing_source, list):
+                for pack in missing_source:
+                    if not isinstance(pack, dict):
+                        continue
+                    repo = str(pack.get("repo") or "").strip()
+                    pack_status = str(pack.get("resolve_status") or "").strip()
+                    pack_method = str(pack.get("resolve_method") or "").strip()
+                    pack_failed = str(pack.get("resolve_failed") or "").strip()
+                    nodes = []
+                    for node in pack.get("nodes") or []:
+                        if not isinstance(node, dict):
+                            continue
+                        cls = str(node.get("class_type") or "").strip()
+                        if repo and cls:
+                            node_repo_map.setdefault(cls.lower(), repo)
+                        pack_meta = pack.get("pack_meta") if isinstance(pack.get("pack_meta"), dict) else {}
+                        if pack_meta and cls:
+                            title_value = str(pack_meta.get("title") or "").strip()
+                            if title_value:
+                                node_package_map.setdefault(cls.lower(), title_value)
+                            node_meta_map.setdefault(cls.lower(), pack_meta)
+                        node_status = str(node.get("resolve_status") or "").strip()
+                        node_method = str(node.get("resolve_method") or "").strip()
+                        node_failed = str(node.get("resolve_failed") or "").strip()
+                        if cls:
+                            missing_names.append(cls)
+                        nodes.append(
+                            {
+                                "class_type": cls,
+                                "id": node.get("id"),
+                            }
+                        )
+                        if not pack_status and node_status:
+                            pack_status = node_status
+                            pack_method = node_method if node_status == "success" else ""
+                            pack_failed = node_failed if node_status == "failed" else ""
+                    normalized_pack = dict(pack)
+                    normalized_pack["repo"] = repo
+                    normalized_pack["nodes"] = nodes
+                    normalized_pack["resolve_status"] = pack_status
+                    normalized_pack["resolve_method"] = pack_method if pack_status == "success" else ""
+                    normalized_pack["resolve_failed"] = pack_failed if pack_status == "failed" else ""
+                    normalized_packs.append(normalized_pack)
+                    if repo:
+                        missing_repos.append(repo)
+                    if pack_status != "success":
+                        if repo:
+                            unresolved_repos.append(repo)
+                        unresolved_nodes.extend([n.get("class_type") or "" for n in nodes if n.get("class_type")])
+
+            if normalized_packs:
+                data["missing_packs"] = normalized_packs
+                data["missing_repos"] = unresolved_repos or data.get("missing_repos") or []
+                data["node_repos"] = node_repo_map or data.get("node_repos") or {}
+                data["node_packages"] = node_package_map or data.get("node_packages") or {}
+                data["node_meta"] = node_meta_map or data.get("node_meta") or {}
+
             def _dedupe_str_list(values: list) -> list:
                 seen = set()
                 deduped = []
@@ -476,45 +550,107 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 return deduped
 
             # Dedupe by class_type (case-insensitive)
-            raw_missing = data.get("raw_missing") or []
-            unique_raw: list = []
-            seen_classes: set[str] = set()
-            for entry in raw_missing:
+            data.pop("missing", None)
+            data["required"] = _dedupe_str_list(data.get("required") or missing_names)
+            if normalized_packs:
+                data["missing"] = _dedupe_str_list(unresolved_nodes)
+                data["missing_repos"] = _dedupe_str_list(unresolved_repos)
+            else:
+                data["missing"] = _dedupe_str_list(existing_missing or missing_names)
+                data["missing_repos"] = _dedupe_str_list(data.get("missing_repos") or missing_repos)
+
+            missing_entries = data.get("missing") or []
+            unresolved_packs = [
+                p for p in data.get("missing_packs") or [] if str(p.get("resolve_status") or "").strip() != "success"
+            ]
+            issue["ok"] = len(missing_entries) == 0
+            if issue["ok"]:
+                methods = [
+                    str(p.get("resolve_method") or "").strip()
+                    for p in data.get("missing_packs") or []
+                    if str(p.get("resolve_method") or "").strip()
+                ]
+                method_fragment = f" Resolved via: {'; '.join(methods)}." if methods else ""
+                issue["summary"] = f"All custom nodes resolved.{method_fragment}"
+                issue["details"] = issue.get("details") or []
+            else:
+                issue["summary"] = f"Missing {len(missing_entries)} custom node(s)."
+                detail_lines: list[str] = []
+                missing_lookup = {str(entry).strip().lower() for entry in missing_entries if str(entry).strip()}
+                for pack in unresolved_packs or data.get("missing_packs") or []:
+                    if not isinstance(pack, dict):
+                        continue
+                    repo = pack.get("repo")
+                    pack_ids: list[str] = []
+                    for pid in pack.get("pack_ids") or []:
+                        if isinstance(pid, str) and pid.strip():
+                            pack_ids.append(pid.strip())
+                    single_pack = pack.get("pack") or pack.get("pack_id")
+                    if isinstance(single_pack, str) and single_pack.strip():
+                        pack_ids.append(single_pack.strip())
+                    for node in pack.get("nodes") or []:
+                        if not isinstance(node, dict):
+                            continue
+                        cls = node.get("class_type") or "Unknown node"
+                        if missing_lookup and cls.strip().lower() not in missing_lookup:
+                            continue
+                        aux_id = node.get("aux_id")
+                        detail = f"{cls}"
+                        if repo:
+                            detail += f" -> {repo}"
+                        elif pack_ids:
+                            detail += f" -> {', '.join(pack_ids)}"
+                        if aux_id:
+                            detail += f" (aux_id: {aux_id})"
+                        detail_lines.append(detail)
+
+                if detail_lines:
+                    issue["details"] = detail_lines
+
+    def _sanitize_model_issue(self) -> None:
+        issues = self._payload.get("issues") if isinstance(self._payload, dict) else None
+        if not isinstance(issues, list):
+            return
+        for issue in issues:
+            if not isinstance(issue, dict) or issue.get("key") != "models":
+                continue
+            data = issue.get("data")
+            if not isinstance(data, dict):
+                continue
+            models_root = data.get("models_root") or ""
+            if not isinstance(models_root, str):
+                models_root = ""
+            normalized_missing: list[dict] = []
+            for entry in data.get("missing") or []:
                 if not isinstance(entry, dict):
                     continue
-                cls = str(entry.get("class_type") or "").strip()
-                if not cls:
-                    continue
-                key = cls.lower()
-                if key in seen_classes:
-                    continue
-                seen_classes.add(key)
-                unique_raw.append(entry)
-
-            data["raw_missing"] = unique_raw
-            data["missing"] = _dedupe_str_list(data.get("missing") or [])
-            data["required"] = _dedupe_str_list(data.get("required") or [])
-            data["missing_repos"] = _dedupe_str_list(data.get("missing_repos") or [])
-
-            # Rebuild details and summary to reflect deduped entries
-            detail_lines: list[str] = []
-            for entry in unique_raw or []:
-                cls = entry.get("class_type") or "Unknown node"
-                repo = entry.get("repo")
-                pack_ids = entry.get("pack_ids") or []
-                aux_id = entry.get("aux_id")
-                detail = f"{cls}"
-                if repo:
-                    detail += f" -> {repo}"
-                elif pack_ids:
-                    detail += f" -> {', '.join(pack_ids)}"
-                if aux_id:
-                    detail += f" (aux_id: {aux_id})"
-                detail_lines.append(detail)
-
-            if detail_lines:
-                issue["details"] = detail_lines
-            issue["summary"] = f"Missing {len(data.get('missing') or unique_raw)} custom node(s)."
+                normalized = dict(entry)
+                normalized.setdefault("resolve_status", "")
+                normalized.setdefault("resolve_method", "")
+                normalized.setdefault("resolve_failed", "")
+                dirs: list[str] = []
+                for path in normalized.get("attempted_directories") or []:
+                    if not isinstance(path, str):
+                        continue
+                    abs_path = os.path.abspath(path if os.path.isabs(path) else os.path.join(models_root, path))
+                    if abs_path not in dirs:
+                        dirs.append(abs_path)
+                if dirs:
+                    normalized["attempted_directories"] = dirs
+                normalized_missing.append(normalized)
+            data["missing"] = normalized_missing
+            unresolved_models = [
+                e for e in normalized_missing if str(e.get("resolve_status") or "").strip() != "success"
+            ]
+            issue["ok"] = len(unresolved_models) == 0
+            if issue["ok"]:
+                methods = [
+                    str(e.get("resolve_method") or "").strip() for e in normalized_missing if e.get("resolve_method")
+                ]
+                method_fragment = f" Resolved via: {'; '.join(methods)}." if methods else ""
+                issue["summary"] = f"All required model files resolved.{method_fragment}"
+            else:
+                issue["summary"] = f"Missing {len(unresolved_models)} model file(s)."
 
     # --------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
@@ -814,6 +950,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             row_info["issue_row"] = issue_row
             row_info["button"] = issue_row.btn_resolve
             row_info["success_text"] = f"{package_display} installed"
+            if row_info.get("resolved"):
+                issue_row.mark_as_successful(row_info.get("success_text"))
             self._issue_rows.setdefault("custom_nodes", []).append(issue_row)
             self._issues_layout.addWidget(issue_row)
         return True
@@ -1169,8 +1307,19 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         table: QtWidgets.QTableWidget,
         data: Dict[str, Any],
     ) -> Dict[int, Dict[str, Any]]:
+        packs = data.get("missing_packs") or []
         required = data.get("required") or []
-        missing_entries = data.get("missing") or []
+        if not required and isinstance(packs, list):
+            for pack in packs:
+                if not isinstance(pack, dict):
+                    continue
+                for node in pack.get("nodes") or []:
+                    if not isinstance(node, dict):
+                        continue
+                    node_type = str(node.get("class_type") or "").strip()
+                    if node_type:
+                        required.append(node_type)
+        missing_entries = data.get("missing") if data.get("missing") is not None else required
         repo_lookup = data.get("node_repos") or {}
         package_overrides = data.get("node_packages") or {}
         aux_repos = data.get("aux_repos") or {}
@@ -1312,6 +1461,18 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             else:
                 placeholder_widget = QtWidgets.QWidget()
                 table.setCellWidget(row, 1, placeholder_widget)
+                row_mapping[row] = {
+                    "node_name": package_display,
+                    "package_name": package_display,
+                    "manager_repo": repo_url,
+                    "manager_repo_display": repo_display or package_display,
+                    "status_item": name_item,
+                    "package_item": name_item,
+                    "button": None,
+                    "dependency": None,
+                    "resolved": True,
+                    "missing_nodes": [],
+                }
             row += 1
 
         table.resizeRowsToContents()
@@ -2469,6 +2630,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return False
 
         self._mark_custom_node_resolved(row_info, None, prompt_restart=False)
+        self._update_resolve_status_payload(
+            "custom_nodes",
+            result,
+            target_repo=repo_url,
+            target_pack=row_info.get("package_name"),
+        )
         self._show_restart_cta(display_name)
         return True
 
@@ -2686,8 +2853,95 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "result": entry_payload,
                 },
             )
+            self._update_resolve_status_payload(issue_key, result)
 
     # ---------------------------------------------------------------- Helpers
+    def _update_resolve_status_payload(
+        self,
+        issue_key: str,
+        result: ResolutionResult,
+        *,
+        target_repo: Optional[str] = None,
+        target_pack: Optional[str] = None,
+    ) -> None:
+        issues = self._payload.get("issues") if isinstance(self._payload, dict) else None
+        if not isinstance(issues, list):
+            return
+        status = ""
+        if result.failed:
+            status = "failed"
+        elif result.resolved:
+            status = "success"
+        method_text = "\n".join(result.resolved) if status == "success" else ""
+        failed_text = "\n".join(result.failed) if status == "failed" else ""
+
+        update_snapshot: Dict[str, Any] = {}
+
+        for issue in issues:
+            if not isinstance(issue, dict) or issue.get("key") != issue_key:
+                continue
+            data = issue.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            if issue_key == "models":
+                for entry in data.get("missing") or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    if status:
+                        entry["resolve_status"] = status
+                        entry["resolve_method"] = method_text if status == "success" else ""
+                        entry["resolve_failed"] = failed_text if status == "failed" else ""
+                        update_snapshot = {
+                            "resolve_status": entry.get("resolve_status"),
+                            "resolve_method": entry.get("resolve_method"),
+                            "resolve_failed": entry.get("resolve_failed"),
+                        }
+            elif issue_key == "custom_nodes":
+                packs = data.get("missing_packs") or []
+                for pack in packs:
+                    if not isinstance(pack, dict):
+                        continue
+                    repo_val = str(pack.get("repo") or "").strip().lower()
+                    pack_name = str(pack.get("pack") or pack.get("pack_name") or "").strip().lower()
+                    if target_repo or target_pack:
+                        match_repo = target_repo and repo_val and repo_val == target_repo.strip().lower()
+                        match_pack = target_pack and pack_name and pack_name == target_pack.strip().lower()
+                        if not (match_repo or match_pack):
+                            continue
+                    if status:
+                        pack["resolve_status"] = status
+                        pack["resolve_method"] = method_text if status == "success" else ""
+                        pack["resolve_failed"] = failed_text if status == "failed" else ""
+                        update_snapshot = {
+                            "resolve_status": pack.get("resolve_status"),
+                            "resolve_method": pack.get("resolve_method"),
+                            "resolve_failed": pack.get("resolve_failed"),
+                            "repo": pack.get("repo"),
+                            "pack": pack.get("pack"),
+                        }
+                    sanitized_nodes = []
+                    for node in pack.get("nodes") or []:
+                        if not isinstance(node, dict):
+                            continue
+                        node_copy = dict(node)
+                        node_copy.pop("resolve_status", None)
+                        node_copy.pop("resolve_method", None)
+                        node_copy.pop("resolve_failed", None)
+                        sanitized_nodes.append(node_copy)
+                    pack["nodes"] = sanitized_nodes
+        if self._workflow_folder:
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+                if update_snapshot:
+                    system_debug(
+                        f"[Validation] Installation completed for '{issue_key}'. "
+                        f"validation_resolve_status update: {update_snapshot}"
+                    )
+            except Exception as exc:
+                system_warning(
+                    f"Failed to persist validation resolve status after auto-resolve: {exc}"
+                )
+
     def _append_issue_note(self, issue_key: str, message: str) -> None:
         widget_info = self._issue_widgets.get(issue_key)
         if not widget_info:
@@ -2830,6 +3084,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             note = result.skipped[0]
 
         self._mark_custom_node_resolved(row_info, note, prompt_restart=False)
+        self._update_resolve_status_payload(
+            "custom_nodes",
+            result,
+            target_repo=normalized.get("repo"),
+            target_pack=normalized.get("name"),
+        )
         row_info["dependency"] = normalized
         self._show_restart_cta(dep_display)
         return True
