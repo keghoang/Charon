@@ -929,13 +929,13 @@ class CharonWindow(QtWidgets.QWidget):
         self._aces_on_style = """
             QPushButton {
                 padding: 0px 12px;
-                border: 1px solid #2f9e44;
+                border: 1px solid #1c7ed6;
                 border-radius: 4px;
-                background-color: #37b24d;
+                background-color: #339af0;
                 color: white;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #40c057; }
+            QPushButton:hover { background-color: #4dabf7; }
         """
         
         self.aces_toggle_button = QtWidgets.QPushButton("ACES Off", info_container)
