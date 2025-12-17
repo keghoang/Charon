@@ -270,12 +270,12 @@ def _build_processor_script() -> str:
 
 
 def _build_recreate_read_script() -> str:
-    return """# CharonOp Recreate Read Node
+    return """# CharonOp Create Contact Sheet
 try:
-    from charon.processor import recreate_missing_read_node
+    from charon.processor import create_contact_sheet_from_charonop
 except Exception as exc:
     import nuke
     nuke.message('Charon processor unavailable: {0}'.format(exc))
 else:
-    recreate_missing_read_node()
+    create_contact_sheet_from_charonop()
 """

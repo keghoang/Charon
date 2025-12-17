@@ -1496,7 +1496,7 @@ def process_charonop_node():
                     linked = None
                 has_output = bool(path_value)
                 try:
-                    recreate_knob.setEnabled(has_output and linked is None)
+                    recreate_knob.setEnabled(has_output)
                 except Exception:
                     pass
 
@@ -2016,7 +2016,7 @@ def process_charonop_node():
                         last_output_value = ""
                 has_output = bool(str(last_output_value or "").strip())
                 try:
-                    recreate_knob.setEnabled(has_output and not has_read)
+                    recreate_knob.setEnabled(has_output)
                 except Exception:
                     pass
 
@@ -2220,7 +2220,7 @@ def process_charonop_node():
             try:
                 recreate_knob = node.knob('charon_recreate_read')
                 if recreate_knob is not None:
-                    recreate_knob.setEnabled(False)
+                    recreate_knob.setEnabled(True)
             except Exception:
                 pass
             try:
@@ -4114,21 +4114,26 @@ def process_charonop_node():
                                                 with open(ivt_temp, "w") as f:
                                                     f.write(INVERSE_VIEW_TRANSFORM_GROUP)
                                                 
-                                                ivt_name = f"InverseViewTransform_{read_node.name()}"
-                                                ivt_node = nuke.toNode(ivt_name)
+                                                ivt_node = None
+                                                try:
+                                                    for dep in read_node.dependent():
+                                                        if "InverseViewTransform" in dep.name() and dep.knob("viewTransform"):
+                                                            ivt_node = dep
+                                                            break
+                                                except: pass
                                                 
                                                 if not ivt_node:
                                                     nuke.nodePaste(ivt_temp)
                                                     ivt_node = nuke.selectedNode()
-                                                    try:
-                                                        ivt_node.setName(ivt_name)
-                                                    except:
-                                                        pass
                                                 
                                                 if ivt_node:
                                                     ivt_node.setInput(0, read_node)
                                                     ivt_node.setXpos(read_node.xpos())
                                                     ivt_node.setYpos(read_node.ypos() + 200)
+                                                    try:
+                                                        ivt_node['tile_color'].setValue(0x0000FFFF)
+                                                        ivt_node['gl_color'].setValue(0x0000FFFF)
+                                                    except: pass
                                                     
                                             except Exception as paste_error:
                                                 log_debug(f"Failed to paste InverseViewTransform: {paste_error}", "WARNING")
@@ -4468,6 +4473,20 @@ def process_charonop_node():
                                     cleanup_files()
 
                                 nuke.executeInMainThread(update_or_create_read_nodes)
+
+                                def check_auto_contact_sheet():
+                                    try:
+                                        if entries:
+                                            write_metadata('charon/batch_outputs', json.dumps(entries))
+                                    except Exception as meta_err:
+                                        log_debug(f"Failed to write batch outputs metadata: {meta_err}", "WARNING")
+
+                                    try:
+                                        create_contact_sheet_from_charonop(node)
+                                    except Exception as cs_err:
+                                        log_debug(f"Contact Sheet creation failed: {cs_err}", "WARNING")
+                                
+                                nuke.executeInMainThread(check_auto_contact_sheet)
                             else:
                                 log_debug('Auto import disabled; skipping Read node creation.')
                                 for idx, entry in enumerate(entries, start=1):
@@ -4539,311 +4558,225 @@ def process_charonop_node():
                 log_debug(f'Failed to persist error payload: {payload_error}', 'WARNING')
 
 
-def recreate_missing_read_node():
-    """Recreate the linked Read node when it has been deleted."""
+def create_contact_sheet_from_charonop(node_override=None):
+    """Create a Contact Sheet group from all outputs of the current CharonOp."""
     try:
-        import nuke  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError('Nuke is required to recreate Charon Read nodes.') from exc
+        import nuke
+        import json
+    except ImportError:
+        return
 
-    try:
-        node = nuke.thisNode()
-    except Exception:
-        node = None
+    node = node_override
+    if node is None:
+        try:
+            node = nuke.thisNode()
+        except Exception:
+            pass
     if node is None:
         return
 
-    def _normalize(value) -> str:
-        if not value:
-            return ""
-        text = str(value).strip().lower()
-        if not text:
-            return ""
-        return text[:12]
-
-    def _safe_knob_value(owner, name: str) -> str:
-        try:
-            knob = owner.knob(name)
-        except Exception:
-            return ""
-        if knob is None:
-            return ""
-        try:
-            return str(knob.value() or "")
-        except Exception:
-            return ""
-
-    def _node_metadata(name: str) -> str:
-        try:
-            return str(node.metadata(name) or "")
-        except Exception:
-            return ""
-
-    def _find_read_by_id(read_id: str):
-        normalized = _normalize(read_id)
-        if not normalized:
-            return None
-        candidates = []
-        try:
-            candidates.extend(list(nuke.allNodes("Read")))
-        except Exception:
-            pass
-        try:
-            candidates.extend(list(nuke.allNodes("ReadGeo2")))
-        except Exception:
-            pass
-        for candidate in candidates:
-            try:
-                candidate_id = candidate.metadata('charon/read_id')
-            except Exception:
-                candidate_id = ""
-            if _normalize(candidate_id) == normalized:
-                return candidate
-            try:
-                knob = candidate.knob('charon_read_id')
-                if knob and _normalize(knob.value()) == normalized:
-                    return candidate
-            except Exception:
-                pass
-        return None
-
-    def _find_read_by_parent(parent_id: str):
-        normalized = _normalize(parent_id)
-        if not normalized:
-            return None
-        candidates = []
-        try:
-            candidates.extend(list(nuke.allNodes("Read")))
-        except Exception:
-            pass
-        try:
-            candidates.extend(list(nuke.allNodes("ReadGeo2")))
-        except Exception:
-            pass
-        for candidate in candidates:
-            try:
-                parent_val = candidate.metadata('charon/parent_id')
-            except Exception:
-                parent_val = ""
-            if _normalize(parent_val) == normalized:
-                return candidate
-            try:
-                knob = candidate.knob('charon_parent_id')
-                if knob and _normalize(knob.value()) == normalized:
-                    return candidate
-            except Exception:
-                pass
-        return None
-
-    def _ensure_hidden_string(target, name: str, label: str, value: str):
-        try:
-            knob = target.knob(name)
-        except Exception:
-            knob = None
-        if knob is None:
-            try:
-                knob = nuke.String_Knob(name, label, '')
-                knob.setFlag(nuke.NO_ANIMATION)
-                knob.setFlag(nuke.INVISIBLE)
-                target.addKnob(knob)
-            except Exception:
-                knob = None
-        if knob is not None:
-            try:
-                knob.setValue(value or "")
-            except Exception:
-                pass
-
-    def _assign_read_label(read_node, parent_id: str, read_id: str):
-        if read_node is None:
-            return
-        summary = f"Charon Parent: {parent_id or 'N/A'}\\nRead ID: {read_id or 'N/A'}"
-        try:
-            label_knob = read_node['label']
-        except Exception:
-            label_knob = None
-        if label_knob is not None:
-            try:
-                label_knob.setValue(summary)
-            except Exception:
-                pass
-
-    read_id = _normalize(_safe_knob_value(node, 'charon_read_node_id'))
-    if not read_id:
-        read_id = _normalize(_node_metadata('charon/read_node_id'))
-    parent_id = _normalize(_safe_knob_value(node, 'charon_node_id'))
-    if not parent_id:
-        parent_id = _normalize(_node_metadata('charon/node_id'))
-    last_output = _safe_knob_value(node, 'charon_last_output').strip()
-    if not last_output:
-        last_output = _node_metadata('charon/last_output').strip()
-    read_hint = _safe_knob_value(node, 'charon_read_node')
-
-    existing = _find_read_by_id(read_id)
-    if existing is None and read_hint:
-        try:
-            candidate = nuke.toNode(read_hint)
-        except Exception:
-            candidate = None
-        if candidate is not None and getattr(candidate, "Class", lambda: "")() in {"Read", "ReadGeo2"}:
-            existing = candidate
-    if existing is None and parent_id:
-        existing = _find_read_by_parent(parent_id)
-
+    outputs = []
     try:
-        recreate_knob = node.knob('charon_recreate_read')
+        raw = node.metadata('charon/batch_outputs')
+        if raw:
+            outputs = json.loads(raw)
     except Exception:
-        recreate_knob = None
+        pass
+    
+    if not outputs:
+        try:
+            raw_payload = node.metadata("charon/status_payload")
+            if raw_payload:
+                payload = json.loads(raw_payload)
+                runs = payload.get('runs', [])
+                if runs:
+                    last_run = runs[-1]
+                    outputs = last_run.get('batch_outputs', [])
+        except Exception:
+            pass
 
-    if existing is not None:
-        if recreate_knob is not None:
+    if not outputs:
+        try:
+            last = node.knob('charon_last_output').value()
+            if last:
+                outputs = [{'output_path': last}]
+        except Exception:
+            pass
+
+    image_paths = []
+    if isinstance(outputs, list):
+        for o in outputs:
+            path = ""
+            if isinstance(o, dict):
+                path = o.get('output_path') or o.get('download_path')
+            elif isinstance(o, str):
+                path = o
+            
+            if path:
+                ext = os.path.splitext(path)[1].lower()
+                if ext in IMAGE_OUTPUT_EXTENSIONS:
+                    image_paths.append(path)
+
+    # Fallback: Scan directory if we have a hint but missing items
+    # This helps when metadata is truncated or lost but files exist
+    if len(image_paths) > 0:
+        ref_path = image_paths[0]
+        parent_dir = os.path.dirname(ref_path)
+        
+        if parent_dir and os.path.isdir(parent_dir):
+            scanned = []
             try:
-                recreate_knob.setEnabled(False)
-            except Exception:
-                pass
-        nuke.message('Linked Read node already exists.')
+                for fname in os.listdir(parent_dir):
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in IMAGE_OUTPUT_EXTENSIONS:
+                        if fname.startswith("."): continue
+                        full_path = os.path.join(parent_dir, fname).replace('\\', '/')
+                        scanned.append(full_path)
+            except: pass
+            
+            # If scanning found more files, use them
+            if len(scanned) > len(image_paths):
+                image_paths = sorted(scanned)
+
+    if not image_paths:
+        if node_override is None:
+            nuke.message("No image outputs found.")
         return
 
-    if not last_output:
-        nuke.message('No output path recorded yet.')
-        if recreate_knob is not None:
+    _create_generic_result_group(node, image_paths)
+
+def _create_generic_result_group(charon_node, image_paths):
+    import nuke
+    import uuid
+    
+    node_id = ""
+    try:
+        node_id = charon_node.knob('charon_node_id').value()
+    except: pass
+    
+    # Cleanup existing by knob
+    try:
+        existing_name = charon_node.knob('charon_contact_sheet').value()
+        if existing_name:
+            existing = nuke.toNode(existing_name)
+            if existing:
+                nuke.delete(existing)
+    except: pass
+    
+    # Cleanup existing by metadata (fallback)
+    if node_id:
+        for n in nuke.allNodes("Group"):
             try:
-                recreate_knob.setEnabled(False)
-            except Exception:
-                pass
-        return
+                parent_id = n.metadata('charon/parent_id')
+                if parent_id == node_id and "ContactSheet" in n.name():
+                    nuke.delete(n)
+            except: pass
 
-    normalized_output = os.path.normpath(last_output)
-    if not os.path.exists(normalized_output):
-        nuke.message('Output file not found:\\n{0}'.format(normalized_output))
-        if recreate_knob is not None:
-            try:
-                recreate_knob.setEnabled(True)
-            except Exception:
-                pass
-        return
-
-    if not read_id:
-        read_id = uuid.uuid4().hex[:12].lower()
-
+    for n in nuke.selectedNodes():
+        n.setSelected(False)
+        
+    safe_name = "".join(c if c.isalnum() else "_" for c in charon_node.name())
+    group = nuke.createNode("Group")
+    group.setName(f"Charon_ContactSheet_{safe_name}")
+    group.setXYpos(charon_node.xpos() + 200, charon_node.ypos() + 100)
+    
+    # Register new name on parent
     try:
-        creator_group = node.parent()
-    except Exception:
-        creator_group = None
-    if creator_group is None:
+        k = charon_node.knob('charon_contact_sheet')
+        if not k:
+            k = nuke.String_Knob('charon_contact_sheet', 'Contact Sheet', '')
+            k.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+            charon_node.addKnob(k)
+        k.setValue(group.name())
+    except: pass
+    
+    read_id = uuid.uuid4().hex[:12].lower()
+    
+    setter = getattr(group, 'setMetaData', getattr(group, 'setMetadata', None))
+    if setter:
+        setter('charon/parent_id', node_id)
+        setter('charon/read_id', read_id)
+    
+    pk = nuke.String_Knob('charon_parent_id', 'Parent ID', node_id)
+    pk.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+    group.addKnob(pk)
+    
+    rk = nuke.String_Knob('charon_read_id', 'Read ID', read_id)
+    rk.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+    group.addKnob(rk)
+    
+    ak = nuke.Double_Knob('charon_link_anchor', 'Anchor')
+    ak.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+    group.addKnob(ak)
+    try:
+        ak.setExpression(f"{charon_node.fullName()}.charon_link_anchor")
+    except: pass
+    
+    tab = nuke.Tab_Knob('charon_info_tab', 'Charon Info')
+    group.addKnob(tab)
+    info = nuke.Text_Knob('charon_info_text', 'Info', f"Parent: {node_id}\nImages: {len(image_paths)}")
+    group.addKnob(info)
+    
+    group.begin()
+    
+    cols = min(len(image_paths), 4)
+    rows = (len(image_paths) + cols - 1) // cols
+    
+    cs = nuke.createNode("ContactSheet")
+    cs['width'].setValue(cols * 1024)
+    cs['height'].setValue(rows * 1024)
+    cs['rows'].setValue(rows)
+    cs['columns'].setValue(cols)
+    cs['roworder'].setValue("TopBottom")
+    cs['gap'].setValue(10)
+    cs['center'].setValue(True)
+    
+    for i, path in enumerate(image_paths):
+        r = nuke.createNode("Read")
+        r['file'].setValue(path.replace('\\', '/'))
+        r['on_error'].setValue("nearest frame")
+        r.setXYpos(i * 100, -100)
+        cs.setInput(i, r)
+        
+    last_node = cs
+    
+    # Apply ACES if enabled (Inside Group)
+    from . import preferences
+    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+    if aces_enabled:
+        from .paths import get_charon_temp_dir
+        ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_cs_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
         try:
-            creator_group = nuke.root()
-        except Exception:
-            creator_group = None
-    began_group = False
-    if creator_group is not None:
-        try:
-            creator_group.begin()
-            began_group = True
-        except Exception:
-            began_group = False
-    extension = os.path.splitext(normalized_output)[1].lower()
-    read_class = "ReadGeo2" if extension in MODEL_OUTPUT_EXTENSIONS else "Read"
-    try:
-        read_node = nuke.createNode(read_class, inpanel=False)
-    except Exception as creation_error:
-        if began_group and creator_group is not None:
-            try:
-                creator_group.end()
-            except Exception:
-                pass
-        nuke.message('Failed to create CharonRead node: {0}'.format(creation_error))
-        return
-    finally:
-        if began_group and creator_group is not None:
-            try:
-                creator_group.end()
-            except Exception:
-                pass
+            with open(ivt_temp, "w") as f:
+                f.write(INVERSE_VIEW_TRANSFORM_GROUP)
+            
+            for n in nuke.selectedNodes(): n.setSelected(False)
+            cs.setSelected(True)
+            
+            nuke.nodePaste(ivt_temp)
+            ivt_node = nuke.selectedNode()
+            if ivt_node:
+                ivt_node.setInput(0, cs)
+                ivt_node.setXpos(cs.xpos())
+                ivt_node.setYpos(cs.ypos() + 200)
+                
+                # Set blue color
+                try:
+                    ivt_node['tile_color'].setValue(0x0000FFFF) # Blue
+                    ivt_node['gl_color'].setValue(0x0000FFFF)
+                except: pass
 
-    try:
-        read_node['file'].setValue(normalized_output.replace('\\', '/'))
-    except Exception:
-        pass
-    try:
-        read_node.setSelected(True)
-    except Exception:
-        pass
-    try:
-        read_base = _sanitize_name(os.path.splitext(os.path.basename(normalized_output))[0], "Workflow")
-        target_name = f"CR3D_{read_base}" if read_class == "ReadGeo2" else f"CR2D_{read_base}"
-        read_node.setName(target_name)
-    except Exception:
-        try:
-            fallback_name = "CR3D" if read_class == "ReadGeo2" else "CR2D"
-            read_node.setName(fallback_name)
-        except Exception:
-            pass
-    try:
-        read_node.setXY(int(node.xpos()) + 200, int(node.ypos()))
-    except Exception:
-        try:
-            read_node.setXpos(node.xpos() + 200)
-            read_node.setYpos(node.ypos())
-        except Exception:
-            pass
 
-    try:
-        read_node.setMetaData('charon/read_id', read_id)
-    except Exception:
-        pass
-    if parent_id:
-        try:
-            read_node.setMetaData('charon/parent_id', parent_id)
-        except Exception:
-            pass
 
-    _ensure_hidden_string(read_node, 'charon_read_id', 'Charon Read ID', read_id)
-    if parent_id:
-        _ensure_hidden_string(read_node, 'charon_parent_id', 'Charon Parent ID', parent_id)
-
-    _assign_read_label(read_node, parent_id, read_id)
-
-    status_value = _safe_knob_value(node, 'charon_status')
-    tile_color = status_to_tile_color(status_value or 'Ready')
-    gl_color = status_to_gl_color(status_value or 'Ready')
-    try:
-        read_node['tile_color'].setValue(tile_color)
-    except Exception:
-        pass
-    if gl_color is not None:
-        try:
-            read_node['gl_color'].setValue(gl_color)
-        except Exception:
-            try:
-                read_node['gl_color'].setValue(list(gl_color))
-            except Exception:
-                pass
-
-    try:
-        node.knob('charon_read_node').setValue(read_node.name())
-    except Exception:
-        pass
-    try:
-        node.knob('charon_read_node_id').setValue(read_id)
-    except Exception:
-        pass
-    try:
-        _refresh_linked_read_info()
-    except Exception:
-        pass
-
-    try:
-        node.setMetaData('charon/read_node', read_node.name())
-    except Exception:
-        pass
-    try:
-        node.setMetaData('charon/read_node_id', read_id)
-    except Exception:
-        pass
-
-    if recreate_knob is not None:
-        try:
-            recreate_knob.setEnabled(False)
-        except Exception:
-            pass
+                last_node = ivt_node
+        except: pass
+        finally:
+            if os.path.exists(ivt_temp):
+                try: os.remove(ivt_temp)
+                except: pass
+        
+    out = nuke.createNode("Output")
+    out.setInput(0, last_node)
+    out.setXYpos(last_node.xpos(), last_node.ypos() + 200)
+    
+    group.end()

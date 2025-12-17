@@ -163,6 +163,10 @@ def create_charon_group_node(
     _hide_knob(read_store_knob, nuke)
     node.addKnob(read_store_knob)
 
+    cs_store_knob = nuke.String_Knob("charon_contact_sheet", "Contact Sheet", "")
+    _hide_knob(cs_store_knob, nuke)
+    node.addKnob(cs_store_knob)
+
     setup_label = nuke.Text_Knob("charon_setup_label", "Processing Controls", "")
     node.addKnob(setup_label)
 
@@ -297,13 +301,15 @@ def create_charon_group_node(
     open_input_knob.setFlag(nuke.STARTLINE)
     node.addKnob(open_input_knob)
 
-    recreate_knob = nuke.PyScript_Knob("charon_recreate_read", "Recreate Read Node")
+    recreate_knob = nuke.PyScript_Knob("charon_recreate_read", "Create Contact Sheet")
     recreate_knob.setCommand(recreate_script or "nuke.message('Recreate helper unavailable.')")
     try:
         recreate_knob.setEnabled(False)
     except Exception:
         pass
     node.addKnob(recreate_knob)
+
+
 
     reuse_knob = nuke.Boolean_Knob(
         "charon_reuse_output",
