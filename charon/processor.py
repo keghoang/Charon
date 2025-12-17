@@ -1359,13 +1359,15 @@ def process_charonop_node():
                 except Exception:
                     pass
 
-            for target in targets:
-                def _apply_target():
+            def _apply_all_targets():
+                _apply_to_target(node)
+                for target in targets:
                     _apply_to_target(target)
-                try:
-                    nuke.executeInMainThread(_apply_target)
-                except Exception:
-                    _apply_target()
+
+            try:
+                nuke.executeInMainThread(_apply_all_targets)
+            except Exception:
+                _apply_all_targets()
 
         try:
             initial_payload = load_status_payload()
