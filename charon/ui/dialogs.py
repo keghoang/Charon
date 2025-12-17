@@ -761,6 +761,8 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setAlternatingRowColors(True)
         self.input_mapping_tree.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.input_mapping_tree.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.input_mapping_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.input_mapping_tree.customContextMenuRequested.connect(self._show_parameter_context_menu)
         self._apply_parameter_tree_palette()
         group_layout.addWidget(self.input_mapping_tree)
 
@@ -1043,6 +1045,106 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             else:
                 node_item.setBackground(0, clear_brush)
                 node_item.setForeground(0, clear_brush)
+
+    def _show_parameter_context_menu(self, position):
+        item = self.input_mapping_tree.itemAt(position)
+        if not item:
+            return
+        
+        data = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+
+        menu = QtWidgets.QMenu(self)
+        action = menu.addAction("Change Default Value")
+        action.triggered.connect(lambda: self._prompt_change_default(data))
+        menu.exec_(self.input_mapping_tree.viewport().mapToGlobal(position))
+
+    def _prompt_change_default(self, data):
+        current_val = data.get("node_default")
+        val_type = data.get("value_type", "string")
+        
+        new_val = None
+        ok = False
+        
+        if val_type == "string" or val_type == "customtext":
+            new_val, ok = QtWidgets.QInputDialog.getText(
+                self, "Change Default Value", 
+                f"Enter new default value for '{data.get('label')}':", 
+                QtWidgets.QLineEdit.Normal, str(current_val or "")
+            )
+        elif val_type == "integer" or val_type == "INT":
+            new_val, ok = QtWidgets.QInputDialog.getInt(
+                self, "Change Default Value",
+                f"Enter new integer value for '{data.get('label')}':",
+                int(current_val or 0)
+            )
+        elif val_type == "float" or val_type == "FLOAT":
+            new_val, ok = QtWidgets.QInputDialog.getDouble(
+                self, "Change Default Value",
+                f"Enter new float value for '{data.get('label')}':",
+                float(current_val or 0.0), decimals=4
+            )
+        
+        if ok:
+            self._update_workflow_default(data, new_val)
+
+    def _update_workflow_default(self, data, new_value):
+        if not self._workflow_path or not os.path.exists(self._workflow_path):
+            return
+
+        node_id = data.get("node_id")
+        key = data.get("attribute_key")
+        aliases = data.get("aliases") or []
+        
+        try:
+            import json
+            with open(self._workflow_path, 'r', encoding='utf-8') as f:
+                workflow = json.load(f)
+            
+            target_node = None
+            if isinstance(workflow, dict):
+                nodes = workflow.get("nodes")
+                if isinstance(nodes, list):
+                    for n in nodes:
+                        if str(n.get("id")) == str(node_id):
+                            target_node = n
+                            break
+                elif "nodes" not in workflow:
+                    target_node = workflow.get(str(node_id))
+
+            if target_node:
+                updated = False
+                widgets = target_node.get("widgets_values")
+                if isinstance(widgets, list):
+                    for alias in aliases:
+                        if alias.startswith("widgets_values["):
+                            try:
+                                idx = int(alias.split("[")[1].split("]")[0])
+                                if 0 <= idx < len(widgets):
+                                    widgets[idx] = new_value
+                                    updated = True
+                            except: pass
+                
+                if not updated:
+                    inputs = target_node.get("inputs")
+                    if isinstance(inputs, dict):
+                        if key in inputs:
+                            inputs[key] = new_value
+                            updated = True
+                
+                if updated:
+                    with open(self._workflow_path, 'w', encoding='utf-8') as f:
+                        json.dump(workflow, f, indent=2)
+                    
+                    _store_cached_parameters(self._workflow_path, None)
+                    self._populate_input_mapping_preview()
+                    system_debug(f"Updated default value for {key} to {new_value}")
+                else:
+                    QtWidgets.QMessageBox.warning(self, "Update Failed", "Could not locate parameter in workflow JSON structure.")
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to update workflow: {e}")
 
     def _update_step2_visibility(self, is_3d_texturing: bool) -> None:
         """Show or hide the Step 2 checkbox based on 3D Texturing workflow state."""
