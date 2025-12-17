@@ -133,42 +133,41 @@ class SomeLoader(QtCore.QThread):
 ## Tiny Mode
 
 ### Overview
-Tiny Mode provides a minimal UI for quick script access without the full Charon interface.
+Tiny Mode is a condensed CharonBoard surface that monitors the most relevant CharonOp without opening the full UI.
 
 ### Implementation Pattern
 ```python
 # Main window uses QStackedWidget for mode switching
 self.stacked_widget = QtWidgets.QStackedWidget()
-self.stacked_widget.addWidget(self.normal_widget)  # Index 0
-self.stacked_widget.addWidget(self.tiny_mode_widget)  # Index 1
+self.stacked_widget.addWidget(self.normal_widget)       # Index 0
+self.stacked_widget.addWidget(self.tiny_mode_widget)    # Index 1
 ```
 
 ### Tiny Mode Widget Structure
-- **Minimal toolbar**: Exit, Settings, Help buttons only
-- **Tab widget**: History and Bookmarks tabs
-- **Compact size**: 200x300 pixels by default
-- **Global keybind**: Ctrl+Shift+G (ApplicationShortcut context)
+- **Node list**: `QListWidget` with custom row widgets (bold name + progress bar).
+- **Context-only controls**: All actions live in a right-click menu; surface stays button-free.
+- **Compact size**: Defaults come from `config.TINY_MODE_*`; content adapts down to 180x120.
+- **Polling**: Uses `scene_nodes_runtime.list_scene_nodes()` every ~2s.
+- **Shared footer**: Reparents the main `ComfyConnectionWidget` into Tiny Mode while active.
 
 ### Design Principles
-- **Fast access**: Single hotkey to toggle modes
-- **Shared state**: Execution history shared with main UI
-- **Lazy loading**: Bookmarks panel created only when needed
-- **Host-aware**: Different window flags per host application
+- **At-a-glance**: Prioritises errors, then processing nodes, then recent completions.
+- **Quick focus**: Double-click a node row to center it in the host graph and sync CharonBoard selection.
+- **Host-aware**: Window flags respect the same settings as the primary panel.
+- **Minimal chrome**: No toolbars; context menu mirrors relevant CharonBoard actions.
 
-### Bookmarks Panel
-- **Simple list view**: Shows bookmark names only
-- **Visual consistency**: Uses same fading/coloring as main UI
-- **Validation**: Prevents execution of invalid scripts
-- **Double-click execution**: Consistent with history panel
+### Context Menu
+- **Focus**: Center the hovered CharonOp in the host graph without leaving Tiny Mode.
+- **Navigation**: Launch the full CharonBoard tab or exit Tiny Mode altogether.
+- **File access**: Open output folders or reveal the workflow file directly.
+- **Diagnostics**: Copy a lightweight node summary to share status quickly.
+- **Parity controls**: Launch and settings buttons stay available via the shared footer.
 
 ## File References
 - Main window: [ui/main_window.py](md:ui/main_window.py)
-- Command mode: [ui/quick_search.py](md:ui/quick_search.py)
-- Bookmarks panel: [ui/bookmarks_panel.py](md:ui/bookmarks_panel.py)
-- Custom widgets: [ui/custom_widgets.py](md:ui/custom_widgets.py)
-- Execution history panel: [ui/execution_history_panel.py](md:ui/execution_history_panel.py)
-- Custom delegates: [ui/custom_delegates.py](md:ui/custom_delegates.py)
-- Dialogs: [ui/dialogs.py](md:ui/dialogs.py)
+- Tiny Mode widget: [ui/tiny_mode_widget.py](md:ui/tiny_mode_widget.py)
+- CharonBoard panel: [ui/scene_nodes_panel.py](md:ui/scene_nodes_panel.py)
+- Scene node runtime: [scene_nodes_runtime.py](md:scene_nodes_runtime.py)
 description:
 globs:
 alwaysApply: false

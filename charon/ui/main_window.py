@@ -61,6 +61,9 @@ class CharonWindow(QtWidgets.QWidget):
         self._banner_base_pixmap: Optional[QtGui.QPixmap] = None
         self._banner_target_height: int = 0
 
+        self._footer_comfy_layout: Optional[QtWidgets.QHBoxLayout] = None
+        self._comfy_widget_in_tiny_mode: bool = False
+
         resolved_global_path = global_path or config.WORKFLOW_REPOSITORY_ROOT
         self.global_path = resolved_global_path
         if not os.path.isdir(self.global_path):
@@ -677,6 +680,7 @@ class CharonWindow(QtWidgets.QWidget):
             self.comfy_connection_widget.is_connected()
         )
         footer_layout.addWidget(self.comfy_connection_widget)
+        self._footer_comfy_layout = footer_layout
         main_layout.addLayout(footer_layout)
         self._refresh_project_display()
 
@@ -718,22 +722,15 @@ class CharonWindow(QtWidgets.QWidget):
 
     def _setup_shared_components(self):
         """Setup components shared between normal and command mode."""
-        # Share the execution history model with tiny mode
-        self.tiny_mode_widget.set_execution_history_model(
-            self.execution_history_panel.history_model
-        )
-        
-        # Share execution panel state so dialogs are tracked across both panels
-        self.tiny_mode_widget.share_execution_panel_state(
-            self.execution_history_panel
-        )
-
         # Ensure project details stay updated after shared components load
         self._refresh_project_display()
         
         # Connect tiny mode signals
         self.tiny_mode_widget.exit_tiny_mode.connect(self.exit_tiny_mode)
         self.tiny_mode_widget.open_settings.connect(self.open_settings)
+        self.tiny_mode_widget.open_charon_board.connect(
+            self._open_charon_board_from_tiny_mode
+        )
         
         # ---------- quick search (TAB) setup ----------
         self._script_index = []
@@ -841,11 +838,15 @@ class CharonWindow(QtWidgets.QWidget):
         # Set minimum size for tiny mode
         self.setMinimumSize(config.TINY_MODE_MIN_WIDTH, config.TINY_MODE_MIN_HEIGHT)
         
-        # Load bookmarks for tiny mode
-        from ..settings import user_settings_db
-        bookmarks = user_settings_db.get_bookmarks()
         self.tiny_mode_widget.set_host(self.host)
-        self.tiny_mode_widget.set_bookmarks(bookmarks)
+        try:
+            if hasattr(self, "charon_board_panel"):
+                self.charon_board_panel.refresh_nodes()
+                cache = getattr(self.charon_board_panel, "_node_cache", {}) or {}
+                self.tiny_mode_widget.prime_from_nodes(cache.values())
+        except Exception as exc:
+            system_warning(f"Failed to prime tiny mode nodes: {exc}")
+        self._move_comfy_footer_to_tiny_mode()
         
         # Switch to tiny mode widget
         self.stacked_widget.setCurrentWidget(self.tiny_mode_widget)
@@ -896,6 +897,7 @@ class CharonWindow(QtWidgets.QWidget):
         
         # Switch back to normal widget
         self.stacked_widget.setCurrentWidget(self.normal_widget)
+        self._restore_comfy_footer_to_normal()
         
         # Restore normal mode geometry
         if self.normal_mode_geometry:
@@ -910,7 +912,33 @@ class CharonWindow(QtWidgets.QWidget):
         
         # Ensure keybind manager state is synced
         self.keybind_manager.tiny_mode_active = False
-    
+
+    def _open_charon_board_from_tiny_mode(self):
+        """Exit tiny mode (if active) and focus the CharonBoard tab."""
+        try:
+            tiny_active = getattr(self.keybind_manager, "tiny_mode_active", False)
+        except Exception:
+            tiny_active = False
+
+        if tiny_active:
+            self.exit_tiny_mode()
+        else:
+            # Ensure the main widget is visible even if already in normal mode
+            if getattr(self, "stacked_widget", None):
+                self.stacked_widget.setCurrentWidget(self.normal_widget)
+
+        index = -1
+        try:
+            index = self.center_tab_widget.indexOf(self.charon_board_panel)
+        except Exception:
+            index = -1
+
+        if index != -1:
+            self.center_tab_widget.setCurrentIndex(index)
+
+        self.raise_()
+        self.activateWindow()
+
     def _apply_tiny_mode_flags(self):
         """Apply tiny mode specific window flags."""
         host_config = config.WINDOW_CONFIGS.get(self.host.lower(), config.DEFAULT_WINDOW_CONFIG)
@@ -955,6 +983,38 @@ class CharonWindow(QtWidgets.QWidget):
         if self.isVisible():
             self.raise_()
             self.activateWindow()
+
+    def _move_comfy_footer_to_tiny_mode(self) -> None:
+        """Reparent the shared ComfyUI footer into the tiny mode layout."""
+        if self._comfy_widget_in_tiny_mode:
+            return
+        widget = getattr(self, "comfy_connection_widget", None)
+        if widget is None:
+            return
+        layout = self._footer_comfy_layout
+        if layout is not None:
+            try:
+                layout.removeWidget(widget)
+            except Exception:
+                pass
+        widget.setParent(None)
+        self.tiny_mode_widget.attach_comfy_footer(widget)
+        self._comfy_widget_in_tiny_mode = True
+
+    def _restore_comfy_footer_to_normal(self) -> None:
+        """Return the shared ComfyUI footer to the normal window layout."""
+        if not self._comfy_widget_in_tiny_mode:
+            return
+        widget = self.tiny_mode_widget.detach_comfy_footer()
+        if widget is None:
+            self._comfy_widget_in_tiny_mode = False
+            return
+        layout = self._footer_comfy_layout
+        if layout is not None:
+            layout.addWidget(widget)
+        widget.setParent(self.normal_widget)
+        widget.setVisible(True)
+        self._comfy_widget_in_tiny_mode = False
     
     # -------------------------------------------------
     # Keyboard navigation helper methods
