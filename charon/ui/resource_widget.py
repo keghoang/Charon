@@ -169,10 +169,10 @@ class ResourceWidget(QWidget):
         self.worker_thread.start()
 
     def _on_flush_finished(self, success):
-        self.anim_timer.stop()
         if success:
             self._start_result_polling()
         else:
+            self.anim_timer.stop()
             self.flush_feedback.setText("Failed")
             self.flush_btn.setEnabled(True)
             QTimer.singleShot(4000, lambda: self.flush_feedback.setText(""))
@@ -188,13 +188,22 @@ class ResourceWidget(QWidget):
 
     def _update_result_display(self):
         diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
-        self.flush_feedback.setText(f"Freed {diff:.2f}GB")
+        # Only show if we detect a drop > 50MB
+        if diff > 0.05:
+            self.anim_timer.stop()
+            self.flush_feedback.setText(f"Freed {diff:.2f}GB")
 
     def _finish_result_polling(self):
         if hasattr(self, 'result_timer'):
             self.result_timer.stop()
             self.result_timer.deleteLater()
             del self.result_timer
+        
+        self.anim_timer.stop()
+        
+        # Final check / fallback
+        diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
+        self.flush_feedback.setText(f"Freed {diff:.2f}GB")
             
         self.flush_btn.setEnabled(True)
         # Clear text after a delay
