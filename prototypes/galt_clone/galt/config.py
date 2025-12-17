@@ -94,60 +94,20 @@ SOFTWARE_ICON_SIZE = 12  # Size in pixels (icons will be square: 12x12)
 #
 # If pyside value is None or missing, auto-detection is used
 SOFTWARE = {
-    "windows": {
-        "compatible_versions": [None],  # None means any version
-        "logo": "resources/logos/windows.png",
-        "color": "#27ae60",  # Green
-        "pyside_version": None,  # Auto-detect
-        "hidden": False,  # Show in dialogs
-        "host_settings": True
-    },
-    "macos": {
-        "compatible_versions": [None],
-        "logo": "resources/logos/macos.png",
-        "color": "#27ae60",  # Green
-        "pyside_version": None,  # Auto-detect
-        "hidden": True,  # Hide from dialogs
-        "host_settings": False
-    },
-    "linux": {
-        "compatible_versions": [None],
-        "logo": "resources/logos/linux.png",
-        "color": "#27ae60",  # Green
-        "pyside_version": None,  # Auto-detect
-        "hidden": True,  # Hide from dialogs
-        "host_settings": False
-    },
-    "maya": {
-        "compatible_versions": {
-            "2020": {"pyside": 2},    # Maya 2020-2024 use PySide2
-            "2021": {"pyside": 2},
-            "2022": {"pyside": 2},
-            "2023": {"pyside": 2},
-            "2024": {"pyside": 2},
-            "2025": {"pyside": 6},    # Maya 2025+ use PySide6
-            "2026": {"pyside": 6}
-        },
-        "logo": "resources/logos/maya.png",
-        "color": "#3498db",  # Blue
-        "pyside_version": None,  # Will be determined by version
-        "hidden": False,  # Show in dialogs
-        "host_settings": False
-    },
     "nuke": {
         "compatible_versions": {
-            "13": {"pyside": 2},     # Nuke 13-15 use PySide2
+            "13": {"pyside": 2},  # Nuke 13-15 use PySide2
             "14": {"pyside": 2},
             "15": {"pyside": 2},
-            "16": {"pyside": 6},     # Nuke 16+ use PySide6
-            "17": {"pyside": 6}
+            "16": {"pyside": 6},  # Nuke 16+ use PySide6
+            "17": {"pyside": 6},
         },
         "logo": "resources/logos/nuke.png",
         "color": "#f1c40f",  # Yellow
         "pyside_version": None,  # Will be determined by version
-        "hidden": False,  # Show in dialogs
-        "host_settings": True
-    }
+        "hidden": False,
+        "host_settings": True,
+    },
 }
 
 # Recognized script types and their file extensions
@@ -173,51 +133,24 @@ DEFAULT_WINDOW_CONFIG = {
 
 # Host-specific window configurations
 WINDOW_CONFIGS = {
-    "maya": {
-        "supports_docking": False,
-        "docking_method": "workspaceControl",
-        "window_flags": "Qt.Tool",
-        "window_attributes": ["Qt.WA_DeleteOnClose"],
-        "parent_to_host": True,  # Enable parenting to Maya main window
-        "tiny_mode_flags": [],  # Qt.WindowStaysOnTopHint Always on top in tiny mode
-        "description": "Maya integration with workspace control docking"
-    },
     "nuke": {
         "supports_docking": False,
         "docking_method": "registerWidgetAsPanel",
         "window_flags": "Qt.Tool",
         "window_attributes": ["Qt.WA_DeleteOnClose"],
         "parent_to_host": True,  # Enable parenting to Nuke main window
-        "tiny_mode_flags": [],  # Qt.WindowStaysOnTopHint Always on top in tiny mode
-        "description": "Nuke integration with panel registration"
+        "tiny_mode_flags": [],
+        "description": "Nuke integration with panel registration",
     },
-    "windows": {
+    "standalone": {
         "supports_docking": False,
         "docking_method": None,
         "window_flags": "Qt.Window",
         "window_attributes": ["Qt.WA_DeleteOnClose", "Qt.WA_QuitOnClose"],
-        "parent_to_host": False,  # No parenting for standalone Windows
-        "tiny_mode_flags": [],  # Qt.WindowStaysOnTopHint Always on top in tiny mode
-        "description": "Standalone Windows application"
-    },
-    "macos": {
-        "supports_docking": False,
-        "docking_method": None,
-        "window_flags": "Qt.Window",
-        "window_attributes": ["Qt.WA_DeleteOnClose"],
         "parent_to_host": False,
         "tiny_mode_flags": [],
-        "description": "Standalone macOS application"
+        "description": "Standalone application window",
     },
-    "linux": {
-        "supports_docking": False,
-        "docking_method": None,
-        "window_flags": "Qt.Window",
-        "window_attributes": ["Qt.WA_DeleteOnClose"],
-        "parent_to_host": False,
-        "tiny_mode_flags": [],
-        "description": "Standalone Linux application"
-    }
 }
 
 
@@ -236,14 +169,10 @@ INCOMPATIBLE_OPACITY = 0.5  # opacity for greyed out items
 # DEPRECATED: Use SOFTWARE[software]["color"] instead
 # Kept for backward compatibility only
 SOFTWARE_COLORS = {
-    "Windows": "#27ae60",    # Green
-    "Macos": "#27ae60",      # Green (same as Windows)
-    "Linux": "#27ae60",      # Green (same as Windows)
-    "Maya": "#3498db",       # Blue
-    "Nuke": "#f1c40f",       # Yellow
-    "None": "#ffffff",       # White
+    "Nuke": "#f1c40f",        # Yellow
+    "None": "#ffffff",        # White
     "No Metadata": "#7f8c8d",  # Gray
-    "Default": "#95a5a6"    # Default fallback color
+    "Default": "#95a5a6",     # Default fallback color
 }
 
 

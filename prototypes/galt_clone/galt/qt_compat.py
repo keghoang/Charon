@@ -7,34 +7,16 @@ selecting the appropriate version based on:
 2. Availability of PySide versions
 """
 import sys
-import platform
 
 def _detect_host_and_version():
     """Detect host application and version."""
     try:
-        import maya.cmds as cmds
-        version = cmds.about(version=True)
-        return ("Maya", version)
-    except:
-        pass
-    
-    try:
         import nuke
-        version = str(nuke.NUKE_VERSION_MAJOR)
-        return ("Nuke", version)
-    except:
-        pass
-    
-    # Check platform for standalone
-    system = platform.system()
-    if system == "Windows":
-        return ("Windows", None)
-    elif system == "Darwin":
-        return ("Macos", None)
-    elif system == "Linux":
-        return ("Linux", None)
-    
-    return None
+        return ("Nuke", str(nuke.NUKE_VERSION_MAJOR))
+    except Exception:
+        # During CLI development the nuke module is typically unavailable;
+        # we still report Nuke so downstream code uses the same execution path.
+        return ("Nuke", None)
 
 def _try_import_pyside(version):
     """Try to import specific PySide version."""

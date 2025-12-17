@@ -399,26 +399,18 @@ def get_visible_software_list():
     return visible_software
 
 def detect_host():
-    """Detect the current host application"""
+    """Return the current host application name.
+
+    Charon is only deployed inside Nuke, so we skip dynamic host detection to
+    avoid branching for other DCCs. We still attempt to import ``nuke`` so the
+    call mirrors the production environment, but fall back to the same result
+    if the module is unavailable (e.g., during local CLI development).
+    """
     try:
-        import nuke
-        return "Nuke"
-    except ImportError:
-        try:
-            import maya.OpenMayaUI as omui
-            return "Maya"
-        except ImportError:
-            # Check platform
-            import platform
-            system = platform.system()
-            if system == "Windows":
-                return "Windows"
-            elif system == "Darwin":  # macOS
-                return "macOS"
-            elif system == "Linux":
-                return "Linux"
-            else:
-                return "generic"
+        import nuke  # noqa: F401
+    except Exception:
+        pass
+    return "Nuke"
 
 def get_host_version(host=None):
     """Get the version of the current host application.
