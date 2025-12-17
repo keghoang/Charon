@@ -3258,6 +3258,23 @@ def process_charonop_node():
                                                 except Exception:
                                                     pass
                                                 try:
+                                                    parent_knob = cam_node.knob('charon_parent_id')
+                                                except Exception:
+                                                    parent_knob = None
+                                                if parent_knob is None:
+                                                    try:
+                                                        parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', '')
+                                                        parent_knob.setFlag(nuke.NO_ANIMATION)
+                                                        parent_knob.setFlag(nuke.INVISIBLE)
+                                                        cam_node.addKnob(parent_knob)
+                                                    except Exception:
+                                                        parent_knob = None
+                                                if parent_knob is not None:
+                                                    try:
+                                                        parent_knob.setValue(parent_norm_local or '')
+                                                    except Exception:
+                                                        pass
+                                                try:
                                                     node_name_base = _sanitize_name(CAMERA_OUTPUT_LABEL, 'CharonCamera')
                                                     cam_node.setName(f'{node_name_base}_{_sanitize_name(parent_norm_local, "cam")}')
                                                 except Exception:
