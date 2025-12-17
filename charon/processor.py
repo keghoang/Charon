@@ -1258,6 +1258,17 @@ def _create_step2_result_group(charon_node, image_paths):
     ]
     info_text.setValue("\n".join(summary))
     
+    anchor_knob = nuke.Double_Knob('charon_link_anchor', 'Charon Link Anchor')
+    anchor_knob.setFlag(nuke.NO_ANIMATION)
+    anchor_knob.setFlag(nuke.INVISIBLE)
+    group.addKnob(anchor_knob)
+    
+    try:
+        parent_name = charon_node.fullName()
+        anchor_knob.setExpression(f"{parent_name}.charon_link_anchor")
+    except Exception:
+        pass
+    
     try:
         group.setMetaData('charon/parent_id', charon_node_id or "")
         group.setMetaData('charon/read_id', read_id)
