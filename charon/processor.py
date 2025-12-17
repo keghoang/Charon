@@ -2397,10 +2397,12 @@ def process_charonop_node():
         try:
             from .metadata_manager import get_charon_config
             check_path = workflow_path or node.metadata('charon/workflow_path')
+            log_debug(f"Checking Step 2 status for path: {check_path}")
             if check_path and os.path.exists(check_path):
-                conf = get_charon_config(os.path.dirname(check_path))
-                if conf and conf.get('is_3d_texturing_step2'):
-                    is_step2 = True
+                target_dir = os.path.dirname(check_path) if os.path.isfile(check_path) else check_path
+                conf = get_charon_config(target_dir)
+                is_step2 = bool(conf and conf.get('is_3d_texturing_step2'))
+                log_debug(f"Step 2 detected: {is_step2} (from {target_dir})")
         except Exception as step2_err:
             log_debug(f"Step 2 check failed: {step2_err}", "WARNING")
 
