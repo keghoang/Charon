@@ -3283,7 +3283,11 @@ def process_charonop_node():
                     seed_offset = batch_index * 9973
                     prompt_payload = copy.deepcopy(base_prompt)
                     
-                    if is_step2 and batch_index < len(step2_views) and target_coverage_node_id:
+                    if is_step2 and target_coverage_node_id:
+                        if batch_index >= len(step2_views):
+                            log_debug(f"Step 2: batch_index {batch_index} out of range ({len(step2_views)}). Stopping.", "ERROR")
+                            break
+
                         view_info = step2_views[batch_index]
                         view_node = view_info['node']
                         rig_group_ref = view_info['group']
