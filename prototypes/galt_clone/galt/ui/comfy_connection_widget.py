@@ -356,6 +356,18 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
     def client(self) -> Optional[ComfyUIClient]:
         return self._client
 
+    def current_client(self) -> Optional[ComfyUIClient]:
+        """
+        Compatibility helper for processor scripts that need the active client.
+        """
+        return self._client
+
+    def current_comfy_path(self) -> str:
+        """
+        Expose the configured ComfyUI launch path without breaking encapsulation.
+        """
+        return self._comfy_path
+
 
 class ConnectionSettingsPopover(QtWidgets.QDialog):
     """Popup dialog for editing ComfyUI launcher details."""

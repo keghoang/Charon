@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`main.py` remains the Nuke entry point that boots the production Charon panel. Conversion logic still lives under `charon_core/` (`ui.py`, `workflow_pipeline.py`, `workflow_analysis.py`, `workflow_loader.py`, `comfy_client.py`, `node_factory.py`, `processor_script.py`), but workflow–UI prototyping now happens in `prototypes/galt_clone/`, a standalone Galt-based browser focused on Comfy workflows:
+`main.py` remains the Nuke entry point that boots the production Charon panel. Conversion logic still lives under ``charon_core`/` (`ui.py`, `workflow_pipeline.py`, `workflow_analysis.py`, `workflow_loader.py`, `comfy_client.py`, `node_factory.py`, `processor_script.py`), but workflow–UI prototyping now happens in `prototypes/galt_clone/`, a standalone Galt-based browser focused on Comfy workflows:
 
 - `prototypes/galt_clone/galt/ui/script_panel.py` lists workflows, handles creation, and points to `.charon.json`.
 - `prototypes/galt_clone/galt/ui/metadata_panel.py` renders/edits metadata for workflows.
@@ -31,8 +31,8 @@ Runtime artifacts for the production panel still land in `D:\Nuke\charon\{temp,e
   ```
 - Conversion smoke test (requires ComfyUI’s embedded Python):
   ```powershell
-  python -c "from charon_core.workflow_loader import load_workflow; \
-from charon_core.workflow_pipeline import convert_workflow; \
+  python -c "from `charon_core`.workflow_loader import load_workflow; \
+from `charon_core`.workflow_pipeline import convert_workflow; \
 data = load_workflow('workflows/rgb2x_albedo_GET.json'); \
 convert_workflow(data, comfy_path=r'D:\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\run_nvidia_gpu.bat')"
   ```
@@ -45,7 +45,7 @@ convert_workflow(data, comfy_path=r'D:\ComfyUI_windows_portable_nvidia\ComfyUI_w
       sys.path.insert(0, repo)
   importlib.invalidate_caches()
   for name in list(sys.modules):
-      if name.split('.', 1)[0] in {"charon_core", "charon"}:
+      if name.split('.', 1)[0] in {"`charon_core`", "charon"}:
           sys.modules.pop(name, None)
   runpy.run_path(os.path.join(repo, "main.py"), run_name="__main__")
   ```
@@ -54,7 +54,7 @@ convert_workflow(data, comfy_path=r'D:\ComfyUI_windows_portable_nvidia\ComfyUI_w
 Follow PEP 8 with 4-space indentation, a 100-character soft limit, and snake_case identifiers. Module constants stay in UPPER_SNAKE_CASE, PySide classes in PascalCase. Use explicit relative imports inside packages and emit messages through each module’s `logger`.
 
 Prototype-specific guidance:
-- Treat `prototypes/galt_clone/` as a standalone Python package; avoid leaking dependencies into `charon_core`.
+- Treat `prototypes/galt_clone/` as a standalone Python package; avoid leaking dependencies into ``charon_core``.
 - All workflow-facing strings should say “workflow” (no residual “script” wording).
 - `.charon.json` metadata stores only `workflow_file`, `description`, `dependencies`, `last_changed`, and `tags`; display names derive from folder names.
 - `.gitignore` blocks `__pycache__/` and `*.pyc`.
@@ -62,7 +62,7 @@ Prototype-specific guidance:
 ## Testing Guidelines
 There is no automated suite. Rely on manual runs:
 - Production: use real workflows under `workflows/`, create a CharonOp, hit “Process”, and verify prompt conversion plus result ingestion. Inspect `D:\Nuke\charon\debug` for prompt dumps and `...\results` for outputs. After touching `workflow_pipeline.py` or `workflow_analysis.py`, rerun the smoke test with Set/Get-heavy presets and capture stdout/stderr.
-- Prototype: launch via `galt_clone_launch.py`, ensure the list populates, create a new workflow via the “+” button (select an existing `workflow.json`), and confirm metadata edits update `.charon.json` immediately. Regenerate samples with `python tools\populate_dummy_workflows.py` whenever you need a clean slate.
+- Prototype: launch via ``galt_clone_launch.py``, ensure the list populates, create a new workflow via the “+” button (select an existing `workflow.json`), and confirm metadata edits update `.charon.json` immediately. Regenerate samples with `python tools\populate_dummy_workflows.py` whenever you need a clean slate.
 
 ## Commit & Pull Request Guidelines
 Write imperative, scoped commits (e.g., “Improve Set/Get flattening logs” or “Prototype workflow metadata editor”). Pull requests should summarize changes, list manual tests (panel run, conversion script, prototype flow), attach relevant screenshots or debug snippets, and note workflow migration steps or environment prerequisites. Update this document whenever you add commands, directories, or operational caveats future contributors must know.
@@ -96,11 +96,11 @@ We are folding the prototype into the production Charon flow in measured stages.
    - `main_window.execute_script()` delegates to the same helper so keyboard shortcuts behave identically.
 
 5. **CharonOp Node Creation — ? Complete**  
-   - Node creation logic from `charon_core/node_factory.py` ported to `prototypes/.../node_factory.py`.  
+   - Node creation logic from ``charon_core`/node_factory.py` ported to `prototypes/.../node_factory.py`.  
    - Grab action now spawns a CharonOp in Nuke; auto-import knob defaults to on.
 
 6. **Processor Flow Port — ? Not Started**  
-   - Next engineer should copy the minimal path from `charon_core/processor_script.py` into the prototype, adjusting imports to use the new runtime helpers.  
+   - Next engineer should copy the minimal path from ``charon_core`/processor_script.py` into the prototype, adjusting imports to use the new runtime helpers.  
    - Goal: on “Process,” convert only if the stored workflow isn’t API formatted, then drive ComfyUI submission using the same prompt data.  
    - After porting, wire `spawn_charon_node` to use the prototype processor script instead of the legacy version.
 
@@ -124,10 +124,19 @@ We are folding the prototype into the production Charon flow in measured stages.
 ### Handoff Checklist (October 21, 2025)
 You are taking over after Step 5 (CharonOp node creation) is complete. Focus on **Step 6: Processor Flow Port** next:
 
-1. Copy the minimal processor logic from `charon_core/processor_script.py` into a new prototype module (e.g., `prototypes/galt_clone/galt/processor.py`). Trim it down to the conversion/submission path; reuse `workflow_runtime.convert_workflow()` and the new paths helpers.
-2. Update the processor script to read its workflow bundle from the CharonOp knob, checking whether conversion is required before calling ComfyUI.
-3. Modify `workflow_runtime.spawn_charon_node()` to call the prototype processor script instead of `charon_core`’s version.
-4. Manual test: launch prototype ? Grab a workflow ? press “Process with ComfyUI” on the spawned node. Confirm the processor runs without referencing `charon_core` modules.
-5. Update this handoff section with your progress, remaining tasks, and manual verification steps.
+1. [x] Copied the processor logic into `prototypes/galt_clone/galt/processor.py`, trimming it to the conversion/submission path and routing conversions through `workflow_runtime.convert_workflow()`.
+2. [x] Processor script reads the workflow bundle from the CharonOp knob and converts only when the payload is still in UI format.
+3. [x] `workflow_runtime.spawn_charon_node()` now injects the prototype processor script.
+4. [ ] Manual test: launch the prototype -> grab a workflow -> press `Process with ComfyUI` on the spawned node. Verify the processor executes without touching `charon_core`.
+5. [x] Documentation updated. After running the manual test above, record the outcome (success/failure, notable logs, next steps).
 
-Thanks for keeping all shared logic in `prototypes/galt_clone/galt/`. Push only once Step 6 is stable and documented.
+Manual QA to run next:
+- Launch via `galt_clone_launch.py`, grab any sample workflow, and trigger `Process with ComfyUI` on the created CharonOp.
+- Confirm image uploads, prompt submission, and downloads succeed; inspect the node status payload and `D:\Nuke\charon\results` for outputs.
+- If conversion fails, confirm the Comfy path is configured in the prototype footer (preferences stored under `%LOCALAPPDATA%\Galt\plugins\charon\preferences.json`).
+
+Open questions / follow-up:
+- Once the manual run is validated, consider wiring status telemetry into the prototype logger (mirroring the planned instrumentation in Step 8).
+- Future work: port the processor output management (Step 7) and instrumentation/error surfacing (Step 8).
+
+Thanks for keeping all shared logic in prototypes/galt_clone/galt/. Push only once Step 6 is fully verified and documented.
