@@ -28,22 +28,7 @@ class FolderPanel(QtWidgets.QWidget):
         
         # Create layout
         self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(4, 4, 4, 4)
-        
-        # Import config for standardized header height
-        from .. import config
-        
-        # Header with title - standardized height
-        header_container = QtWidgets.QWidget()
-        header_container.setFixedHeight(config.UI_PANEL_HEADER_HEIGHT)
-        header_layout = QtWidgets.QHBoxLayout(header_container)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-
-        title_label = QtWidgets.QLabel("Folders")
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-
-        self.layout.addWidget(header_container)
+        self.layout.setContentsMargins(0, 0, 0, 0)
         
         # Create folder view with custom deselection behavior
         self.folder_view = FolderTableView()
@@ -52,6 +37,10 @@ class FolderPanel(QtWidgets.QWidget):
         self.folder_view.navigateRight.connect(self.navigate_right)
         self.folder_view.openFolderRequested.connect(self._emit_open_folder_request)
         self.folder_view.createScriptRequested.connect(self._emit_create_script_request)
+        self.folder_view.horizontalHeader().show()
+        self.folder_view.horizontalHeader().setHighlightSections(False)
+        self.folder_view.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.folder_view.horizontalHeader().setFixedHeight(30)
         
         # Connect mouse signals for drag tracking
         self.folder_view.installEventFilter(self)

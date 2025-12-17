@@ -402,7 +402,7 @@ class FolderTableView(QtWidgets.QTableView):
         self.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.verticalHeader().hide()
-        self.horizontalHeader().hide()  # Hide header for cleaner look
+        self.horizontalHeader().show()
         
         # Set uniform row height
         self.verticalHeader().setDefaultSectionSize(30)
