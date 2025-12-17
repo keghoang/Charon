@@ -436,8 +436,8 @@ class ScriptPanel(QtWidgets.QWidget):
         # Also hide metadata panel when clearing scripts
         self.metadata_panel.setVisible(False)
         self.metadata_panel.show_default_message()
-        # Hide the New Script button when clearing scripts
-        self.new_script_button.setVisible(False)
+        # Always keep the New Workflow button available
+        self.new_script_button.setVisible(True)
         # Clear parent folder reference
         self.parent_folder = None
 

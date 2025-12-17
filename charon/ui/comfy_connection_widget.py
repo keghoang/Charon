@@ -62,15 +62,27 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.status_label.setTextFormat(QtCore.Qt.RichText)
         self.status_label.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
         self.status_label.setTextInteractionFlags(QtCore.Qt.NoTextInteraction)
-        self._set_status("path_required", False)
         layout.addWidget(self.status_label)
+        self.status_label.hide()
+        self.status_label.setFixedWidth(0)
+
+        self.status_caption = QtWidgets.QLabel("ComfyUI Status:")
+        self.status_caption.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+        self.status_caption.setStyleSheet("color: #ffffff; font-weight: bold;")
+        layout.addWidget(self.status_caption)
+
+        self.launch_button = QtWidgets.QPushButton("Launch")
+        self.launch_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.launch_button.clicked.connect(self._launch_comfyui)
+        self.launch_button.setMinimumWidth(64)
+        layout.addWidget(self.launch_button)
 
         self.separator_label = QtWidgets.QLabel("|")
         self.separator_label.setStyleSheet("color: #666666;")
         layout.addWidget(self.separator_label)
 
         self.settings_button = QtWidgets.QToolButton()
-        self.settings_button.setText("⚙")
+        self.settings_button.setText("\u2699")
         self.settings_button.setAutoRaise(True)
         self.settings_button.setCursor(QtCore.Qt.PointingHandCursor)
         self.settings_button.setToolTip("ComfyUI connection settings")
@@ -78,6 +90,13 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self.settings_button.installEventFilter(self)
         self.settings_button.clicked.connect(lambda: self._show_settings_popover(auto_focus=True))
         layout.addWidget(self.settings_button)
+
+        self._blink_timer = QtCore.QTimer(self)
+        self._blink_timer.setInterval(450)
+        self._blink_timer.timeout.connect(self._toggle_button_blink)
+        self._blink_state = False
+
+        self._set_status("path_required", False)
 
     # ----------------------------------------------------------------- State
     def _load_settings(self) -> dict:
@@ -192,12 +211,12 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     def _set_status(self, state: str, connected: bool) -> None:
         mapping = {
-            "online": ("✅ Running", "#51cf66"),
-            "offline": ("❌ Offline", "#ff6b6b"),
-            "path_required": ("❌ Path Required", "#ff6b6b"),
-            "checking": ("⏳ Checking…", "#d0a23f"),
-            "launching": ("⏳ Launching…", "#d0a23f"),
-            "unavailable": ("⚠️ Client Unavailable", "#ffa94d"),
+            "online": ("Running", "#51cf66"),
+            "offline": ("Offline", "#ff6b6b"),
+            "path_required": ("Path Required", "#ff6b6b"),
+            "checking": ("Checking...", "#d0a23f"),
+            "launching": ("Launching...", "#d0a23f"),
+            "unavailable": ("Client Unavailable", "#ffa94d"),
         }
         label_text, color = mapping.get(state, (state, "#cccccc"))
         html = f"ComfyUI: <span style='color:{color}; font-weight:bold;'>{label_text}</span>"
@@ -215,6 +234,88 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         elif html != previous_text:
             self.status_label.update()
 
+        self._update_launch_button(state, connected)
+
+    def _update_launch_button(self, state: str, connected: bool) -> None:
+        button = getattr(self, "launch_button", None)
+        if button is None:
+            return
+
+        if connected:
+            self._stop_button_blink()
+            button.setEnabled(False)
+            button.setCursor(QtCore.Qt.ArrowCursor)
+            button.setText("Running")
+            self._apply_button_style(button, "#37b24d", "#2f9e44", disabled=True)
+        elif self._launch_in_progress or state in {"launching", "checking"}:
+            self._stop_button_blink()
+            button.setEnabled(False)
+            button.setCursor(QtCore.Qt.ArrowCursor)
+            button.setText("Launching...")
+            self._apply_button_style(button, "#f08c00", "#d9480f", disabled=True)
+        else:
+            button.setEnabled(True)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.setText("Press to Launch")
+            self._start_button_blink()
+
+    def _apply_button_style(
+        self,
+        button: QtWidgets.QPushButton,
+        background: str,
+        border: str,
+        *,
+        text_color: str = "#ffffff; font-weight: bold",
+        hover: Optional[str] = None,
+        disabled: bool = False,
+    ) -> None:
+        style = (
+            "QPushButton {"
+            f" background-color: {background};"
+            f" color: {text_color};"
+            f" border: 1px solid {border};"
+            " padding: 2px 10px;"
+            " border-radius: 3px;"
+            "}"
+        )
+        if hover and button.isEnabled():
+            style += (
+                " QPushButton:hover {"
+                f" background-color: {hover};"
+                "}"
+            )
+        if disabled:
+            style += (
+                " QPushButton:disabled {"
+                f" background-color: {background};"
+                f" color: {text_color};"
+                "}"
+            )
+        button.setStyleSheet(style)
+
+    def _start_button_blink(self) -> None:
+        button = getattr(self, "launch_button", None)
+        if button is None:
+            return
+        if not self._blink_timer.isActive():
+            self._blink_state = False
+            self._blink_timer.start()
+        self._apply_button_style(button, "#ff6b6b", "#c92a2a", hover="#ff8787")
+
+    def _stop_button_blink(self) -> None:
+        if self._blink_timer.isActive():
+            self._blink_timer.stop()
+        self._blink_state = False
+
+    def _toggle_button_blink(self) -> None:
+        button = getattr(self, "launch_button", None)
+        if button is None or not button.isEnabled():
+            self._stop_button_blink()
+            return
+        self._blink_state = not self._blink_state
+        primary = "#ff6b6b" if self._blink_state else "#c92a2a"
+        hover = "#ff8787" if self._blink_state else "#fa5252"
+        self._apply_button_style(button, primary, "#c92a2a", hover=hover)
     # -------------------------------------------------------------- Popover
     def _show_settings_popover(self, auto_focus: bool = False) -> None:
         if self._popover and self._popover.isVisible():
@@ -228,7 +329,6 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
         popover = ConnectionSettingsPopover(self, self._comfy_path)
         popover.path_selected.connect(self._update_path)
-        popover.launch_requested.connect(self._launch_comfyui)
         popover.retest_requested.connect(lambda: self._check_connection(manual=True))
         popover.finished.connect(lambda _result: self._clear_popover())
 
@@ -331,7 +431,6 @@ class ConnectionSettingsPopover(QtWidgets.QDialog):
     """Popup dialog for editing ComfyUI launcher details."""
 
     path_selected = QtCore.Signal(str)
-    launch_requested = QtCore.Signal()
     retest_requested = QtCore.Signal()
 
     _ACTIVE: Optional["ConnectionSettingsPopover"] = None
@@ -357,17 +456,13 @@ class ConnectionSettingsPopover(QtWidgets.QDialog):
         layout.addWidget(self.path_edit)
 
         button_row = QtWidgets.QHBoxLayout()
-        browse_btn = QtWidgets.QPushButton("Browse…")
+        browse_btn = QtWidgets.QPushButton("Browse...")
         browse_btn.clicked.connect(self._browse_for_path)
         button_row.addWidget(browse_btn)
 
         save_btn = QtWidgets.QPushButton("Save")
         save_btn.clicked.connect(self._apply_path)
         button_row.addWidget(save_btn)
-
-        launch_btn = QtWidgets.QPushButton("Launch")
-        launch_btn.clicked.connect(self._launch_clicked)
-        button_row.addWidget(launch_btn)
 
         layout.addLayout(button_row)
 
@@ -399,11 +494,6 @@ class ConnectionSettingsPopover(QtWidgets.QDialog):
         self._close_timer.stop()
         self.path_selected.emit(self.path_edit.text().strip())
         # keep popover open for additional actions
-
-    def _launch_clicked(self) -> None:
-        self._close_timer.stop()
-        self.path_selected.emit(self.path_edit.text().strip())
-        self.launch_requested.emit()
 
     def _request_retest(self) -> None:
         self._close_timer.stop()
@@ -471,3 +561,4 @@ class ConnectionSettingsPopover(QtWidgets.QDialog):
     def clear_active_popover(cls, popover: "ConnectionSettingsPopover") -> None:
         if cls._ACTIVE is popover:
             cls._ACTIVE = None
+
