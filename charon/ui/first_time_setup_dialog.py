@@ -656,28 +656,15 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
                 self._start_installation()
                 return
             if self.comfy_running_preinstall and not self.restart_ready:
-                if not self.restart_armed:
-                    self.restart_armed = True
-                    self.btn_next.setText("Restarting...")
-                    self.btn_next.setEnabled(False)
-                    self.install_ready_label.setText(
-                        "Sending restart request to ComfyUI..."
-                    )
-                    self.install_ready_label.setVisible(True)
-                    self.restart_seen_down = False
-                    try:
-                        self._trigger_restart_request()
-                        self._start_restart_monitor()
-                    except Exception as exc:  # pragma: no cover - defensive
-                        system_error(f"ComfyUI restart request failed: {exc}")
-                        self.restart_armed = False
-                        self.restart_seen_down = False
-                        self._stop_restart_timer()
-                        self.install_ready_label.setText(
-                            "Could not send restart request. Restart ComfyUI manually, then click Restart ComfyUI again."
-                        )
-                        self.btn_next.setEnabled(True)
-                        self.btn_next.setText("Restart ComfyUI")
+                # Skip auto-restart in the wizard to avoid host crashes; instruct manual restart.
+                self.restart_ready = True
+                self.comfy_running_preinstall = False
+                self.install_ready_label.setText(
+                    "Please restart ComfyUI manually, then click Next to finish."
+                )
+                self.install_ready_label.setVisible(True)
+                self.btn_next.setEnabled(True)
+                self.btn_next.setText("Next")
                 return
             self.current_step = 3
             self.stack.setCurrentIndex(2)

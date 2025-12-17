@@ -5,7 +5,7 @@ from .qt_compat import QtWidgets, QtCore
 from . import config, utilities
 from .ui.window_manager import WindowManager
 from .charon_logger import system_info, system_debug, system_error
-from .first_time_setup import run_first_time_setup_if_needed
+from .first_time_setup import ensure_requirements_with_log
 from .dependency_check import ensure_manager_security_level
 
 def launch(host_override=None, user_override=None, global_path=None, local_path=None, script_paths=None, dock=False, debug=False, xoffset=0, yoffset=0):
@@ -71,7 +71,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
 
     # Run first-time setup (Comfy path + dependencies) before building the window
     try:
-        if not run_first_time_setup_if_needed(parent=None):
+        if not ensure_requirements_with_log(parent=None):
             system_info("First-time setup not completed; aborting launch.")
             return None
     except Exception as exc:
