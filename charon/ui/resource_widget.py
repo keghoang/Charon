@@ -66,35 +66,22 @@ class ResourceWidget(QWidget):
         self.monitor = ResourceMonitor(self)
         self.monitor.stats_updated.connect(self.update_stats)
         
-        # Use Vertical layout to stack rows
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-        layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # Use Grid layout to align columns (CPU/GPU, RAM/VRAM)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(8)
+        self.grid.setVerticalSpacing(2)
+        self.grid.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
-        # Row 1: CPU and RAM
-        row1_container = QWidget()
-        row1_layout = QHBoxLayout(row1_container)
-        row1_layout.setContentsMargins(0, 0, 0, 0)
-        row1_layout.setSpacing(8)
-        row1_layout.setAlignment(Qt.AlignRight)
-        
+        # Row 0: CPU and RAM
         self.cpu_bar = CompactResourceBar("CPU")
-        row1_layout.addWidget(self.cpu_bar)
+        self.grid.addWidget(self.cpu_bar, 0, 0)
         
         self.ram_bar = CompactResourceBar("RAM")
-        row1_layout.addWidget(self.ram_bar)
+        self.grid.addWidget(self.ram_bar, 0, 1)
         
-        layout.addWidget(row1_container)
-        
-        # Row 2: GPU and VRAM (Dynamic)
+        # GPU widgets storage
         self.gpu_widgets = {} # index -> (core_bar, vram_bar)
-        self.gpu_container = QWidget()
-        self.gpu_layout = QHBoxLayout(self.gpu_container)
-        self.gpu_layout.setContentsMargins(0, 0, 0, 0)
-        self.gpu_layout.setSpacing(8)
-        self.gpu_layout.setAlignment(Qt.AlignRight)
-        layout.addWidget(self.gpu_container)
         
         self.monitor.start()
 
@@ -108,14 +95,16 @@ class ResourceWidget(QWidget):
         gpus = stats.get('gpus', [])
         
         # Create widgets for GPUs if they don't exist
-        for gpu in gpus:
+        for i, gpu in enumerate(gpus):
             idx = gpu['index']
             if idx not in self.gpu_widgets:
                 core_bar = CompactResourceBar(f"GPU", color="#00BCD4")
                 vram_bar = CompactResourceBar(f"VRAM", color="#9C27B0")
                 
-                self.gpu_layout.addWidget(core_bar)
-                self.gpu_layout.addWidget(vram_bar)
+                # Add to grid at Row 1 + i
+                row = 1 + i
+                self.grid.addWidget(core_bar, row, 0)
+                self.grid.addWidget(vram_bar, row, 1)
                 
                 self.gpu_widgets[idx] = (core_bar, vram_bar)
             

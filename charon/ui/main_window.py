@@ -1035,7 +1035,8 @@ QPushButton#NewWorkflowButton:pressed {{
         project_path = os.environ.get("BUCK_PROJECT_PATH", "").strip()
         if project_path:
             project_name = Path(project_path).name or project_path
-            label.setText(f"Project: {project_name}")
+            # Prefix removed per user request
+            label.setText(f"{project_name}")
             label.setToolTip(project_path)
             return
 
@@ -1045,8 +1046,8 @@ QPushButton#NewWorkflowButton:pressed {{
         else:
             destination = os.path.join(get_charon_temp_dir(), "results")
         destination = os.path.normpath(destination)
-        label.setText(f"Project not Found, saving outputs to {destination}")
-        label.setToolTip(destination)
+        label.setText(f"Unknown Project")
+        label.setToolTip(f"Project not found, saving to {destination}")
 
     def _refresh_gpu_display(self):
         """Update the footer with detected GPU/VRAM summary."""
@@ -1055,11 +1056,16 @@ QPushButton#NewWorkflowButton:pressed {{
             return
         if not getattr(self, "_gpu_summary", None):
             try:
-                self._gpu_summary = self._detect_gpu_summary()
+                # Get raw entries without prefix
+                entries = self._detect_nvidia_gpus()
+                if not entries:
+                    entries = self._detect_wmi_gpus()
+                self._gpu_summary = "; ".join(entries) if entries else "Unknown GPU"
             except Exception as exc:
                 system_debug(f"GPU detection fallback failed: {exc}")
-                self._gpu_summary = "GPU: Unknown"
-        summary = self._gpu_summary or "GPU: Unknown"
+                self._gpu_summary = "Unknown GPU"
+        summary = self._gpu_summary or "Unknown GPU"
+        # Prefix removed per user request
         label.setText(summary)
         label.setToolTip(summary)
     
