@@ -1,9 +1,15 @@
 import json
 import time
+import uuid
 
 
 def sanitize_name(name):
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+
+
+def _generate_charon_node_id() -> str:
+    """Return a short, human-friendly identifier for Charon nodes."""
+    return uuid.uuid4().hex[:12].lower()
 
 
 def create_charon_group_node(
@@ -114,6 +120,32 @@ def create_charon_group_node(
     _hide_knob(path_knob, nuke)
     node.addKnob(path_knob)
 
+    node_id_value = _generate_charon_node_id()
+    node_id_knob = nuke.String_Knob("charon_node_id", "Node ID", node_id_value)
+    _hide_knob(node_id_knob, nuke)
+    node.addKnob(node_id_knob)
+
+    read_id_knob = nuke.String_Knob("charon_read_node_id", "Linked Read Node ID", "")
+    _hide_knob(read_id_knob, nuke)
+    node.addKnob(read_id_knob)
+
+    try:
+        setup_tab = node.knob("User")
+    except Exception:
+        setup_tab = None
+    if setup_tab is not None:
+        try:
+            setup_tab.setName("charon_setup_tab")
+        except Exception:
+            pass
+        try:
+            setup_tab.setLabel("Setup")
+        except Exception:
+            pass
+    else:
+        setup_tab = nuke.Tab_Knob("charon_setup_tab", "Setup")
+        node.addKnob(setup_tab)
+
     if parameter_knobs:
         for knob in parameter_knobs:
             node.addKnob(knob)
@@ -129,26 +161,29 @@ def create_charon_group_node(
     _hide_knob(read_store_knob, nuke)
     node.addKnob(read_store_knob)
 
-    info_lines = ["Inputs Required:"]
-    for input_def in inputs:
-        info_lines.append(f"- {input_def.get('name', 'Input')} : {input_def.get('description', '')}")
-    info_knob = nuke.Text_Knob("info", "Workflow Info", "\n".join(info_lines))
-    node.addKnob(info_knob)
+    setup_label = nuke.Text_Knob("charon_setup_label", "Processing Controls", "")
+    node.addKnob(setup_label)
 
     import_knob = nuke.PyScript_Knob("import_output", "Import Output")
     import_knob.setCommand(import_script or "nuke.message('Import script unavailable.')")
+    import_knob.setFlag(nuke.STARTLINE)
     node.addKnob(import_knob)
 
     process_knob = nuke.PyScript_Knob("process", "Process with ComfyUI")
     process_knob.setCommand(process_script)
+    process_knob.setFlag(nuke.STARTLINE)
     node.addKnob(process_knob)
 
     reuse_knob = nuke.Boolean_Knob(
         "charon_reuse_output",
         "Update future iteration in the same Read node",
-        False,
+        True,
     )
     reuse_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        reuse_knob.setValue(1)
+    except Exception:
+        pass
     try:
         reuse_knob.setTooltip(
             "When enabled, successful runs update the last Read node instead of creating a new one."
@@ -156,6 +191,21 @@ def create_charon_group_node(
     except Exception:
         pass
     node.addKnob(reuse_knob)
+
+    info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
+    node.addKnob(info_tab)
+
+    info_lines = ["Inputs Required:"]
+    for input_def in inputs:
+        info_lines.append(f"- {input_def.get('name', 'Input')} : {input_def.get('description', '')}")
+    info_knob = nuke.Text_Knob("info", "Workflow Info", "\n".join(info_lines))
+    node.addKnob(info_knob)
+
+    node_id_info_knob = nuke.Text_Knob("charon_node_id_info", "Charon Node ID", node_id_value)
+    node.addKnob(node_id_info_knob)
+
+    read_id_info_knob = nuke.Text_Knob("charon_read_id_info", "Linked Read Node ID", "Not linked")
+    node.addKnob(read_id_info_knob)
 
     status_payload = {
         "status": "Ready",
@@ -166,6 +216,8 @@ def create_charon_group_node(
         "workflow_path": workflow_path or "",
         "auto_import": bool(auto_import_default),
         "runs": [],
+        "node_id": node_id_value,
+        "read_node_id": "",
     }
     try:
         node.setMetaData("charon/status_payload", json.dumps(status_payload))
@@ -178,6 +230,8 @@ def create_charon_group_node(
     try:
         node.setMetaData("charon/workflow_name", workflow_name)
         node.setMetaData("charon/workflow_path", workflow_path or "")
+        node.setMetaData("charon/node_id", node_id_value)
+        node.setMetaData("charon/read_node_id", "")
     except Exception:
         pass
 
