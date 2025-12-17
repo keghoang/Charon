@@ -464,6 +464,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_nodes_callback: Optional[Callable[[], None]] = None
         self._custom_node_row_worker: Optional[_CustomNodeInstallWorker] = None
         self._custom_node_row_context: Optional[Dict[str, Any]] = None
+        self._custom_node_install_queue: List[Dict[str, Any]] = []
         restart_flag = False
         if isinstance(self._payload, dict):
             restart_flag = bool(
@@ -1152,6 +1153,28 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             thread.quit()
             thread.wait(2000)
 
+    def _start_next_custom_node_from_queue(self) -> None:
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
+            return
+        if not self._custom_node_install_queue:
+            return
+        next_entry = self._custom_node_install_queue.pop(0)
+        row_info = next_entry.get("row_info") or {}
+        repo_url = next_entry.get("repo_url") or ""
+        row_index = next_entry.get("row_index") or 0
+        issue_row = next_entry.get("issue_row")
+        button = next_entry.get("button")
+        if isinstance(issue_row, IssueRow):
+            issue_row.start_install_animation()
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(False)
+            button.setText("Resolving...")
+        if repo_url:
+            if self._start_custom_node_install_worker(row_info, repo_url, row_index, issue_row, button):
+                return
+        # Fallback: if worker couldn't start, push back and bail to avoid losing queue.
+        self._custom_node_install_queue.insert(0, next_entry)
+
     def _start_custom_node_install_worker(
         self,
         row_info: Dict[str, Any],
@@ -1161,7 +1184,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         button: Optional[QtWidgets.QPushButton],
     ) -> bool:
         """Install a custom node via Manager on a worker thread; avoids freezing host apps like Nuke."""
-        if self._custom_nodes_thread:
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
             return False
         worker = _CustomNodeInstallWorker(self._comfy_path, repo_url)
         thread = QtCore.QThread(self)
@@ -1182,6 +1205,30 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         thread.finished.connect(thread.deleteLater)
         thread.start()
         return True
+
+    def _enqueue_custom_node_install(
+        self,
+        row_info: Dict[str, Any],
+        repo_url: str,
+        row_index: int,
+        issue_row: Optional[IssueRow],
+        button: Optional[QtWidgets.QPushButton],
+    ) -> None:
+        """Queue a custom node install while another is running."""
+        queued_entry = {
+            "row_info": row_info,
+            "repo_url": repo_url,
+            "row_index": row_index,
+            "issue_row": issue_row,
+            "button": button,
+        }
+        self._custom_node_install_queue.append(queued_entry)
+        if isinstance(issue_row, IssueRow):
+            issue_row.btn_resolve.setText("In Queue")
+            issue_row.btn_resolve.setEnabled(False)
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setText("In Queue")
+            button.setEnabled(False)
 
     def _on_custom_node_install_finished(self, result: ResolutionResult) -> None:
         context = self._custom_node_row_context or {}
@@ -1230,6 +1277,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         )
         self._show_restart_cta(display_name, require_all_custom_nodes_resolved=True)
         self._update_overall_state()
+        self._start_next_custom_node_from_queue()
 
     def _on_custom_node_install_failed(self, message: str) -> None:
         context = self._custom_node_row_context or {}
@@ -1242,6 +1290,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if button:
             button.setEnabled(True)
         self._update_overall_state()
+        self._start_next_custom_node_from_queue()
 
 
     def _filter_missing_with_resolved(
@@ -2684,18 +2733,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return
         issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
+        repo_url = str(row_info.get("manager_repo") or "").strip()
 
-        # Prevent overlapping installs; notify and bail early to avoid falling back to synchronous work.
-        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
-            QtWidgets.QMessageBox.information(
-                self,
-                "Install In Progress",
-                "Another custom node install is already running. Please wait for it to finish.",
-            )
-            if isinstance(issue_row, IssueRow):
-                issue_row.reset_to_idle()
-            if button:
-                button.setEnabled(True)
+        # If another install is running, enqueue this request and update UI to "In Queue".
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning() and repo_url:
+            self._enqueue_custom_node_install(row_info, repo_url, row, issue_row, button)
             return
 
         if isinstance(issue_row, IssueRow):
@@ -2704,7 +2746,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             button.setEnabled(False)
 
         # Run manager installs off the UI thread to keep host apps responsive.
-        repo_url = str(row_info.get("manager_repo") or "").strip()
         if repo_url and self._start_custom_node_install_worker(row_info, repo_url, row, issue_row, button):
             return
         try:
