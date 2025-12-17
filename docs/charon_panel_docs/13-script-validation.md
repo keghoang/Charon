@@ -206,12 +206,20 @@ The validation dialog is intentionally read-only; actual fixes are deferred to t
 
 #### Validation Artifacts
 
-Every validation run now writes per-user artifacts beside the validated workflow (stored under %LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<relative_path>\.charon_cache\validation\):
+Every validation run writes per-user artifacts beside the validated workflow (stored under %LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<relative_path>\.charon_cache\validation\):
 
-- validation_result_raw.json captures the first validation payload exactly as ComfyUI returned it. This file is never deleted automatically, giving artists a canonical snapshot.
-- validation_resolve_log.json is an ordered list of resolution events (button clicks, auto-resolve copies, etc.) so support can review what changed post-validation.
+- validation_result_raw.json is the first payload captured from the browser-side validation pass. It keeps:
+  - `issues` array with `custom_nodes` and `models` entries.
+  - `custom_nodes.data.missing`: grouped by pack (`pack`, `repo`, `pack_meta`) with a `nodes` array containing `class_type` and `id`. Empty arrays are omitted.
+  - `models.data`: `models_root`, `model_paths` (relative to `models_root` when possible; absolute only when outside that root), `found`, and `missing`. Each missing model keeps `category`, `attempted_directories` (absolute), `name`, optional `url`, and `node_type`. The redundant `paths` mirror and duplicate `directory`/`attempted_categories` fields are removed.
+  - We intentionally dropped the `version` field to keep the payload lean.
+  - Full model paths stay available in `model_paths` so downstream tooling can still reconstruct search roots.
+- validation_resolve_status.json mirrors validation_result_raw.json but adds per-missing-item resolution state:
+  - Each missing custom node entry gets `resolve_status` (`not_started`|`failed`|`success`), `resolve_method` (empty until success, then e.g., `Installed from repo URL https://...`), and `resolve_failed` (empty unless failed, then a short reason).
+  - Each missing model entry gets the same trio, with resolve_method examples such as `Searched subfolders and found model under <full path>`, `Searched global repo, found and copied model to <full path>`, or `Downloaded model from repo URL <url>`.
+- validation_resolve_log.json remains the ordered list of resolution events (button clicks, auto-resolve copies, etc.) so support can review what changed post-validation.
 
-Both files live inside the local mirror introduced during validation/override consolidation and survive workflow overrides or subsequent validation runs.
+All artifacts live inside the local mirror introduced during validation/override consolidation and survive workflow overrides or subsequent validation runs.
 
 ### Custom Node & Model Resolution
 
