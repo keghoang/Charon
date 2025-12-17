@@ -678,7 +678,22 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.setSpacing(4)
         footer_layout.setVerticalSpacing(5)
 
-        # Left Column: GPU Label (Row 0) - Aligned Bottom to match GPU bars
+        # Row 0 Left: Resource Widget
+        self.resource_widget = ResourceWidget(parent)
+        footer_layout.addWidget(self.resource_widget, 0, 0, Qt.AlignLeft | Qt.AlignTop)
+
+        # Row 0 Right: Comfy Connection
+        self.comfy_connection_widget = ComfyConnectionWidget(parent)
+        self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
+        self.comfy_connection_widget.connection_status_changed.connect(
+            self.script_panel.update_comfy_connection_status
+        )
+        self.script_panel.update_comfy_connection_status(
+            self.comfy_connection_widget.is_connected()
+        )
+        footer_layout.addWidget(self.comfy_connection_widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
+        
+        # Row 1 Left: GPU Label
         self.gpu_label = QtWidgets.QLabel(parent)
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -689,28 +704,10 @@ class CharonWindow(QtWidgets.QWidget):
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
         
-        # GPU Label stays on Row 0 (Top Left)
-        footer_layout.addWidget(self.gpu_label, 0, 0, Qt.AlignLeft | Qt.AlignBottom)
-
-        # Note: Project label removed from footer (Row 1 Left is empty)
+        footer_layout.addWidget(self.gpu_label, 1, 0, Qt.AlignLeft | Qt.AlignTop)
 
         # Spacer Column (Row 0-1, Col 1)
         footer_layout.setColumnStretch(1, 1)
-
-        # Right Column: Resource Widget (Row 0)
-        self.resource_widget = ResourceWidget(parent)
-        footer_layout.addWidget(self.resource_widget, 0, 2, Qt.AlignRight | Qt.AlignTop)
-
-        # Right Column: Comfy Connection (Row 1)
-        self.comfy_connection_widget = ComfyConnectionWidget(parent)
-        self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
-        self.comfy_connection_widget.connection_status_changed.connect(
-            self.script_panel.update_comfy_connection_status
-        )
-        self.script_panel.update_comfy_connection_status(
-            self.comfy_connection_widget.is_connected()
-        )
-        footer_layout.addWidget(self.comfy_connection_widget, 1, 2, Qt.AlignRight | Qt.AlignVCenter)
         
         # Set the main footer layout reference to our grid layout
         self._footer_comfy_layout = footer_layout

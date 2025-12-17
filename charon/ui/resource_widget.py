@@ -71,7 +71,7 @@ class ResourceWidget(QWidget):
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setHorizontalSpacing(8)
         self.grid.setVerticalSpacing(2)
-        self.grid.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.grid.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         
         # Row 0: CPU and RAM
         self.cpu_bar = CompactResourceBar("CPU")
