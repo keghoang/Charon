@@ -154,12 +154,16 @@ try:
                 if isinstance(paths, (list, tuple, set)):
                     for path in paths:
                         if isinstance(path, str):
+                            if not os.path.isabs(path):
+                                path = os.path.join(comfy_dir, path)
                             norm = os.path.abspath(path)
                             if norm not in seen and os.path.isdir(norm):
                                 seen.add(norm)
                                 yield norm
         for path in _iter_folder_entries(category):
             if isinstance(path, str):
+                if not os.path.isabs(path):
+                    path = os.path.join(comfy_dir, path)
                 norm = os.path.abspath(path)
                 if norm not in seen and os.path.isdir(norm):
                     seen.add(norm)

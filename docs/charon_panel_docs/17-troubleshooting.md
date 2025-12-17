@@ -174,6 +174,24 @@ app = QApplication.instance() or QApplication([])
 3. Database location: `~/.charon/user_settings.db`
 4. Try deleting database to force recreation
 
+### ComfyUI Integration Issues
+
+#### Model Missing in Validation
+
+**Symptom:**
+Charon reports a model as "Missing" even though it exists in the ComfyUI models directory.
+
+**Causes:**
+1. **Incorrect ComfyUI Path:** Charon might be looking at a different ComfyUI installation.
+2. **Relative Path Resolution:** `folder_paths` in ComfyUI returning relative paths that resolve incorrectly.
+3. **Category Mismatch:** The model is in a custom folder not recognized by standard categories.
+
+**Solutions:**
+1. **Verify ComfyUI Path:** Check Settings -> Paths to ensure the correct ComfyUI root is selected.
+2. **Check `extra_model_paths.yaml`:** Ensure any custom paths in your ComfyUI configuration are correct and absolute if possible.
+3. **Update Charon:** A fix for relative path resolution was added in `charon.comfy_validation`.
+4. **Manual Override:** If persistent, use the "Auto Resolve" or manually specify the path if supported.
+
 ### Host-Specific Issues
 
 #### Maya 2022 Compatibility
