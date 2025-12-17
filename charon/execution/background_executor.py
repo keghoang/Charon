@@ -33,6 +33,69 @@ Set 'run_on_main: true' in .charon.json to use Qt widgets."""
     config = FallbackConfig()
 
 
+class ThreadLocalStdout:
+    """Thread-local stdout that routes to different outputs per thread"""
+    def __init__(self):
+        self._outputs = {}  # execution_id -> output_capture mapping
+        self._lock = threading.Lock()
+    
+    def register_thread(self, execution_id, output_capture):
+        """Register an output capture for the current thread"""
+        thread_id = threading.current_thread().ident
+        with self._lock:
+            self._outputs[thread_id] = (execution_id, output_capture)
+    
+    def unregister_thread(self):
+        """Unregister the current thread"""
+        thread_id = threading.current_thread().ident
+        with self._lock:
+            self._outputs.pop(thread_id, None)
+    
+    def write(self, text):
+        """Write to the appropriate output for the current thread"""
+        thread_id = threading.current_thread().ident
+        with self._lock:
+            if thread_id in self._outputs:
+                _, output_capture = self._outputs[thread_id]
+                output_capture.write(text)
+            else:
+                # Fallback to original stdout if we have it
+                if hasattr(BackgroundExecutor, '_original_stdout'):
+                    BackgroundExecutor._original_stdout.write(text)
+                else:
+                    sys.__stdout__.write(text)
+    
+    def flush(self):
+        pass
+
+
+class ThreadOutputCapture:
+    def __init__(self, execution_id: str, executor, original_stream, mirror_to_terminal: bool, buffer: list):
+        self.execution_id = execution_id
+        self.executor = executor
+        self.buffer = buffer
+        self.original_stream = original_stream
+        self.mirror_to_terminal = mirror_to_terminal
+        self._capturing = True
+    
+    def write(self, text: str):
+        if self._capturing:
+            # Always write to buffer for dialog
+            self.buffer.append(text)
+            # Queue output for processing on main thread
+            self.executor._output_queue.put((self.execution_id, text))
+        # Only write to original stream (terminal) if mirroring enabled
+        if self.mirror_to_terminal:
+            self.original_stream.write(text)
+    
+    def flush(self):
+        if self.mirror_to_terminal:
+            self.original_stream.flush()
+    
+    def stop_capture(self):
+        self._capturing = False
+
+
 class BackgroundExecutor(QtCore.QObject):
     """
     Executes scripts in background threads.
@@ -49,6 +112,9 @@ class BackgroundExecutor(QtCore.QObject):
     execution_cancelled = QtCore.Signal(str)  # execution_id
     progress_updated = QtCore.Signal(str, str)  # execution_id, progress_message
     output_updated = QtCore.Signal(str, str)  # execution_id, output_chunk
+
+    # Lock to prevent race conditions during global stream patching
+    _patch_lock = threading.Lock()
     
     def __init__(self, parent: Optional[QtCore.QObject] = None):
         super().__init__(parent)
@@ -178,86 +244,26 @@ class BackgroundExecutor(QtCore.QObject):
             # Always create output capture for dialog
             output_buffer = []
             
-            class ThreadLocalStdout:
-                """Thread-local stdout that routes to different outputs per thread"""
-                def __init__(self):
-                    self._outputs = {}  # execution_id -> output_capture mapping
-                    self._lock = threading.Lock()
-                
-                def register_thread(self, execution_id, output_capture):
-                    """Register an output capture for the current thread"""
-                    thread_id = threading.current_thread().ident
-                    with self._lock:
-                        self._outputs[thread_id] = (execution_id, output_capture)
-                
-                def unregister_thread(self):
-                    """Unregister the current thread"""
-                    thread_id = threading.current_thread().ident
-                    with self._lock:
-                        self._outputs.pop(thread_id, None)
-                
-                def write(self, text):
-                    """Write to the appropriate output for the current thread"""
-                    thread_id = threading.current_thread().ident
-                    with self._lock:
-                        if thread_id in self._outputs:
-                            _, output_capture = self._outputs[thread_id]
-                            output_capture.write(text)
-                        else:
-                            # Fallback to original stdout if we have it
-                            if hasattr(BackgroundExecutor, '_original_stdout'):
-                                BackgroundExecutor._original_stdout.write(text)
-                            else:
-                                sys.__stdout__.write(text)
-                
-                def flush(self):
-                    pass
-            
-            class ThreadOutputCapture:
-                def __init__(self, execution_id: str, executor, original_stream, mirror_to_terminal: bool):
-                    self.execution_id = execution_id
-                    self.executor = executor
-                    self.buffer = output_buffer
-                    self.original_stream = original_stream
-                    self.mirror_to_terminal = mirror_to_terminal
-                    self._capturing = True
-                
-                def write(self, text: str):
-                    if self._capturing:
-                        # Always write to buffer for dialog
-                        self.buffer.append(text)
-                        # Queue output for processing on main thread
-                        self.executor._output_queue.put((self.execution_id, text))
-                    # Only write to original stream (terminal) if mirroring enabled
-                    if self.mirror_to_terminal:
-                        self.original_stream.write(text)
-                
-                def flush(self):
-                    if self.mirror_to_terminal:
-                        self.original_stream.flush()
-                
-                def stop_capture(self):
-                    self._capturing = False
-            
             # Save original streams - use the saved Maya/Nuke redirected streams if available
             # This ensures mirroring works with Maya/Nuke script editors
             original_stdout = BackgroundExecutor._original_stdout if hasattr(BackgroundExecutor, '_original_stdout') else sys.stdout
             original_stderr = BackgroundExecutor._original_stderr if hasattr(BackgroundExecutor, '_original_stderr') else sys.stderr
             
             # Always set up output capture for dialog
-            stdout_capture = ThreadOutputCapture(execution_id, self, original_stdout, mirror_prints)
-            stderr_capture = ThreadOutputCapture(execution_id, self, original_stderr, mirror_prints)
+            stdout_capture = ThreadOutputCapture(execution_id, self, original_stdout, mirror_prints, output_buffer)
+            stderr_capture = ThreadOutputCapture(execution_id, self, original_stderr, mirror_prints, output_buffer)
             
-            # Get or create the thread-local stdout
-            if not hasattr(BackgroundExecutor, '_thread_local_stdout'):
-                BackgroundExecutor._thread_local_stdout = ThreadLocalStdout()
-                # Only save the original streams if they haven't been redirected yet
-                # This prevents us from saving an already-redirected stream
-                if not isinstance(sys.stdout, ThreadLocalStdout):
-                    BackgroundExecutor._original_stdout = sys.stdout
-                    BackgroundExecutor._original_stderr = sys.stderr
-                sys.stdout = BackgroundExecutor._thread_local_stdout
-                sys.stderr = BackgroundExecutor._thread_local_stdout
+            # Get or create the thread-local stdout (Atomically)
+            with BackgroundExecutor._patch_lock:
+                if not hasattr(BackgroundExecutor, '_thread_local_stdout'):
+                    BackgroundExecutor._thread_local_stdout = ThreadLocalStdout()
+                    # Only save the original streams if they haven't been redirected yet
+                    # This prevents us from saving an already-redirected stream
+                    if not isinstance(sys.stdout, ThreadLocalStdout):
+                        BackgroundExecutor._original_stdout = sys.stdout
+                        BackgroundExecutor._original_stderr = sys.stderr
+                    sys.stdout = BackgroundExecutor._thread_local_stdout
+                    sys.stderr = BackgroundExecutor._thread_local_stdout
             
             # Register this thread's output (use stdout_capture for both stdout and stderr)
             BackgroundExecutor._thread_local_stdout.register_thread(execution_id, stdout_capture)
@@ -451,15 +457,23 @@ Full traceback:
     
     def _process_queues(self):
         """Process queued output and completion updates from background threads"""
-        # Process output queue
+        # Process output queue - Batch updates to prevent UI freeze
+        output_batches = {}
+
         try:
-            while True:
-                # Get output from queue (non-blocking)
+            # Process up to 1000 items per tick to prevent UI freeze
+            for _ in range(1000):
                 execution_id, output = self._output_queue.get_nowait()
-                self.output_updated.emit(execution_id, output)
+                if execution_id not in output_batches:
+                    output_batches[execution_id] = []
+                output_batches[execution_id].append(output)
         except queue.Empty:
-            # No more items in output queue
             pass
+
+        # Emit combined updates
+        for execution_id, chunks in output_batches.items():
+            combined_output = "".join(chunks)
+            self.output_updated.emit(execution_id, combined_output)
         
         # Process completion queue
         try:
@@ -483,13 +497,14 @@ Full traceback:
     @classmethod
     def restore_original_streams(cls):
         """Restore the original stdout/stderr streams"""
-        if hasattr(cls, '_original_stdout') and hasattr(cls, '_original_stderr'):
-            sys.stdout = cls._original_stdout
-            sys.stderr = cls._original_stderr
-            # Clean up the attributes
-            if hasattr(cls, '_thread_local_stdout'):
-                delattr(cls, '_thread_local_stdout')
-            if hasattr(cls, '_original_stdout'):
-                delattr(cls, '_original_stdout')
-            if hasattr(cls, '_original_stderr'):
-                delattr(cls, '_original_stderr')
+        with cls._patch_lock:
+            if hasattr(cls, '_original_stdout') and hasattr(cls, '_original_stderr'):
+                sys.stdout = cls._original_stdout
+                sys.stderr = cls._original_stderr
+                # Clean up the attributes
+                if hasattr(cls, '_thread_local_stdout'):
+                    delattr(cls, '_thread_local_stdout')
+                if hasattr(cls, '_original_stdout'):
+                    delattr(cls, '_original_stdout')
+                if hasattr(cls, '_original_stderr'):
+                    delattr(cls, '_original_stderr')

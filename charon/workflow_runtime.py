@@ -29,6 +29,9 @@ __all__ = [
     "spawn_charon_node",
 ]
 
+# Cache for workflow metadata: folder_path -> (mtime_of_config, metadata)
+_WORKFLOW_CACHE: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
+
 
 def _resolve_root(base_path: Optional[str] = None) -> str:
     """Return the absolute workflow root and ensure it exists on disk."""
@@ -59,7 +62,23 @@ def discover_workflows(base_path: Optional[str] = None) -> List[Tuple[str, str, 
 
     for entry in entries:
         folder_path = os.path.join(root, entry)
-        metadata = get_charon_config(folder_path)
+        
+        # Cache optimization: Check .charon.json mtime to avoid re-parsing unchanged files
+        config_path = os.path.join(folder_path, '.charon.json')
+        current_mtime = 0.0
+        if os.path.exists(config_path):
+            try:
+                current_mtime = os.path.getmtime(config_path)
+            except OSError:
+                pass
+        
+        cached = _WORKFLOW_CACHE.get(folder_path)
+        if cached and cached[0] == current_mtime:
+            metadata = cached[1]
+        else:
+            metadata = get_charon_config(folder_path)
+            _WORKFLOW_CACHE[folder_path] = (current_mtime, metadata)
+            
         results.append((entry, folder_path, metadata))
 
     return results
@@ -260,5 +279,3 @@ except Exception as exc:
 else:
     recreate_missing_read_node()
 """
-
-

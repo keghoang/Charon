@@ -13,14 +13,16 @@ logger = logging.getLogger(__name__)
 class ComfyUIClient:
     """Client for interacting with ComfyUI API."""
 
-    def __init__(self, base_url="http://127.0.0.1:8188", timeout=300):
+    def __init__(self, base_url="http://127.0.0.1:8188", timeout=300, request_timeout=30, connect_timeout=5):
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout  # Total wait time for workflow completion
+        self.request_timeout = request_timeout  # Socket timeout for standard API calls
+        self.connect_timeout = connect_timeout  # Socket timeout for connection checks
 
     def test_connection(self):
         try:
             request = urllib.request.Request(f"{self.base_url}/system_stats")
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=self.connect_timeout) as response:
                 return response.getcode() == 200
         except Exception as exc:
             logger.error("Connection test failed: %s", exc)
@@ -29,7 +31,7 @@ class ComfyUIClient:
     def get_system_stats(self):
         try:
             request = urllib.request.Request(f"{self.base_url}/system_stats")
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -41,7 +43,8 @@ class ComfyUIClient:
         """Fetch object information (node definitions) from ComfyUI."""
         try:
             request = urllib.request.Request(f"{self.base_url}/object_info")
-            with urllib.request.urlopen(request, timeout=10) as response:
+            # This can be large, maybe allow longer timeout?
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -85,7 +88,8 @@ class ComfyUIClient:
                 },
             )
 
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # Uploads might take longer than standard requests
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     reply = json.loads(response.read().decode("utf-8"))
                     return reply.get("name") or reply.get("filename")
@@ -103,7 +107,7 @@ class ComfyUIClient:
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     reply = json.loads(response.read().decode("utf-8"))
                     return reply.get("prompt_id") or reply.get("id")
@@ -122,7 +126,7 @@ class ComfyUIClient:
     def get_history(self, prompt_id):
         try:
             request = urllib.request.Request(f"{self.base_url}/history/{prompt_id}")
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -134,7 +138,7 @@ class ComfyUIClient:
         """Return the complete history map from ComfyUI."""
         try:
             request = urllib.request.Request(f"{self.base_url}/history")
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -146,7 +150,7 @@ class ComfyUIClient:
         """Get current queue status and progress info."""
         try:
             request = urllib.request.Request(f"{self.base_url}/queue")
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=self.connect_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -220,7 +224,7 @@ class ComfyUIClient:
                 }
             )
             request = urllib.request.Request(f"{self.base_url}/view?{params}")
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     with open(output_path, "wb") as handle:
                         handle.write(response.read())
