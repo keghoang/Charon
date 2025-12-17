@@ -4,7 +4,7 @@
 - `main.py` is the Nuke entry point and bootstraps the unified `charon/` package.
 - `charon/` owns every runtime component:
   - `main.py`, `__init__.py` - launch helpers for embedding or standalone use.
-  - `workflow_runtime.py`, `workflow_pipeline.py`, `workflow_analysis.py`, `workflow_converter.py` - discovery, conversion, and prompt analysis utilities.
+  - `workflow_runtime.py`, `workflow_pipeline.py`, `workflow_analysis.py`, `workflow_browser_exporter.py` - discovery, conversion, prompt analysis, and the browser-based converter harness.
   - `processor.py`, `node_factory.py`, `scene_nodes_runtime.py` - CharonOp creation plus ComfyUI processing.
   - `paths.py`, `preferences.py`, `config.py` - filesystem and configuration single sources of truth.
   - `ui/` - PySide6 widgets for the production panel.
@@ -66,6 +66,7 @@
 - `paths.py` governs filesystem locations - extend it rather than hard-coding paths. Ensure the ComfyUI knob points to the portable install so `resolve_comfy_environment` finds `python_embeded`.
 - Dependencies must be installed into the ComfyUI bundle; `nodes.init_extra_nodes(init_custom_nodes=True)` expects a complete environment.
 - Preferences and caches persist under `%LOCALAPPDATA%\Charon\plugins\charon\`.
+- Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it reuses an existing ComfyUI on port 8188 when running and only launches a headless instance if the port is free.
 
 ## Consolidation Status (2025-10-24)
 The legacy `charon_core` package has been retired. All runtime code now lives in `charon/`.
