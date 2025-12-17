@@ -20,6 +20,7 @@ class TransferState:
     copied_bytes: int = 0
     percent: int = 0
     in_progress: bool = True
+    cancelled: bool = False
     error: Optional[str] = None
     resolve_method: Optional[str] = None
     workflow_value: Optional[str] = None
@@ -119,6 +120,12 @@ class ModelTransferManager:
                     pass
         self._transfers.clear()
 
+    def cancel_all(self) -> None:
+        """Cancel all active transfers without shutting down the manager."""
+        for state in list(self._transfers.values()):
+            if state.in_progress:
+                state.cancelled = True
+
     # ------------------------------------------------------------------ Internals
     def _key(self, destination: str) -> str:
         try:
@@ -214,7 +221,7 @@ class ModelTransferManager:
             with open(state.source, "rb") as src, open(temp_path, "wb") as dest_fp:
                 while True:
                     chunk = src.read(chunk_size)
-                    if self._shutdown:
+                    if self._shutdown or state.cancelled:
                         state.in_progress = False
                         state.error = "Transfer cancelled"
                         self._emit(state)
@@ -260,7 +267,7 @@ class ModelTransferManager:
                 with open(temp_path, "wb") as dest_fp:
                     while True:
                         chunk = response.read(chunk_size)
-                        if self._shutdown:
+                        if self._shutdown or state.cancelled:
                             state.in_progress = False
                             state.error = "Transfer cancelled"
                             self._emit(state)

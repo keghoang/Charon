@@ -1925,7 +1925,6 @@ QPushButton#NewWorkflowButton:pressed {{
     
     def _on_folders_loaded(self, folders):
         """Handle loaded folders from async loader."""
-        print(f"[DEBUG] _on_folders_loaded called with {len(folders)} folders")
         user_slug = get_current_user_slug()
         user_dir_exists = False
         if user_slug and self.current_base and os.path.isdir(self.current_base):

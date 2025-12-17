@@ -225,9 +225,9 @@ class ModelUploadDialog(QtWidgets.QDialog):
         # Assuming models/ sibling to workflows/
         repo_root = Path(WORKFLOW_REPOSITORY_ROOT)
         if repo_root.name.lower() == "workflows":
-            self.global_models_root = repo_root.parent / "models"
+            self.global_models_root = repo_root.parent / "shared_models"
         else:
-            self.global_models_root = repo_root / "models"
+            self.global_models_root = repo_root / "shared_models"
 
         self.models_to_upload: List[ModelRow] = []
         self._setup_ui()
@@ -361,6 +361,9 @@ class ModelUploadDialog(QtWidgets.QDialog):
             self.btn_cancel.setText("Close")
 
     def closeEvent(self, event) -> None:
+        # Cancel all active transfers
+        transfer_manager.cancel_all()
+        
         # Unsubscribe from everything
         for row in self.models_to_upload:
             if row.dest_path:
