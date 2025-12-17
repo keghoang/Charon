@@ -693,6 +693,8 @@ class CharonWindow(QtWidgets.QWidget):
 
         # Row 1 Left: Resource Widget
         self.resource_widget = ResourceWidget(parent)
+        # Add slight left margin to resource widget to align bars with text above
+        self.resource_widget.setContentsMargins(0, 0, 0, 0)
         footer_layout.addWidget(self.resource_widget, 1, 0, Qt.AlignLeft | Qt.AlignTop)
 
         # Row 1 Right: Comfy Connection
