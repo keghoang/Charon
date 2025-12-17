@@ -59,7 +59,7 @@ For error messages:
 ```python
 system_error(f"Error creating directory {path}: {str(e)}")
 system_error("Error checking bookmarks: File not found")
-system_error("Error in register_hotkeys: Invalid key combination")
+system_error("Error refreshing keybinds: Invalid key combination")
 ```
 
 ### Special Cases

@@ -84,7 +84,6 @@ class ScriptPanel(QtWidgets.QWidget):
     script_run = QtCore.Signal(str)
     navigate_left = QtCore.Signal()
     bookmark_requested = QtCore.Signal(str)  # Signal for bookmark requests
-    assign_hotkey_requested = QtCore.Signal(str)
     create_metadata_requested = QtCore.Signal(str)  # Signal for creating metadata
     edit_metadata_requested = QtCore.Signal(str)  # Signal for editing metadata
     manage_tags_requested = QtCore.Signal(str)  # Signal for managing tags
@@ -239,7 +238,6 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.deselected.connect(self.on_script_deselected)
         self.script_view.navigateLeft.connect(self.navigate_left)
         self.script_view.bookmarkRequested.connect(self.bookmark_requested)
-        self.script_view.assignHotkeyRequested.connect(self.assign_hotkey_requested)
         
         # Connect the script_run signal from the table view
         self.script_view.script_run.connect(self._handle_script_run_request)
@@ -410,21 +408,15 @@ class ScriptPanel(QtWidgets.QWidget):
         # Also update the metadata panel's host
         self.metadata_panel.host = host
         # Clear cache when host changes
-        if hasattr(self, '_cached_hotkeys'):
-            del self._cached_hotkeys
         if hasattr(self, '_cached_bookmarks'):
             del self._cached_bookmarks
     
     def _refresh_user_data_cache(self):
-        """Refresh cached user data (hotkeys and bookmarks) from database"""
-        # Cache these expensive database operations
-        self._cached_hotkeys = user_settings_db.get_all_hotkeys(self.host or "None")
+        """Refresh cached user data (bookmarks) from database."""
         self._cached_bookmarks = set(user_settings_db.get_bookmarks())
     
     def invalidate_user_data_cache(self):
-        """Invalidate the cached user data (call when bookmarks/hotkeys change)"""
-        if hasattr(self, '_cached_hotkeys'):
-            del self._cached_hotkeys
+        """Invalidate the cached user data (call when bookmarks change)"""
         if hasattr(self, '_cached_bookmarks'):
             del self._cached_bookmarks
 
@@ -547,64 +539,20 @@ class ScriptPanel(QtWidgets.QWidget):
         if not self._loading:
             return
 
-        # Cache hotkeys and bookmarks to avoid repeated DB queries
-        if not hasattr(self, '_cached_hotkeys') or not hasattr(self, '_cached_bookmarks'):
+        # Cache bookmarks to avoid repeated DB queries
+        if not hasattr(self, '_cached_bookmarks'):
             self._refresh_user_data_cache()
-        
-        # Use cached data
-        all_hotkeys = self._cached_hotkeys
+
         bookmarked_scripts = self._cached_bookmarks
-        
-        # Filter hotkeys to only include those within the current base path
-        if hasattr(self, 'parent_folder') and self.parent_folder:
-            # Get the base path from parent folder (go up one level from folder path)
-            base_path = os.path.dirname(self.parent_folder)
-            # Normalize base path for comparison
-            normalized_base = os.path.normpath(base_path).lower()
-            # Filter hotkeys to only include scripts in current base
-            filtered_hotkeys = {}
-            for hotkey, script_path in all_hotkeys.items():
-                # Normalize the script path for comparison
-                normalized_script = os.path.normpath(script_path).lower()
-                if normalized_script.startswith(normalized_base):
-                    filtered_hotkeys[hotkey] = script_path
-        else:
-            filtered_hotkeys = all_hotkeys
-            
-        # Reverse the mapping to get script_path -> hotkey
-        # Also normalize the paths in the mapping for consistent lookups
-        hotkey_by_script = {}
-        for hotkey, script_path in filtered_hotkeys.items():
-            # Store both original and normalized paths for compatibility
-            hotkey_by_script[script_path] = hotkey
-            normalized = os.path.normpath(script_path)
-            if normalized != script_path:
-                hotkey_by_script[normalized] = hotkey
-        
-        # Debug logging
+
         from ..charon_logger import system_debug
         system_debug(f"Script panel: Processing {len(scripts)} scripts")
-        system_debug(f"Script panel: Found {len(hotkey_by_script)} hotkeys after filtering")
-        
+        system_debug(f"Script panel: Applying bookmark flags to {len(bookmarked_scripts)} entries")
+
         for script in scripts:
             # Normalize script path for comparisons
             normalized_script_path = os.path.normpath(script.path)
             script.is_bookmarked = normalized_script_path in bookmarked_scripts
-            
-            # Still set the hotkey for display purposes (but not for sorting)
-            if normalized_script_path in hotkey_by_script:
-                script.hotkey = hotkey_by_script[normalized_script_path]
-                system_debug(f"Script panel: Set hotkey '{script.hotkey}' for script: {script.path}")
-            elif script.path in hotkey_by_script:
-                # Try original path as fallback
-                script.hotkey = hotkey_by_script[script.path]
-                system_debug(f"Script panel: Set hotkey '{script.hotkey}' for script: {script.path} (original path)")
-            else:
-                # Debug why hotkey not found
-                if len(all_hotkeys) > 0:
-                    system_debug(f"Script panel: No hotkey found for script: {script.path}")
-                    system_debug(f"Script panel: Normalized path: {normalized_script_path}")
-                    system_debug(f"Script panel: Available paths in hotkeys: {list(hotkey_by_script.keys())[:3]}...")
 
         # Store all scripts before filtering
         self._all_scripts = scripts
@@ -665,47 +613,14 @@ class ScriptPanel(QtWidgets.QWidget):
         # In practice, this method signature should be updated to take a folder path
         # But for now, we'll work with the existing pattern
         
-        # Get all hotkey assignments
-        all_hotkeys = user_settings_db.get_all_hotkeys(self.host or "None")
-        
-        # Filter hotkeys to only include those within the current base path
-        if hasattr(self, 'parent_folder') and self.parent_folder:
-            # Get the base path from parent folder (go up one level from folder path)
-            base_path = os.path.dirname(self.parent_folder)
-            # Normalize base path for comparison
-            normalized_base = os.path.normpath(base_path).lower()
-            # Filter hotkeys to only include scripts in current base
-            filtered_hotkeys = {}
-            for hotkey, script_path in all_hotkeys.items():
-                # Normalize the script path for comparison
-                normalized_script = os.path.normpath(script_path).lower()
-                if normalized_script.startswith(normalized_base):
-                    filtered_hotkeys[hotkey] = script_path
-        else:
-            filtered_hotkeys = all_hotkeys
-            
-        # Reverse the mapping to get script_path -> hotkey
-        # Also normalize the paths in the mapping for consistent lookups
-        hotkey_by_script = {}
-        for hotkey, script_path in filtered_hotkeys.items():
-            # Store both original and normalized paths for compatibility
-            hotkey_by_script[script_path] = hotkey
-            normalized = os.path.normpath(script_path)
-            if normalized != script_path:
-                hotkey_by_script[normalized] = hotkey
-        
         # Get all bookmarked scripts for current user
         bookmarked_scripts = set(user_settings_db.get_bookmarks())
-        
+
         # Set flags on each script
         for script in scripts:
             # Normalize script path for bookmark comparison
             normalized_script_path = os.path.normpath(script.path)
             script.is_bookmarked = normalized_script_path in bookmarked_scripts
-            
-            # Still set the hotkey for display purposes (but not for sorting)
-            if script.path in hotkey_by_script:
-                script.hotkey = hotkey_by_script[script.path]
         
         # Store all scripts before filtering
         self._all_scripts = scripts

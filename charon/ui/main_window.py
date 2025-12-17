@@ -1,4 +1,4 @@
-from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, UserRole, UniqueConnection, WindowModal, exec_dialog
+from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, UserRole, UniqueConnection, exec_dialog
 from typing import Optional, Tuple
 import os, sys, time
 from pathlib import Path
@@ -143,9 +143,6 @@ class CharonWindow(QtWidgets.QWidget):
         self.setup_ui()
         self._apply_main_background()
 
-        # Clean up missing scripts
-        self._cleanup_missing_script_hotkeys(show_dialog=True)
-
         # Clean up missing bookmarks
         missing_bookmarks = user_settings_db.cleanup_missing_bookmarks()
         if missing_bookmarks:
@@ -155,9 +152,6 @@ class CharonWindow(QtWidgets.QWidget):
                 "Removed Bookmarks",
                 f"The following bookmarked workflows were not found and have been removed:\n\n{bookmark_list}"
             )
-
-        # Register hotkeys
-        self.register_hotkeys()
 
         # Set window properties
         self.setWindowTitle(self.WINDOW_TITLE_BASE)
@@ -261,9 +255,8 @@ class CharonWindow(QtWidgets.QWidget):
         # Make sure folder panel is refreshed
         self._pending_folder_selection = self.folder_panel.get_selected_folder()
         self.refresh_folder_panel()
-        
-        # Register hotkeys again
-        self.register_hotkeys()
+        if hasattr(self, "keybind_manager"):
+            self.keybind_manager.refresh_keybinds()
     
     def _refresh_everything(self):
         """Refresh everything - folders and all caches."""
@@ -313,28 +306,6 @@ class CharonWindow(QtWidgets.QWidget):
                 f"Scheduled folder re-selection after refresh: {current_folder}"
             )
     
-    def _cleanup_missing_script_hotkeys(self, show_dialog=False):
-        """
-        Clean up hotkeys for scripts that no longer exist.
-        
-        Args:
-            show_dialog: If True, print the list of removed scripts
-        """
-        system_debug(f"Cleaning up missing script hotkeys for host={self.host}, show_dialog={show_dialog}")
-        missing_scripts = user_settings_db.cleanup_missing_scripts(self.host)
-        system_debug(f"Found {len(missing_scripts)} missing scripts: {missing_scripts}")
-        
-        if missing_scripts:
-            if show_dialog:
-                # Print to console instead of showing dialog
-                script_names = [os.path.basename(path) for path in missing_scripts]
-                system_info(f"Removed hotkeys for missing scripts:\n  {', '.join(script_names)}")
-            else:
-                # On refresh, also show script names
-                script_names = [os.path.basename(path) for path in missing_scripts]
-                system_info(f"Removed hotkeys for {len(missing_scripts)} missing scripts: {', '.join(script_names)}")
-        return missing_scripts
-
     def _list_active_charonops(self):
         try:
             import nuke  # type: ignore
@@ -579,8 +550,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.script_panel.set_host(self.host)
         self.script_panel.script_deselected.connect(self.on_script_deselected)
         self.script_panel.bookmark_requested.connect(self.on_bookmark_requested)
-        self.script_panel.assign_hotkey_requested.connect(self.on_assign_hotkey_requested)
-        
+
         # Get reference to the metadata panel now that it's inside script panel
         self.metadata_panel = self.script_panel.metadata_panel
         
@@ -946,28 +916,22 @@ QPushButton#NewWorkflowButton:pressed {{
         label.setText(f"Project not Found, saving outputs to {destination}")
         label.setToolTip(destination)
     
-    def _on_keybind_triggered(self, keybind_type: str, keybind_id: str):
+    def _on_keybind_triggered(self, action: str):
         """Handle keybind trigger from keybind manager."""
-        if keybind_type == 'local':
-            # Handle tiny mode toggle
-            if keybind_id == 'tiny_mode':
-                # Toggle is already handled in keybind manager, we just need to switch UI
-                if self.keybind_manager.tiny_mode_active:
-                    self.enter_tiny_mode()
-                else:
-                    self.exit_tiny_mode()
-                return
-            
-            # Handle other local keybinds
-            handler = self.local_keybind_handlers.get(keybind_id)
-            if handler:
-                handler()
-        elif keybind_type == 'global':
-            # Handle global keybind (run script)
-            self._run_script_by_path(keybind_id)
+        # Handle tiny mode toggle
+        if action == 'tiny_mode':
+            if self.keybind_manager.tiny_mode_active:
+                self.enter_tiny_mode()
+            else:
+                self.exit_tiny_mode()
+            return
+
+        handler = self.local_keybind_handlers.get(action)
+        if handler:
+            handler()
     
     def _run_script_by_path(self, script_path: str):
-        """Run a script by its path (for global keybinds) - delegates to execute_script."""
+        """Run a script by its path - delegates to execute_script."""
         self.execute_script(script_path)
     
     # -------------------------------------------------
@@ -1472,15 +1436,12 @@ QPushButton#NewWorkflowButton:pressed {{
 
     def on_metadata_changed(self):
         """
-        Handles all UI refresh logic when a script's metadata or hotkey changes.
+        Handles all UI refresh logic when a script's metadata changes.
         This is the authoritative refresh function.
         """
         # Mark quick-search index dirty and trigger a rebuild
         self._start_async_indexing()
-        
-        # Re-register all hotkeys from the database. This picks up any changes.
-        self.register_hotkeys_silently()
-        
+
         # Perform a soft refresh to update all UI elements, including folder visibility.
         self._perform_soft_refresh(refresh_folders=True)
     
@@ -1661,66 +1622,17 @@ QPushButton#NewWorkflowButton:pressed {{
         else:  # Linux
             subprocess.run(["xdg-open", target_path])
 
-    def register_hotkeys(self):
-        """Register hotkeys and update UI"""
-        try:
-            # Use the new keybind manager to refresh all keybinds
-            self.keybind_manager.refresh_keybinds()
-            
-            # Update UI if needed
-            if (hasattr(self, 'metadata_panel') and 
-                hasattr(self.metadata_panel, 'script_folder') and 
-                self.metadata_panel.script_folder and 
-                os.path.exists(self.metadata_panel.script_folder)):
-                
-                self.metadata_panel.update_metadata(self.metadata_panel.script_folder)
-            
-            # Process events to ensure UI updates
-            QtWidgets.QApplication.processEvents()
-            
-        except Exception as e:
-            # Log the error but don't show a popup
-            system_error(f"Error in register_hotkeys: {str(e)}")
-
-    def run_script_by_hotkey(self, script_folder):
-        """Execute a script by hotkey - now delegates to _run_script_by_path."""
-        # This method is kept for compatibility
-        self._run_script_by_path(script_folder)
-
-    def on_hotkey_changed(self, hotkey, script_path):
-        """
-        Handle a hotkey being changed. Use incremental update for better performance.
-        """
-        from ..charon_logger import system_debug
-        system_debug(f"Hotkey changed for {script_path}: {hotkey}")
-        
-        # Update just this script in the model
-        if hasattr(self.script_panel, 'script_model') and self.script_panel.script_model:
-            updated = self.script_panel.script_model.update_single_script(script_path)
-            if updated:
-                # Update quick search index incrementally
-                self._update_script_in_index(script_path)
-                return
-        
-        # Fallback to full refresh if incremental update failed
-        self.on_metadata_changed()
-
-    def register_hotkeys_silently(self):
-        """Register hotkeys without updating the UI - now delegates to keybind manager"""
-        # This method is kept for compatibility but now uses the keybind manager
-        self.keybind_manager.refresh_keybinds()
-
     def _perform_soft_refresh(self, refresh_folders=False):
         """
         Performs a soft refresh of the UI, preserving the user's selection.
 
-        This is used after an action (like bookmarking or setting a hotkey)
+        This is used after an action (like bookmarking)
         that requires the UI to update but should not disrupt the user's flow.
 
         Args:
             refresh_folders (bool): If True, the folder list will also be
                                     refreshed. This is needed when an action
-                                    might add or remove the 'Bookmarks' or 'Hotkeys' folder.
+                                    might add or remove the 'Bookmarks' folder.
         """
         # 1. Preserve State
         current_folder_name = self.folder_panel.get_selected_folder()
@@ -1799,8 +1711,6 @@ QPushButton#NewWorkflowButton:pressed {{
         # Use Qt.UniqueConnection to prevent duplicate connections
         if current_folder_name == "Bookmarks" and hasattr(self, 'bookmark_loader'):
             self.bookmark_loader.scripts_loaded.connect(_after_scripts_loaded, QtCore.Qt.UniqueConnection)
-        elif current_folder_name == "Hotkeys" and hasattr(self, 'hotkey_loader'):
-            self.hotkey_loader.scripts_loaded.connect(_after_scripts_loaded, QtCore.Qt.UniqueConnection)
         elif current_folder_name:
             self.script_panel.folder_loader.scripts_loaded.connect(_after_scripts_loaded, QtCore.Qt.UniqueConnection)
 
@@ -1876,43 +1786,6 @@ QPushButton#NewWorkflowButton:pressed {{
         has_entry, _ = ScriptValidator.has_valid_entry(script_path, metadata)
         return has_entry
     
-    def on_assign_hotkey_requested(self, script_path):
-        """Handle hotkey assignment from the right-click menu."""
-        if not script_path:
-            return
-
-        # Get current hotkey for this script
-        current_hotkey = user_settings_db.get_hotkey_for_script(script_path, self.host)
-        
-        if current_hotkey:
-            # If a hotkey exists, remove it
-            self.keybind_manager.remove_global_keybind(script_path)
-            self.on_hotkey_changed("", script_path) # Notify system of change
-        else:
-            # If no hotkey, open dialog to capture one
-            from .dialogs import HotkeyDialog
-            dialog = HotkeyDialog(self)
-            dialog.resize(300, 100)
-            dialog.setWindowModality(WindowModal)
-            if exec_dialog(dialog) == QtWidgets.QDialog.Accepted:
-                new_hotkey = dialog.hotkey
-                dialog.deleteLater()
-                # Use keybind manager to add the global keybind
-                if self.keybind_manager.add_global_keybind(script_path, new_hotkey):
-                    self.on_hotkey_changed(new_hotkey, script_path)
-            else:
-                dialog.deleteLater()
-
-    def _process_new_hotkey(self, script_path, new_hotkey, current_sw):
-        """Process a new hotkey assignment - now handled by keybind manager."""
-        # This method is kept for compatibility but functionality moved to keybind_manager
-        pass
-    
-    def _check_hotkey_conflicts(self, hotkey, script_path, current_sw):
-        """Check if hotkey is already taken - now handled by keybind manager."""
-        # This method is kept for compatibility but functionality moved to keybind_manager
-        return False
-
     def on_bookmark_requested(self, script_path):
         """Handle bookmark request from right-click context menu"""
         from ..settings import user_settings_db
@@ -2196,7 +2069,7 @@ QPushButton#NewWorkflowButton:pressed {{
                 widget.close()
                 return
         
-        # In command mode, quick search is always available (global hotkey)
+        # In tiny mode, quick search is always available
         # In normal mode, only if focused widget is part of Charon
         if not self.keybind_manager.tiny_mode_active:
             focused_widget = QtWidgets.QApplication.focusWidget()
@@ -2555,14 +2428,6 @@ Cache Stats:
                 self._debug_user_action("No selection; triggering full refresh")
                 self._refresh_everything()
             
-            # Clean up hotkeys for missing scripts (don't show dialog on refresh)
-            self._cleanup_missing_script_hotkeys(show_dialog=False)
-            self._debug_user_action("Cleaned up missing script hotkeys")
-            
-            # Refresh hotkeys
-            self.register_hotkeys()
-            self._debug_user_action("Registered hotkeys after refresh")
-            
             # Re-index quick search
             self._start_async_indexing()
             self._debug_user_action("Started async quick-search reindex")
@@ -2814,25 +2679,19 @@ Cache Stats:
             exec_dialog(dialog)
             
     def _prefetch_user_data(self):
-        """Prefetch hotkeys and bookmarks from database at startup."""
+        """Prefetch bookmarks from database at startup."""
         try:
             from ..settings import user_settings_db
             # These queries will be slow the first time but cached after
-            system_debug("Prefetching user data (hotkeys and bookmarks)")
-            
-            # Prefetch all hotkeys for current host
-            all_hotkeys = user_settings_db.get_all_hotkeys(self.host or "None")
-            system_debug(f"Prefetched {len(all_hotkeys)} hotkeys")
-            
-            # Prefetch all bookmarks
+            system_debug("Prefetching user bookmarks")
+
             all_bookmarks = user_settings_db.get_bookmarks()
             system_debug(f"Prefetched {len(all_bookmarks)} bookmarks")
-            
+
             # Store in script panel's cache so it doesn't need to query again
             if hasattr(self.script_panel, '_refresh_user_data_cache'):
-                self.script_panel._cached_hotkeys = all_hotkeys
                 self.script_panel._cached_bookmarks = set(all_bookmarks)
-                
+
         except Exception as e:
             system_error(f"Error prefetching user data: {e}")
     
@@ -2845,7 +2704,7 @@ Cache Stats:
             cache_manager.queue_all_folders_prefetch(self.current_base, self.host)
             system_debug("Started background prefetching of all folders")
         
-        # Prefetch hotkeys and bookmarks at startup
+        # Prefetch bookmarks at startup
         self._prefetch_user_data()
         
         # Check if user has bookmarks and set a flag

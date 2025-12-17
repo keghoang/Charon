@@ -136,7 +136,7 @@ def is_compatible_with_host(metadata, host):
 ### Visual Feedback
 - Incompatible items shown with reduced opacity
 - Color coding based on software compatibility
-- Special folders (Bookmarks, Hotkeys) for cross-host organization
+- Special folders (Bookmarks) for cross-host organization
 
 ## Configuration
 

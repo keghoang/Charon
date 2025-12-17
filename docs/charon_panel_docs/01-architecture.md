@@ -32,7 +32,7 @@
 - Dialogs: [ui/dialogs.py](md:ui/dialogs.py) - Metadata, readme, hotkey dialogs
 - Quick search: [ui/quick_search.py](md:ui/quick_search.py) - Global script search
 - Tag system: [ui/tag_bar.py](md:ui/tag_bar.py), [ui/tag_manager_dialog.py](md:ui/tag_manager_dialog.py) - Tag filtering and management
-- Keybind system: [ui/keybinds/](md:ui/keybinds/) - Local and global hotkey management
+- Keybind system: [ui/keybinds/](md:ui/keybinds/) - Local shortcut management
 
 ## Key Design Patterns
 

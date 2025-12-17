@@ -110,9 +110,8 @@ app = QApplication.instance() or QApplication([])
 
 **Checklist:**
 1. Check Settings -> Charon Keybinds -> Is it enabled?
-2. Check Settings -> Global Keybinds -> Is there a conflict?
-3. For local keybinds: Is Charon window focused?
-4. For global keybinds: Does the script still exist at that path?
+2. Is Charon window focused?
+3. Did you reassign the shortcut in Settings?
 
 #### Keybind Interferes with Host Software
 

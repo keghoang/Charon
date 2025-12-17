@@ -1,30 +1,17 @@
-from .qt_compat import QtCore, QtGui, UserRole, DisplayRole, ForegroundRole, TextAlignmentRole, AlignCenter, Horizontal
-from .qt_compat import (
-    QtCore,
-    QtGui,
-    UserRole,
-    DisplayRole,
-    ForegroundRole,
-    TextAlignmentRole,
-    AlignCenter,
-    Horizontal,
-    FontRole,
-)
-from .workflow_model import ScriptItem, BaseScriptLoader
+from .qt_compat import QtCore, QtGui, UserRole, DisplayRole, ForegroundRole, Horizontal
+from .workflow_model import ScriptItem
 from .script_validator import ScriptValidator
-from .settings import user_settings_db
 import os
 import time
 
 class ScriptTableModel(QtCore.QAbstractTableModel):
-    """Table model for displaying workflows with columns: Name, Hotkey, Run"""
+    """Table model for displaying workflows with columns: Name, Status, Run"""
     
     # Column indices
     COL_NAME = 0
-    COL_HOTKEY = 1
-    COL_VALIDATE = 2
-    COL_RUN = 3
-    COLUMN_COUNT = 4
+    COL_VALIDATE = 1
+    COL_RUN = 2
+    COLUMN_COUNT = 3
     
     # Custom roles
     ScriptRole = UserRole + 1
@@ -88,15 +75,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 
                 # Update the script's metadata
                 script.metadata = new_metadata
-                
-                # Refresh hotkey data from database
-                hotkey = user_settings_db.get_hotkey_for_script(script_path, self.host)
-                if hotkey:
-                    script.has_hotkey = True
-                    script.hotkey = hotkey
-                else:
-                    script.has_hotkey = False
-                    script.hotkey = None
                 
                 # Preserve bookmark status (this doesn't change with metadata)
                 old_is_bookmarked = getattr(script, 'is_bookmarked', False)
@@ -177,17 +155,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if getattr(script, 'is_bookmarked', False):
                     prefix += "★ "
                 
-                # Add hotkey emoji if has hotkey (but not showing specific key)
-                if getattr(script, 'has_hotkey', False) and not hasattr(script, 'hotkey'):
-                    prefix += "▶ "
-                
                 return f"{prefix}{script.name}"
-                    
-            elif col == self.COL_HOTKEY:
-                # Show the specific hotkey if available
-                if hasattr(script, 'hotkey') and script.hotkey:
-                    return script.hotkey
-                return ""
             
             elif col == self.COL_VALIDATE:
                 state = self._get_validation_state_for_script(script)
@@ -235,10 +203,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             if col == self.COL_VALIDATE:
                 return QtGui.QBrush(QtGui.QColor("#c2c7d1"))
             
-        elif role == TextAlignmentRole:
-            if col == self.COL_HOTKEY:
-                return AlignCenter
-                
         # Custom roles for accessing script data
         elif role == self.ScriptRole:
             return script
@@ -272,8 +236,6 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         if orientation == Horizontal and role == DisplayRole:
             if section == self.COL_NAME:
                 return "Workflow"
-            elif section == self.COL_HOTKEY:
-                return "Hotkey"
             elif section == self.COL_VALIDATE:
                 return "Status"
             elif section == self.COL_RUN:

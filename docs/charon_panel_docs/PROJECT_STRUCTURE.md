@@ -91,9 +91,7 @@ ui/
 `-- keybinds/                     # Keybind system
     |-- __init__.py
     |-- keybind_manager.py        # Keybind coordinator
-    |-- global_handler.py         # Global hotkey handling
     |-- local_handler.py          # Local UI shortcuts
-    |-- conflict_resolver.py      # Conflict dialogs
     `-- settings_ui.py            # Keybind settings dialog
 ```
 

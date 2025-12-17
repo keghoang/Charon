@@ -17,7 +17,6 @@ class ScriptTableView(QtWidgets.QTableView):
     deselected = QtCore.Signal()
     navigateLeft = QtCore.Signal()
     bookmarkRequested = QtCore.Signal(str)
-    assignHotkeyRequested = QtCore.Signal(str)
     createMetadataRequested = QtCore.Signal(str)
     editMetadataRequested = QtCore.Signal(str)
     manageTagsRequested = QtCore.Signal(str)
@@ -141,7 +140,6 @@ class ScriptTableView(QtWidgets.QTableView):
         if model:
             # Configure column widths
             self.setColumnWidth(ScriptTableModel.COL_NAME, 300)  # Name column
-            self.setColumnWidth(ScriptTableModel.COL_HOTKEY, 80)  # Hotkey column
             self.setColumnWidth(ScriptTableModel.COL_VALIDATE, 140)  # Status column
             self.setColumnWidth(ScriptTableModel.COL_RUN, 100)  # Actions button column
             
@@ -392,26 +390,6 @@ class ScriptTableView(QtWidgets.QTableView):
             create_metadata_action = menu.addAction("Create Metadata")
             create_metadata_action.triggered.connect(lambda: self.createMetadataRequested.emit(script_path))
             
-        menu.addSeparator()
-        
-        # Hotkey action
-        script_sw = self.host if self.host and str(self.host).lower() != "none" else "nuke"
-        # Use normalized path for hotkey lookup
-        current_hotkey = user_settings_db.get_hotkey_for_script(normalized_path, script_sw)
-
-        if current_hotkey:
-            hotkey_action = menu.addAction(f"? Remove Hotkey ({current_hotkey})")
-            hotkey_action.setEnabled(True)
-        else:
-            hotkey_action = menu.addAction("? Assign Hotkey")
-            from ..script_validator import ScriptValidator
-            has_valid_entry, _ = ScriptValidator.has_valid_entry(script.path, script.metadata)
-            hotkey_action.setEnabled(has_valid_entry)
-            if not has_valid_entry:
-                hotkey_action.setToolTip("Workflow must have a valid entry file (main.py, main.mel, etc.)")
-
-        hotkey_action.triggered.connect(lambda: self.assignHotkeyRequested.emit(script_path))
-        
         exec_menu(menu, event.globalPos())
     
     def _showEmptySpaceMenu(self, event):

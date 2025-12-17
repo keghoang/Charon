@@ -19,20 +19,12 @@ class ScriptItem:
         return self.metadata is not None
     
     def display_text(self):
-        # Build prefix with bookmark and hotkey emojis
+        # Build prefix with bookmark indicator
         prefix = ""
-        
-        # Add specific hotkey first if available (from HotkeyLoader)
-        if hasattr(self, 'hotkey') and self.hotkey:
-            prefix += f"[{self.hotkey}] "
         
         # Add bookmark emoji if bookmarked
         if getattr(self, 'is_bookmarked', False):
             prefix += "★ "
-        
-        # Add hotkey emoji if has hotkey
-        if getattr(self, 'has_hotkey', False):
-            prefix += "▶ "
         
         # Compose display name with any prefixes
         return f"{prefix}{self.name}"
@@ -453,16 +445,6 @@ class ScriptListModel(QtCore.QAbstractListModel):
                 
                 # Update metadata
                 script.metadata = new_metadata
-                
-                # Refresh hotkey data from database
-                from .settings import user_settings_db
-                hotkey = user_settings_db.get_hotkey_for_script(script_path, self.host)
-                if hotkey:
-                    script.has_hotkey = True
-                    script.hotkey = hotkey
-                else:
-                    script.has_hotkey = False
-                    script.hotkey = None
                 
                 # Preserve properties that shouldn't change with metadata
                 old_is_bookmarked = getattr(script, 'is_bookmarked', False)

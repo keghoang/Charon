@@ -101,7 +101,6 @@ class ScriptItem:
         self.metadata = metadata
         self.host = host
         self.is_bookmarked = False
-        self.has_hotkey = False
 ```
 
 ### Qt Model Implementation

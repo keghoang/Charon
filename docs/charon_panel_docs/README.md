@@ -30,7 +30,7 @@ This directory contains comprehensive architecture and design documentation for 
 
 ### Features and Extensions (06-11)
 - **06-script-executors.md** - Script type handlers (Python, MEL, extensible system)
-- **07-keybind-architecture.md** - Keybind system with local/global separation and cleanup
+- **07-keybind-architecture.md** - Keybind system (local shortcuts, tiny mode context)
 - **08-qt-output-capture.md** - WARNING: Qt event handler output capture implementation
 - **09-logging-system.md** - System message logging and output separation
 - **10-window-management.md** - Window creation and docking for different hosts

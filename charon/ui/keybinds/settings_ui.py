@@ -1,9 +1,5 @@
 ﻿"""
-Keybind Settings UI
-
-Provides a dialog for managing both local and global keybinds,
-viewing conflicts, and customizing keybind behavior.
-"""
+Keybind Settings UI for Charon (local keybinds and preferences)."""
 
 from typing import Dict, Optional
 from ...qt_compat import QtWidgets, QtCore, QtGui, WindowContextHelpButtonHint, WindowCloseButtonHint
@@ -53,11 +49,10 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.tab_widget = QtWidgets.QTabWidget()
         layout.addWidget(self.tab_widget)
         
-        # Create tabs in requested order: ComfyUI, host settings, global, then Charon
+        # Create tabs in requested order: ComfyUI, host settings, then Charon
         self._create_comfy_tab()
         if self._host_allows_settings:
             self._create_settings_tab()
-        self._create_global_tab()
         self._create_local_tab()
         # Conflicts tab removed - Charon handles conflicts automatically
 
@@ -514,73 +509,9 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                 " background-color: #3d4350;"
                 " }"
             )
-    def _create_global_tab(self):
-        """Create the global keybinds tab."""
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
-        
-        # Info label
-        info_label = QtWidgets.QLabel(
-            "These keybinds are always active, even when Charon is not focused.\n"
-            "They allow quick script execution from anywhere."
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        
-        # Table for global keybinds
-        self.global_table = QtWidgets.QTableWidget()
-        self.global_table.setColumnCount(4)
-        self.global_table.setHorizontalHeaderLabels(["Action", "Keybind", "Edit", "Remove"])
-        self.global_table.horizontalHeader().setStretchLastSection(False)
-        self.global_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
-        self.global_table.setAlternatingRowColors(True)
-        self.global_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        
-        # Set column widths to match local table
-        self.global_table.setColumnWidth(1, 150)  # Keybind column
-        self.global_table.setColumnWidth(2, 60)   # Edit column
-        self.global_table.setColumnWidth(3, 80)   # Remove column
-        
-        layout.addWidget(self.global_table)
-        
-        self.tab_widget.addTab(widget, "Global Keybinds")
-    
-    # Conflicts tab removed - Charon handles conflicts automatically
-    '''
-    def _create_conflicts_tab(self):
-        """Create the conflicts tab."""
-        widget = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(widget)
-        
-        # Info label
-        info_label = QtWidgets.QLabel(
-            "When global and local keybinds conflict, you can choose which takes priority.\n"
-            "By default, global keybinds override local ones."
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        # Table for conflicts
-        self.conflicts_table = QtWidgets.QTableWidget()
-        self.conflicts_table.setColumnCount(5)
-        self.conflicts_table.setHorizontalHeaderLabels([
-            "Key", "Local Action", "Global Script", "Priority", "Actions"
-        ])
-        self.conflicts_table.horizontalHeader().setStretchLastSection(False)
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        self.conflicts_table.setAlternatingRowColors(True)
-        self.conflicts_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        layout.addWidget(self.conflicts_table)
-        
-        self.tab_widget.addTab(widget, "Conflicts")
-    '''
-    
     def _load_keybinds(self):
         """Load all keybind data into the tables."""
         self._load_local_keybinds()
-        self._load_global_keybinds()
         self._load_app_settings()
         # Conflicts loading removed - Charon handles conflicts automatically
     
@@ -650,115 +581,6 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             
             self.local_table.setCellWidget(row, 3, remove_widget)
     
-    def _load_global_keybinds(self):
-        """Load global keybinds into the table."""
-        global_keybinds = self.keybind_manager.global_handler.get_keybind_definitions()
-        
-        # Sort by script name alphabetically
-        sorted_keybinds = sorted(global_keybinds.items(), key=lambda x: os.path.basename(x[0]).lower())
-        
-        self.global_table.setRowCount(len(sorted_keybinds))
-        
-        # Process global keybinds
-        for row, (script_path, key_sequence) in enumerate(sorted_keybinds):
-            
-            # Action name (use folder name since script_path points to folder)
-            script_name = os.path.basename(script_path)
-            script_item = QtWidgets.QTableWidgetItem(script_name)
-            script_item.setFlags(script_item.flags() & ~QtCore.Qt.ItemIsEditable)
-            script_item.setData(QtCore.Qt.UserRole, script_path)  # Store full path
-            script_item.setToolTip(script_path)
-            self.global_table.setItem(row, 0, script_item)
-            
-            # Keybind
-            key_item = QtWidgets.QTableWidgetItem(key_sequence)
-            key_item.setFlags(key_item.flags() & ~QtCore.Qt.ItemIsEditable)
-            key_item.setFont(QtGui.QFont(key_item.font().family(), -1, QtGui.QFont.Bold))
-            self.global_table.setItem(row, 1, key_item)
-            
-            # Edit button column
-            edit_widget = QtWidgets.QWidget()
-            edit_layout = QtWidgets.QHBoxLayout(edit_widget)
-            edit_layout.setContentsMargins(0, 0, 0, 0)
-            edit_layout.setAlignment(QtCore.Qt.AlignCenter)
-            
-            edit_button = QtWidgets.QPushButton("Edit")
-            edit_button.clicked.connect(lambda checked=False, r=row: self._edit_global_keybind(r))
-            edit_layout.addWidget(edit_button)
-            
-            self.global_table.setCellWidget(row, 2, edit_widget)
-            
-            # Remove button column
-            remove_widget = QtWidgets.QWidget()
-            remove_layout = QtWidgets.QHBoxLayout(remove_widget)
-            remove_layout.setContentsMargins(0, 0, 0, 0)
-            remove_layout.setAlignment(QtCore.Qt.AlignCenter)
-            
-            remove_button = QtWidgets.QPushButton("Remove")
-            remove_button.clicked.connect(lambda checked=False, sp=script_path: self._remove_single_global_keybind(sp))
-            remove_layout.addWidget(remove_button)
-            
-            self.global_table.setCellWidget(row, 3, remove_widget)
-    
-    # Conflicts loading removed - Charon handles conflicts automatically
-    '''
-    def _load_conflicts(self):
-        """Load keybind conflicts into the table."""
-        conflicts = self.keybind_manager.get_conflicts()
-        
-        self.conflicts_table.setRowCount(len(conflicts))
-        
-        for row, conflict in enumerate(conflicts):
-            # Key sequence
-            key_item = QtWidgets.QTableWidgetItem(conflict['key_sequence'])
-            key_item.setFlags(key_item.flags() & ~QtCore.Qt.ItemIsEditable)
-            self.conflicts_table.setItem(row, 0, key_item)
-            
-            # Local action
-            local_item = QtWidgets.QTableWidgetItem(
-                self._format_action_name(conflict['local_action'])
-            )
-            local_item.setFlags(local_item.flags() & ~QtCore.Qt.ItemIsEditable)
-            self.conflicts_table.setItem(row, 1, local_item)
-            
-            # Global script (use folder name since path points to folder)
-            script_name = os.path.basename(conflict['global_script'])
-            global_item = QtWidgets.QTableWidgetItem(script_name)
-            global_item.setFlags(global_item.flags() & ~QtCore.Qt.ItemIsEditable)
-            global_item.setToolTip(conflict['global_script'])
-            self.conflicts_table.setItem(row, 2, global_item)
-            
-            # Priority combo
-            priority_combo = QtWidgets.QComboBox()
-            priority_combo.addItems(["Global Priority", "Local Priority", "Disabled"])
-            
-            # Set current selection
-            resolution = conflict['resolution']
-            if resolution == 'global':
-                priority_combo.setCurrentIndex(0)
-            elif resolution == 'local':
-                priority_combo.setCurrentIndex(1)
-            else:
-                priority_combo.setCurrentIndex(2)
-            
-            # Store conflict data
-            priority_combo.setProperty('conflict_data', conflict)
-            
-            self.conflicts_table.setCellWidget(row, 3, priority_combo)
-            
-            # Actions
-            action_widget = QtWidgets.QWidget()
-            action_layout = QtWidgets.QHBoxLayout(action_widget)
-            action_layout.setContentsMargins(0, 0, 0, 0)
-            
-            resolve_button = QtWidgets.QPushButton("Auto-Resolve")
-            resolve_button.clicked.connect(lambda checked, c=conflict: self._auto_resolve_conflict(c))
-            action_layout.addWidget(resolve_button)
-            
-            action_layout.addStretch()
-            self.conflicts_table.setCellWidget(row, 4, action_widget)
-    '''
-    
     def _remove_local_keybind(self, row: int):
         """Remove a local keybind."""
         action_item = self.local_table.item(row, 0)
@@ -801,80 +623,36 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         dialog.resize(300, 100)
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             new_key = dialog.hotkey
-            
-            # Import ConflictType for centralized handling
-            from .conflict_resolver import ConflictType
-            
-            # Action display names
-            action_names = {
-                'quick_search': 'Quick Search',
-                'refresh': 'Refresh',
-                'open_folder': 'Open Folder',
-                'tiny_mode': 'Tiny Mode'
-            }
-            
-            # Initialize conflict tracking variables
-            conflicting_script = None
             conflicting_action = None
-            
-            # Check for conflicts with global keybinds
-            global_defs = self.keybind_manager.global_handler.get_keybind_definitions()
-            
-            # Find if any global keybind uses this key
-            for script_path, key_seq in global_defs.items():
-                if key_seq == new_key:
-                    conflicting_script = script_path
+
+            # Check for conflicts with other local keybinds
+            local_defs = self.keybind_manager.local_handler.get_keybind_definitions()
+
+            # Find if any other local keybind uses this key
+            for other_action, key_seq in local_defs.items():
+                if key_seq == new_key and other_action != action:
+                    conflicting_action = other_action
                     break
-            
-            if conflicting_script:
-                # When assigning to local, global keybind gets unassigned
-                script_name = os.path.basename(conflicting_script)
-                current_name = script_name
-                new_name = action_names.get(action, action)
-                
-                # Use unified dialog
-                from .conflict_resolver import KeybindConflictDialog
-                dialog = KeybindConflictDialog(self, new_key, current_name, new_name)
-                
-                if dialog.exec_() != QtWidgets.QDialog.Accepted:
-                    return  # User cancelled
-                
-                # Remove the global keybind
-                user_settings_db.remove_hotkey_for_script_software(
-                    conflicting_script, self.keybind_manager.host
-                )
-                
-                # Process events to ensure database operation completes
-                QtWidgets.QApplication.processEvents()
-            else:
-                # Check for conflicts with other local keybinds
-                local_defs = self.keybind_manager.local_handler.get_keybind_definitions()
-                
-                # Find if any other local keybind uses this key
-                for other_action, key_seq in local_defs.items():
-                    if key_seq == new_key and other_action != action:
-                        conflicting_action = other_action
+
+            if conflicting_action:
+                # For Charon vs Charon, just reassign without asking
+                # Find the row with the conflicting action and clear its keybind
+                for i in range(self.local_table.rowCount()):
+                    item = self.local_table.item(i, 0)
+                    if item and item.data(QtCore.Qt.UserRole) == conflicting_action:
+                        # Clear the conflicting keybind
+                        hotkey_item = self.local_table.item(i, 1)
+                        if hotkey_item:
+                            hotkey_item.setText("")
+                            hotkey_item.setData(QtCore.Qt.UserRole, "")  # Mark as removed
+                        
+                        # Disable its remove button
+                        remove_widget = self.local_table.cellWidget(i, 3)
+                        if remove_widget:
+                            remove_button = remove_widget.findChild(QtWidgets.QPushButton)
+                            if remove_button:
+                                remove_button.setEnabled(False)
                         break
-                
-                if conflicting_action:
-                    # For Charon vs Charon, just reassign without asking
-                    # Find the row with the conflicting action and clear its keybind
-                    for i in range(self.local_table.rowCount()):
-                        item = self.local_table.item(i, 0)
-                        if item and item.data(QtCore.Qt.UserRole) == conflicting_action:
-                            # Clear the conflicting keybind
-                            hotkey_item = self.local_table.item(i, 1)
-                            if hotkey_item:
-                                hotkey_item.setText("")
-                                hotkey_item.setData(QtCore.Qt.UserRole, "")  # Mark as removed
-                            
-                            # Disable its remove button
-                            remove_widget = self.local_table.cellWidget(i, 3)
-                            if remove_widget:
-                                remove_button = remove_widget.findChild(QtWidgets.QPushButton)
-                                if remove_button:
-                                    remove_button.setEnabled(False)
-                            break
             
             # Update the table
             hotkey_item = self.local_table.item(row, 1)
@@ -903,177 +681,25 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             # Refresh keybinds
             self._refresh_keybinds()
     
-    def _edit_global_keybind(self, row: int):
-        """Edit a global keybind."""
-        script_item = self.global_table.item(row, 0)
-        if not script_item:
-            return
-            
-        script_path = script_item.data(QtCore.Qt.UserRole)
-        
-        
-        dialog = HotkeyDialog(self)
-        dialog.resize(300, 100)
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            new_key = dialog.hotkey
-            
-            # Import ConflictType for centralized handling
-            from .conflict_resolver import ConflictType
-            
-            # Check for conflicts with local keybinds
-            local_defs = self.keybind_manager.local_handler.get_keybind_definitions()
-            local_by_key = {seq: action for action, seq in local_defs.items()}
-            
-            if new_key in local_by_key:
-                local_action = local_by_key[new_key]
-                action_names = {
-                    'quick_search': 'Quick Search',
-                    'refresh': 'Refresh',
-                    'open_folder': 'Open Folder',
-                    'tiny_mode': 'Tiny Mode'
-                }
-                current_name = action_names.get(local_action, local_action)
-                new_name = os.path.basename(script_path)
-
-                from .conflict_resolver import KeybindConflictDialog
-                dialog = KeybindConflictDialog(self, new_key, current_name, new_name)
-                if dialog.exec_() != QtWidgets.QDialog.Accepted:
-                    return  # User cancelled
-
-                for i in range(self.local_table.rowCount()):
-                    item = self.local_table.item(i, 0)
-                    if item and item.data(QtCore.Qt.UserRole) == local_action:
-                        hotkey_item = self.local_table.item(i, 1)
-                        if hotkey_item:
-                            hotkey_item.setText("")
-                            hotkey_item.setData(QtCore.Qt.UserRole, "")
-
-                        remove_widget = self.local_table.cellWidget(i, 3)
-                        if remove_widget:
-                            remove_button = remove_widget.findChild(QtWidgets.QPushButton)
-                            if remove_button:
-                                remove_button.setEnabled(False)
-                        break
-            else:
-                # Check for conflicts with other global keybinds
-                global_defs = self.keybind_manager.global_handler.get_keybind_definitions()
-                
-                # Find if any other global keybind uses this key
-                conflicting_script = None
-                for other_script_path, key_seq in global_defs.items():
-                    if key_seq == new_key and other_script_path != script_path:
-                        conflicting_script = other_script_path
-                        break
-                
-                if conflicting_script:
-                    # Use centralized conflict handler for global vs global
-                    should_proceed = self.keybind_manager.conflict_resolver.handle_keybind_conflict(
-                        self,
-                        new_key,
-                        script_path,  # new target
-                        ConflictType.GLOBAL_VS_GLOBAL,
-                        conflicting_script  # existing target
-                    )
-                    
-                    if not should_proceed:
-                        return  # User cancelled
-            
-            # Update the table
-            key_item = self.global_table.item(row, 1)
-            if key_item:
-                key_item.setText(new_key)
-                # Mark as changed
-                key_item.setBackground(QtGui.QColor(255, 255, 200))
-            
-            # Save immediately
-            user_settings_db.set_hotkey(new_key, script_path, self.keybind_manager.host)
-            
-            # If we cleared a local keybind, save that too
-            if new_key in local_by_key:
-                local_action = local_by_key[new_key]
-                user_settings_db.set_local_keybind(local_action, "", True)
-            
-            # Process events to ensure all database operations complete
-            QtWidgets.QApplication.processEvents()
-            
-            # Refresh keybinds
-            self._refresh_keybinds()
-    
-    def _remove_single_global_keybind(self, script_path: str):
-        """Remove a single global keybind."""
-        script_name = os.path.basename(script_path)
-        reply = QtWidgets.QMessageBox.question(
-            self, "Remove Keybind",
-            f"Remove keybind for {script_name}?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
-        )
-        
-        if reply == QtWidgets.QMessageBox.Yes:
-            # Remove from database immediately
-            user_settings_db.remove_hotkey_for_script_software(
-                script_path, self.keybind_manager.host
-            )
-            
-            # Process events to ensure database operation completes
-            QtWidgets.QApplication.processEvents()
-            
-            # Refresh keybinds - this will also update the table
-            self._refresh_keybinds()
-    
-    
     def _reset_local_keybinds(self):
         """Reset all local keybinds to defaults."""
-        # Check which global keybinds will be overwritten
         defaults = LocalKeybindHandler.DEFAULT_KEYBINDS
-        global_defs = self.keybind_manager.global_handler.get_keybind_definitions()
-        
-        # Find conflicts
-        conflicting_globals = []
-        for action, default_key in defaults.items():
-            for script_path, global_key in global_defs.items():
-                if default_key == global_key:
-                    conflicting_globals.append((script_path, global_key))
-        
-        # Build confirmation message
+
         message = "Reset all Charon keybinds to their default values?"
-        if conflicting_globals:
-            message += "\n\nThe following global keybinds will be removed:"
-            for script_path, key in conflicting_globals:
-                script_name = os.path.basename(script_path)
-                message += f"\nâ€¢ {script_name} ({key})"
-        
         reply = QtWidgets.QMessageBox.question(
-            self, "Reset Keybinds",
+            self,
+            "Reset Keybinds",
             message,
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
         )
-        
+
         if reply == QtWidgets.QMessageBox.Yes:
-            # Remove conflicting global keybinds
-            for script_path, _ in conflicting_globals:
-                user_settings_db.remove_hotkey_for_script_software(
-                    script_path, self.keybind_manager.host
-                )
-            
-            # Reset all local keybinds to defaults by removing custom overrides
             for action, default_key in defaults.items():
                 user_settings_db.reset_local_keybind(action)
-            
+
             # Refresh keybinds - this will update the table
             self._refresh_keybinds()
-    
-    # Conflict resolution removed - Charon handles conflicts automatically
-    '''
-    def _auto_resolve_conflict(self, conflict: Dict):
-        """Auto-resolve a conflict by changing one of the keybinds."""
-        # For now, just show a message
-        QtWidgets.QMessageBox.information(
-            self, "Auto-Resolve",
-            "Auto-resolve feature coming soon!\n\n"
-            "This will suggest alternative keybinds to resolve the conflict."
-        )
-    '''
-    
+
     def _open_settings_folder(self):
         """Open the on-disk settings directory in the system file browser."""
         try:

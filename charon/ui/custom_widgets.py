@@ -115,7 +115,6 @@ class ScriptListView(DeselectionListView):
     """List view used in ScriptPanel with custom left-arrow navigation back to folders and end-of-list trapping."""
     navigateLeft = QtCore.Signal()
     bookmarkRequested = QtCore.Signal(str)  # Signal emitted when bookmark is requested
-    assignHotkeyRequested = QtCore.Signal(str)
     createMetadataRequested = QtCore.Signal(str)  # Signal for creating metadata
     editMetadataRequested = QtCore.Signal(str)  # Signal for editing metadata
     openFolderRequested = QtCore.Signal(str)  # Signal for opening script's folder
@@ -231,25 +230,5 @@ class ScriptListView(DeselectionListView):
             create_metadata_action = menu.addAction("Create Metadata")
             create_metadata_action.triggered.connect(lambda: self.createMetadataRequested.emit(script_path))
 
-        # Add separator for hotkey action
-        menu.addSeparator()
-
-        # Hotkey action
-        script_sw = self.host if self.host and str(self.host).lower() != "none" else "nuke"
-        current_hotkey = user_settings_db.get_hotkey_for_script(normalized_path, script_sw)
-
-        if current_hotkey:
-            hotkey_action = menu.addAction(f"? Remove Hotkey ({current_hotkey})")
-            hotkey_action.setEnabled(True)
-        else:
-            hotkey_action = menu.addAction("? Assign Hotkey")
-            from ..script_validator import ScriptValidator
-            has_valid_entry, _ = ScriptValidator.has_valid_entry(script.path, script.metadata)
-            hotkey_action.setEnabled(has_valid_entry)
-            if not has_valid_entry:
-                hotkey_action.setToolTip("Script must have a valid entry file (main.py, main.mel, etc.)")
-
-        hotkey_action.triggered.connect(lambda: self.assignHotkeyRequested.emit(script_path))
-        
         # Show menu at cursor position
         exec_menu(menu, event.globalPos())
