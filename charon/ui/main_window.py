@@ -1216,21 +1216,6 @@ class CharonWindow(QtWidgets.QWidget):
                 background-color: {COLOR_ACTION_PRESSED};
             }}
         """
-        self._default_action_style = action_style
-        self._aces_on_style = """
-            QPushButton {
-                padding: 0px 16px;
-                margin: 0px;
-                border: 1px solid #2f9e44;
-                border-radius: 4px;
-                background-color: #37b24d;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #40c057;
-            }
-        """
 
         def _make_symbol_icon(symbol: str, scale: float = 1.1):
             base_size = self.font().pointSizeF()
@@ -1292,18 +1277,10 @@ class CharonWindow(QtWidgets.QWidget):
         self.header_settings_button.clicked.connect(self.open_settings)
         width_refresh = self.header_refresh_button.sizeHint().width()
         width_settings = self.header_settings_button.sizeHint().width()
-        width_aces = self.aces_toggle_button.sizeHint().width() # Get width for new button
-        target_width = max(width_refresh, width_settings, width_aces, refresh_icon_px + 20, settings_icon_px + 20)
+        target_width = max(width_refresh, width_settings, refresh_icon_px + 20, settings_icon_px + 20)
         self.header_refresh_button.setFixedWidth(target_width)
         self.header_settings_button.setFixedWidth(target_width)
-        self.aces_toggle_button.setFixedWidth(target_width) # Set width for new button
         self.actions_layout.addWidget(self.header_settings_button)
-
-        # Load initial ACEScg state
-        from .. import preferences
-        initial_aces_state = preferences.get_preference("aces_mode_enabled", False)
-        if hasattr(self, 'aces_toggle_button'):
-            self.aces_toggle_button.setChecked(initial_aces_state)
 
         # Apply consistent styling to the reused button
         new_workflow_style = f"""
