@@ -665,14 +665,13 @@ class CharonWindow(QtWidgets.QWidget):
         main_layout.addSpacing(config.UI_ELEMENT_SPACING)
 
         # Bottom footer with ComfyUI controls aligned to the right
-        footer_layout = QtWidgets.QHBoxLayout()
+        footer_container = QtWidgets.QWidget(parent)
+        footer_layout = QtWidgets.QGridLayout(footer_container)
         footer_layout.setContentsMargins(4, 0, 4, 4)
+        footer_layout.setSpacing(4)
+        footer_layout.setVerticalSpacing(0)
 
-        project_container = QtWidgets.QWidget(parent)
-        project_layout = QtWidgets.QVBoxLayout(project_container)
-        project_layout.setContentsMargins(0, 0, 0, 0)
-        project_layout.setSpacing(0)
-
+        # Left Column: Project Label (Row 0)
         self.project_label = QtWidgets.QLabel(parent)
         self.project_label.setObjectName("charonProjectLabel")
         self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -681,8 +680,9 @@ class CharonWindow(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
         )
         self.project_label.setMinimumWidth(280)
-        project_layout.addWidget(self.project_label)
+        footer_layout.addWidget(self.project_label, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
+        # Left Column: GPU Label (Row 1)
         self.gpu_label = QtWidgets.QLabel(parent)
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -691,19 +691,12 @@ class CharonWindow(QtWidgets.QWidget):
         gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
-        project_layout.addWidget(self.gpu_label)
+        footer_layout.addWidget(self.gpu_label, 1, 0, Qt.AlignLeft | Qt.AlignTop)
 
-        footer_layout.addWidget(project_container, 1)
+        # Spacer Column (Row 0-1, Col 1)
+        footer_layout.setColumnStretch(1, 1)
 
-        footer_layout.addStretch()
-        
-        # Right side container for Comfy status and Resources
-        right_container = QtWidgets.QWidget(parent)
-        right_layout = QtWidgets.QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(2)
-        right_layout.setAlignment(Qt.AlignRight)
-        
+        # Right Column: Comfy Connection (Row 0)
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
         self.comfy_connection_widget.connection_status_changed.connect(
@@ -712,15 +705,17 @@ class CharonWindow(QtWidgets.QWidget):
         self.script_panel.update_comfy_connection_status(
             self.comfy_connection_widget.is_connected()
         )
-        right_layout.addWidget(self.comfy_connection_widget)
+        footer_layout.addWidget(self.comfy_connection_widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
         
+        # Right Column: Resource Widget (Row 1)
         self.resource_widget = ResourceWidget(parent)
-        right_layout.addWidget(self.resource_widget)
+        footer_layout.addWidget(self.resource_widget, 1, 2, Qt.AlignRight | Qt.AlignTop)
         
-        footer_layout.addWidget(right_container)
-        
+        # Set the main footer layout reference to our grid layout
         self._footer_comfy_layout = footer_layout
-        main_layout.addLayout(footer_layout)
+        
+        # Add container to main layout
+        main_layout.addWidget(footer_container)
 
         self._refresh_project_display()
         self._refresh_gpu_display()
@@ -1285,7 +1280,11 @@ QPushButton#NewWorkflowButton:pressed {{
             return
         layout = self._footer_comfy_layout
         if layout is not None:
-            layout.addWidget(widget)
+            # Handle QGridLayout specifically to ensure correct placement
+            if isinstance(layout, QtWidgets.QGridLayout):
+                layout.addWidget(widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
+            else:
+                layout.addWidget(widget)
         widget.setParent(self.normal_widget)
         widget.setVisible(True)
         self._comfy_widget_in_tiny_mode = False
