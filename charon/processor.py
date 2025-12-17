@@ -3778,6 +3778,17 @@ def process_charonop_node():
                                         log_debug('No output paths available for Read update.', 'WARNING')
                                         cleanup_files()
                                         return
+                                        
+                                    if is_step2 and image_entries:
+                                        image_paths = [e.get('output_path') for e in image_entries if e.get('output_path')]
+                                        if image_paths:
+                                            try:
+                                                _create_step2_result_group(node, image_paths)
+                                            except Exception as cs_err:
+                                                log_debug(f"Step 2 Result Group creation failed: {cs_err}", "ERROR")
+                                        cleanup_files()
+                                        return
+
                                     if camera_entries:
                                         for camera_entry in camera_entries:
                                             camera_path = (
