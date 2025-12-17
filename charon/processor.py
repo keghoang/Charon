@@ -1214,8 +1214,11 @@ def _create_step2_result_group(charon_node, image_paths):
     start_x = charon_node.xpos() + 200
     start_y = charon_node.ypos() + 200
     
+    safe_name = "".join(c if c.isalnum() else "_" for c in charon_node.name())
+    group_name = f"Charon_Step2_Output_{safe_name}"
+    
     group = nuke.createNode("Group")
-    group.setName("Charon_Step2_Output")
+    group.setName(group_name)
     group.setInput(0, None)
     group.setXYpos(start_x, start_y)
     
