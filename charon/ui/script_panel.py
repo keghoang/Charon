@@ -81,24 +81,23 @@ class ScriptPanel(QtWidgets.QWidget):
         title_layout.addWidget(title_label)
         
         # Add New Workflow button - size it to fit within header
-        self.new_script_button = QtWidgets.QToolButton()
-        self.new_script_button.setText("+")
+        self.new_script_button = QtWidgets.QPushButton("Add Workflow")
         self.new_script_button.setToolTip("Create New Workflow")
-        self.new_script_button.setAutoRaise(True)
+        self.new_script_button.setCursor(Qt.CursorShape.PointingHandCursor)
         
         # Make button fit within the standardized header height
-        button_size = config.UI_PANEL_HEADER_HEIGHT - 8  # Leave 4px padding on each side
-        self.new_script_button.setFixedSize(button_size, button_size)
+        button_height = config.UI_PANEL_HEADER_HEIGHT - 6
+        self.new_script_button.setFixedHeight(button_height)
         
         self.new_script_button.setStyleSheet(f"""
-            QToolButton {{
-                padding: 0px;
+            QPushButton {{
+                padding: 0px 16px;
                 margin: 0px;
                 border: 1px solid palette(mid);
-                border-radius: 2px;
-                font-size: {button_size - 6}px;
+                border-radius: 4px;
+                font-weight: bold;
             }}
-            QToolButton:hover {{
+            QPushButton:hover {{
                 background-color: palette(midlight);
             }}
         """)
