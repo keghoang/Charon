@@ -368,6 +368,7 @@ class _CustomNodeInstallWorker(QtCore.QObject):
 
 
 class ValidationResolveDialog(QtWidgets.QDialog):
+    transfer_update = QtCore.Signal(object, object)
     comfy_restart_requested = QtCore.Signal()
     """Display validation results with auto-resolve helpers."""
 
@@ -438,6 +439,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._workflow_override: Optional[Dict[str, Any]] = (
             copy.deepcopy(workflow_payload) if isinstance(workflow_payload, dict) else None
         )
+        self.transfer_update.connect(self._handle_transfer_update)
         if isinstance(self._workflow_bundle, dict):
             self._workflow_folder = self._workflow_bundle.get("folder") or None
         if not self._workflow_folder:
@@ -1258,8 +1260,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         listener_id = id(row_info)
 
         def _dispatch(state: TransferState) -> None:
-            # Bridge worker thread updates back to the UI thread.
-            QtCore.QTimer.singleShot(0, lambda st=state: self._handle_transfer_update(row_info, st))
+            # Signal back to the UI thread; Qt auto-queues cross-thread emissions.
+            try:
+                self.transfer_update.emit(row_info, state)
+            except Exception:
+                pass
 
         self._transfer_subscriptions[listener_id] = {"destination": destination}
         return self._transfer_manager.subscribe(destination, listener_id, _dispatch)
