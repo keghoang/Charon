@@ -1156,7 +1156,7 @@ def _run_3d_texturing_step2_logic(
 
     if results:
         update_progress(1.0, "Creating Contact Sheet", extra={'batch_outputs': results}) # Store results in extra for potential use
-        nuke.executeInMainThread(lambda: _create_step2_contact_sheet(node, results))
+        nuke.executeInMainThread(lambda: _create_step2_result_group(node, results))
     else:
         raise Exception("No results generated from Step 2 execution.")
 
@@ -1288,8 +1288,13 @@ def _create_step2_result_group(charon_node, image_paths):
         r['file'].setValue(path.replace('\\', '/'))
         r.setXYpos(inner_x + (idx * 150), inner_y)
         reads.append(r)
+        r.setSelected(False)
+        
+    for n in nuke.selectedNodes():
+        n.setSelected(False)
         
     cs = nuke.createNode("ContactSheet")
+    cs.setInput(0, None)
     cs.setXYpos(inner_x, inner_y + 200)
     cs['width'].setValue(3072)
     cs['height'].setValue(2048)
@@ -1300,6 +1305,9 @@ def _create_step2_result_group(charon_node, image_paths):
     
     for i, r in enumerate(reads):
         cs.setInput(i, r)
+    
+    for n in nuke.selectedNodes():
+        n.setSelected(False)
         
     output = nuke.createNode("Output")
     output.setInput(0, cs)
@@ -4737,6 +4745,7 @@ def _create_generic_result_group(charon_node, image_paths):
         r['on_error'].setValue("nearest frame")
         r.setXYpos(i * 100, -100)
         cs.setInput(i, r)
+        r.setSelected(False)
         
     last_node = cs
     
@@ -4774,6 +4783,9 @@ def _create_generic_result_group(charon_node, image_paths):
             if os.path.exists(ivt_temp):
                 try: os.remove(ivt_temp)
                 except: pass
+    
+    for n in nuke.selectedNodes():
+        n.setSelected(False)
         
     out = nuke.createNode("Output")
     out.setInput(0, last_node)
