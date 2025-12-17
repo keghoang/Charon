@@ -1219,6 +1219,37 @@ def _create_step2_result_group(charon_node, image_paths):
     group.setInput(0, None)
     group.setXYpos(start_x, start_y)
     
+    # Link to parent CharonOp
+    charon_node_id = ""
+    try:
+        knob = charon_node.knob('charon_node_id')
+        if knob:
+            charon_node_id = knob.value()
+    except Exception: pass
+    
+    if not charon_node_id:
+        try:
+            charon_node_id = charon_node.metadata('charon/node_id')
+        except Exception: pass
+        
+    import uuid
+    read_id = uuid.uuid4().hex[:12].lower()
+    
+    parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', charon_node_id or "")
+    parent_knob.setFlag(nuke.NO_ANIMATION)
+    parent_knob.setFlag(nuke.INVISIBLE)
+    group.addKnob(parent_knob)
+    
+    read_id_knob = nuke.String_Knob('charon_read_id', 'Charon Read ID', read_id)
+    read_id_knob.setFlag(nuke.NO_ANIMATION)
+    read_id_knob.setFlag(nuke.INVISIBLE)
+    group.addKnob(read_id_knob)
+    
+    try:
+        group.setMetaData('charon/parent_id', charon_node_id or "")
+        group.setMetaData('charon/read_id', read_id)
+    except: pass
+    
     group.begin()
     
     reads = []
