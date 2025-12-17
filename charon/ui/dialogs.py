@@ -183,6 +183,19 @@ def _get_cached_parameters(path: Optional[str]) -> Optional[Tuple[ExposableNode,
     return candidates
 
 
+def _invalidate_parameter_cache(path: Optional[str]) -> None:
+    if not path:
+        return
+    abs_path = _cache_key(path)
+    _MEMORY_CACHE.pop(abs_path, None)
+    cache_file = _cache_file_path(abs_path)
+    if os.path.exists(cache_file):
+        try:
+            os.remove(cache_file)
+        except Exception:
+            pass
+
+
 def _store_cached_parameters(path: Optional[str], data) -> None:
     if not path:
         return
@@ -1141,7 +1154,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                         json.dump(workflow, f, indent=2)
                     
                     system_debug("Workflow file updated. Refreshing parameters...")
-                    _store_cached_parameters(self._workflow_path, None)
+                    _invalidate_parameter_cache(self._workflow_path)
                     self._populate_input_mapping_preview()
                 else:
                     QtWidgets.QMessageBox.warning(self, "Update Failed", "Could not locate parameter in workflow JSON structure.")
