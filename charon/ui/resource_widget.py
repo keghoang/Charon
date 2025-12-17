@@ -1,6 +1,6 @@
 from ..qt_compat import (
     QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QProgressBar, 
-    Qt, QSizePolicy, QFrame
+    Qt, QSizePolicy, QFrame, QPushButton
 )
 from ..resource_monitor import ResourceMonitor
 
@@ -80,10 +80,61 @@ class ResourceWidget(QWidget):
         self.ram_bar = CompactResourceBar("RAM")
         self.grid.addWidget(self.ram_bar, 0, 1)
         
+        # Flush VRAM Button (Row 0, Col 2) - spans 2 rows
+        self.flush_btn = QPushButton("Flush")
+        self.flush_btn.setToolTip("Force ComfyUI to unload models and free VRAM")
+        self.flush_btn.setFixedWidth(40)
+        self.flush_btn.setFixedHeight(24) # Match approximate height of 2 rows
+        self.flush_btn.setCursor(Qt.PointingHandCursor)
+        self.flush_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #37383D;
+                color: #cfd3dc;
+                border: 1px solid #2c323c;
+                border-radius: 3px;
+                font-size: 10px;
+                margin-left: 4px;
+            }
+            QPushButton:hover {
+                background-color: #404248;
+                border-color: #555;
+            }
+            QPushButton:pressed {
+                background-color: #2f3034;
+            }
+        """)
+        self.flush_btn.clicked.connect(self._flush_vram)
+        self.grid.addWidget(self.flush_btn, 0, 2, 2, 1) # Span 2 rows
+        
         # GPU widgets storage
         self.gpu_widgets = {} # index -> (core_bar, vram_bar)
         
         self.monitor.start()
+
+    def _flush_vram(self):
+        """Call ComfyUI's /free endpoint to unload models."""
+        from ..config import COMFY_URL_BASE
+        import urllib.request
+        
+        url = f"{COMFY_URL_BASE}/free"
+        req = urllib.request.Request(url, method="POST")
+        # Empty JSON body required by some endpoints, usually safe to send
+        req.add_header('Content-Type', 'application/json')
+        
+        try:
+            with urllib.request.urlopen(req, data=b'{"unload_models":true, "free_memory":true}', timeout=2) as response:
+                if response.getcode() == 200:
+                    # Flash button green briefly
+                    self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#37383D", "#2E7D32"))
+                    from ..qt_compat import QTimer
+                    QTimer.singleShot(500, lambda: self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#2E7D32", "#37383D")))
+        except Exception as e:
+            from ..charon_logger import system_error
+            system_error(f"Failed to flush VRAM: {e}")
+            # Flash button red briefly
+            self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#37383D", "#C62828"))
+            from ..qt_compat import QTimer
+            QTimer.singleShot(500, lambda: self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#C62828", "#37383D")))
 
     def update_stats(self, stats):
         self.cpu_bar.set_value(stats['cpu_percent'])
