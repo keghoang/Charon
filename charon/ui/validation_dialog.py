@@ -1833,6 +1833,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         row_info["resolve_method"] = method_detail
         issue_row = row_info.get("issue_row")
         if isinstance(issue_row, IssueRow):
+            # Force subtitle to update immediately so resolve_method shows without reopening.
             issue_row.mark_as_successful(
                 row_info.get("success_text") or status_text,
                 detail=method_detail or None,
@@ -1840,6 +1841,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if method_detail:
                 issue_row.lbl_sub.setText(method_detail)
                 issue_row.lbl_sub.show()
+                issue_row.lbl_sub.update()
+            issue_row.update()
         row_info["resolved"] = True
         if isinstance(row_info, dict):
             if workflow_value:
