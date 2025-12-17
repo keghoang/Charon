@@ -30,6 +30,12 @@ class FolderListLoader(QtCore.QThread):
         """Start loading folders from the given base path."""
         if self.isRunning():
             self.stop_loading()
+            if self.isRunning():
+                # Defer reload until the previous thread fully stops
+                QtCore.QTimer.singleShot(
+                    50, lambda bp=base_path, h=host, cc=check_compatibility: self.load_folders(bp, h, cc)
+                )
+                return
             
         self.base_path = base_path
         self.host = host
@@ -41,7 +47,10 @@ class FolderListLoader(QtCore.QThread):
         """Signal the thread to stop loading."""
         self._should_stop = True
         if self.isRunning():
-            self.wait(1000)  # Wait up to 1 second
+            self.requestInterruption()
+            self.quit()
+            # Non-blocking wait to allow the event loop to continue
+            self.wait(0)
             
     def run(self):
         """Load folders in background thread."""

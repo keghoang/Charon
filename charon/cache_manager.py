@@ -163,6 +163,41 @@ class PersistentCacheManager:
         # When a script changes, invalidate its parent folder
         folder_path = os.path.dirname(script_path)
         self.invalidate_folder(folder_path)
+
+    def invalidate_base_path(self, base_path: str):
+        """Invalidate all cached entries under a repository root without touching disk."""
+        if not base_path:
+            return
+
+        normalized_base = os.path.normcase(os.path.abspath(base_path))
+        prefix = normalized_base + os.sep
+
+        with self.cache_lock:
+            folder_keys = [path for path in self.folder_cache if os.path.normcase(path).startswith(prefix)]
+            for key in folder_keys:
+                del self.folder_cache[key]
+
+            tag_keys = [path for path in self.tag_cache if os.path.normcase(path).startswith(prefix)]
+            for key in tag_keys:
+                del self.tag_cache[key]
+
+            validation_keys = [
+                path for path in self.validation_cache if os.path.normcase(path).startswith(prefix)
+            ]
+            for key in validation_keys:
+                del self.validation_cache[key]
+
+            hot_keys = [path for path in self.hot_folders if os.path.normcase(path).startswith(prefix)]
+            for key in hot_keys:
+                del self.hot_folders[key]
+
+            general_keys = [
+                key for key in self.general_cache if normalized_base in os.path.normcase(str(key))
+            ]
+            for key in general_keys:
+                del self.general_cache[key]
+
+            self._estimate_memory_usage()
         
     def queue_folder_prefetch(self, folder_path: str):
         """Queue a folder for background pre-fetching."""
