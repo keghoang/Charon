@@ -75,7 +75,6 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
 
         self.comfy_path_edit = QtWidgets.QLineEdit()
         self.comfy_path_edit.setPlaceholderText("Path to ComfyUI launch .bat or .py")
-        self.comfy_path_edit.editingFinished.connect(self._save_comfy_path)
         current_path = preferences.get_preference("comfyui_launch_path", "").strip()
         self.comfy_path_edit.setText(current_path)
 
@@ -764,7 +763,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             "Scripts (*.bat *.py);;All Files (*)",
         )
         if file_path:
-            self._update_comfy_path(file_path)
+            self.comfy_path_edit.setText(file_path.strip())
 
     def _format_action_name(self, action: str) -> str:
         """Format action name for display."""
