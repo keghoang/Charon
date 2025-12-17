@@ -242,16 +242,21 @@ class ScriptTableView(QtWidgets.QTableView):
             except Exception:
                 state = "idle"
 
-        advanced_mode = False
-        if callable(self._advanced_mode_provider):
-            try:
-                advanced_mode = bool(self._advanced_mode_provider())
-            except Exception:
-                advanced_mode = False
+        if column == ScriptTableModel.COL_VALIDATE:
+            menu = QtWidgets.QMenu(self)
+            revalidate_action = menu.addAction("Revalidate")
+            revalidate_action.setEnabled(state != "validating")
+            revalidate_action.triggered.connect(lambda: self.script_revalidate.emit(script_path))
+
+            view_result_action = menu.addAction("View Validation Result")
+            view_result_action.triggered.connect(lambda: self.script_show_validation_payload.emit(script_path))
+
+            exec_menu(menu, event.globalPos())
+            return
 
         # Create context menu
         menu = QtWidgets.QMenu(self)
-        
+
         # Open Folder action
         open_folder_action = menu.addAction("Open Folder")
         open_folder_action.triggered.connect(lambda: self.openFolderRequested.emit(script_path))
@@ -274,23 +279,8 @@ class ScriptTableView(QtWidgets.QTableView):
             bookmark_action = menu.addAction("Bookmark")
             bookmark_action.triggered.connect(lambda: self.bookmarkRequested.emit(script_path))
             
-        if column == ScriptTableModel.COL_VALIDATE:
-            revalidate_action = menu.addAction("Revalidate")
-            revalidate_action.setEnabled(state != "validating")
-            revalidate_action.triggered.connect(lambda: self.script_revalidate.emit(script_path))
+        menu.addSeparator()
 
-            view_result_action = menu.addAction("View Validation Result")
-            view_result_action.triggered.connect(lambda: self.script_show_validation_payload.emit(script_path))
-
-            if advanced_mode:
-                raw_action = menu.addAction("Show Raw Validation Payload")
-                raw_action.triggered.connect(
-                    lambda: self.script_show_raw_validation_payload.emit(script_path)
-                )
-            menu.addSeparator()
-        else:
-            menu.addSeparator()
-        
         # Metadata actions
         if script.has_metadata():
             edit_metadata_action = menu.addAction("Edit Metadata")
