@@ -97,15 +97,20 @@ def discover_prompt_widget_parameters(
         Tuple of :class:`ExposableNode` entries. Empty when nothing matches.
     """
 
-    resolved = _discover_with_node_library(workflow_document)
-    if resolved:
-        return _filter_prompt_nodes(resolved)
+    collected: Dict[str, ExposableNode] = {}
+    for resolver in (
+        _discover_with_node_library,
+        _discover_with_external_process,
+        _discover_with_widget_heuristic,
+    ):
+        for node in _filter_prompt_nodes(resolver(workflow_document)):
+            if node.node_id in collected:
+                continue
+            collected[node.node_id] = node
 
-    resolved = _discover_with_external_process(workflow_document)
-    if resolved:
-        return _filter_prompt_nodes(resolved)
-
-    return _filter_prompt_nodes(_discover_with_widget_heuristic(workflow_document))
+    nodes = list(collected.values())
+    nodes.sort(key=lambda item: item.name.lower())
+    return tuple(nodes)
 
 
 def _discover_with_node_library(
@@ -329,6 +334,8 @@ def _discover_with_widget_heuristic(
 
             display_name = widget_names[index] if index < len(widget_names) else f"widgets_values[{index}]"
             key = display_name or f"widgets_values[{index}]"
+            is_placeholder = display_name.startswith("widgets_values[") and display_name.endswith("]")
+            label_source = display_name if (display_name and not is_placeholder) else f"Value {index + 1}"
 
             if isinstance(value, str) and not value.strip():
                 # Retain empty strings when we have a named widget (e.g. prompt fields).
@@ -336,10 +343,11 @@ def _discover_with_widget_heuristic(
                     continue
 
             value_type = _infer_value_type(value)
+            label = _format_binding_label(label_source, value_type)
             attributes.append(
                 ExposableAttribute(
                     key=key,
-                    label=key,
+                    label=label,
                     value=value,
                     value_type=value_type,
                     preview=_format_attribute_preview(value),
