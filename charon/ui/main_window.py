@@ -1991,7 +1991,7 @@ QPushButton#NewWorkflowButton:pressed {{
                 continue
 
             folder_path = os.path.join(self.current_base, folder_name)
-            cache_key = f"folder_nonempty:{folder_path}"
+            cache_key = f"folder_nonempty_v2:{folder_path}"
             cached = cache_manager.get_cached_data(cache_key, max_age_seconds=600)
             if cached is not None:
                 compatibility[folder_name] = bool(cached)
