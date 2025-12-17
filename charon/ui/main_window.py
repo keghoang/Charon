@@ -674,7 +674,8 @@ class CharonWindow(QtWidgets.QWidget):
         # Bottom footer with ComfyUI controls aligned to the right
         footer_container = QtWidgets.QWidget(parent)
         footer_layout = QtWidgets.QGridLayout(footer_container)
-        footer_layout.setContentsMargins(4, 0, 4, 4)
+        # Left margin reduced to 1 (was 4) to move tracker left by 3px
+        footer_layout.setContentsMargins(1, 0, 4, 4)
         footer_layout.setSpacing(4)
         footer_layout.setVerticalSpacing(5)
 
@@ -683,6 +684,9 @@ class CharonWindow(QtWidgets.QWidget):
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.gpu_label.setWordWrap(False)
+        # Indent 6px to move text right (1px margin + 6px indent = 7px visual start)
+        # Original was 4px start. 7px is +3px shift to the right.
+        self.gpu_label.setIndent(6)
         # Use existing font since project_label is created earlier now
         gpu_font = QtGui.QFont(self.project_label.font())
         gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
