@@ -390,14 +390,6 @@ def get_software_color(software):
     software_cap = software.capitalize()
     return config.SOFTWARE_COLORS.get(software_cap, "#95a5a6")
 
-def get_visible_software_list():
-    """Get list of non-hidden software for display in dialogs."""
-    visible_software = []
-    for software_key, software_config in config.SOFTWARE.items():
-        if not software_config.get("hidden", False):  # Default to visible if hidden not specified
-            visible_software.append(software_key.capitalize())
-    return visible_software
-
 def detect_host():
     """Return the current host application name.
 

@@ -30,7 +30,7 @@ except ImportError:
         UI_HISTORY_PANEL_RATIO = 0.25
         UI_NAVIGATION_DELAY_MS = 50
     config = FallbackConfig()
-from ..metadata_manager import clear_metadata_cache, get_galt_config, get_software_for_host, get_folder_tags
+from ..metadata_manager import clear_metadata_cache, get_galt_config, get_folder_tags
 from ..script_model import GlobalIndexLoader
 from ..settings import user_settings_db
 from ..utilities import is_compatible_with_host
@@ -477,7 +477,6 @@ class GaltWindow(QtWidgets.QWidget):
         
         # Connect granular signals for efficient updates
         self.metadata_panel.entry_changed.connect(self._on_entry_changed)
-        self.metadata_panel.software_changed.connect(self._on_software_changed)
         self.metadata_panel.tags_updated.connect(self._on_tags_updated)
         
         # Keep general signal for backward compatibility and complex changes
@@ -486,7 +485,7 @@ class GaltWindow(QtWidgets.QWidget):
         # already calls _perform_soft_refresh which properly preserves selection
         self.metadata_panel.script_created.connect(self._navigate_to_script)
         self.script_panel.create_metadata_requested.connect(self.on_create_metadata_requested)
-        self.script_panel.edit_software_requested.connect(self.on_edit_software_requested)
+        self.script_panel.edit_metadata_requested.connect(self.on_edit_metadata_requested)
         self.script_panel.manage_tags_requested.connect(self.on_manage_tags_requested)
         self.script_panel.script_view.openReadmeRequested.connect(self.on_open_readme_requested)
         self.script_panel.script_view.openFolderRequested.connect(self.open_folder)
@@ -1135,33 +1134,6 @@ class GaltWindow(QtWidgets.QWidget):
         # Fallback to full refresh if incremental update failed
         self.on_metadata_changed()
     
-    def _on_software_changed(self, script_path: str, new_software: list):
-        """Handle software change for a single script."""
-        from ..galt_logger import system_debug
-        system_debug(f"Software changed for {script_path}: {new_software}")
-        
-        # Update the script in the model
-        if hasattr(self.script_panel, 'script_model') and self.script_panel.script_model:
-            updated = self.script_panel.script_model.update_single_script(script_path)
-            if updated:
-                # Re-register hotkeys for this script only
-                self.register_hotkeys_silently()
-                
-                # Update quick search index incrementally
-                self._update_script_in_index(script_path)
-                
-                # Check if folder visibility needs update
-                # (e.g., if script is no longer compatible with current host)
-                current_folder = self.folder_panel.get_selected_folder()
-                if current_folder and current_folder != "Bookmarks":
-                    # TODO: Implement check for folder visibility update
-                    pass
-                
-                return
-        
-        # Fallback to full refresh
-        self.on_metadata_changed()
-    
     def _on_tags_updated(self, script_path: str, added_tags: list, removed_tags: list):
         """Handle tag updates for a single script."""
         from ..galt_logger import system_debug
@@ -1591,13 +1563,11 @@ class GaltWindow(QtWidgets.QWidget):
         self.metadata_panel.update_metadata(actual_script_path)
         self.metadata_panel.create_metadata()
 
-    def on_edit_software_requested(self, script_path):
-        """Handle edit software request from right-click context menu"""
-        # Get the actual path based on current base
+    def on_edit_metadata_requested(self, script_path):
+        """Handle edit metadata request from right-click context menu"""
         actual_script_path = self._get_actual_script_path(script_path)
-        # Update the metadata panel to show the script and trigger edit software
         self.metadata_panel.update_metadata(actual_script_path)
-        self.metadata_panel.edit_software_selection()
+        self.metadata_panel.edit_metadata()
     
     def open_tag_manager(self, script_path):
         """Open tag manager dialog with consistent behavior from any access point."""

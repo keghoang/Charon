@@ -14,7 +14,7 @@ class ScriptTableView(QtWidgets.QTableView):
     bookmarkRequested = QtCore.Signal(str)
     assignHotkeyRequested = QtCore.Signal(str)
     createMetadataRequested = QtCore.Signal(str)
-    editSoftwareRequested = QtCore.Signal(str)
+    editMetadataRequested = QtCore.Signal(str)
     manageTagsRequested = QtCore.Signal(str)
     openReadmeRequested = QtCore.Signal(str)
     openFolderRequested = QtCore.Signal(str)
@@ -229,7 +229,7 @@ class ScriptTableView(QtWidgets.QTableView):
         # Metadata actions
         if script.has_metadata():
             edit_metadata_action = menu.addAction("Edit Metadata")
-            edit_metadata_action.triggered.connect(lambda: self.editSoftwareRequested.emit(script_path))
+            edit_metadata_action.triggered.connect(lambda: self.editMetadataRequested.emit(script_path))
             
             # Manage Tags action (only if metadata exists)
             manage_tags_action = menu.addAction("Manage Tags")
