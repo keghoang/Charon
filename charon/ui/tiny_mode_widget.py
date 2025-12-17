@@ -209,11 +209,12 @@ class TinyModeWidget(QtWidgets.QWidget):
             QWidget#tiny-node-row {
                 background: rgba(255, 255, 255, 0.02);
                 border: 1px solid rgba(255, 255, 255, 0.14);
-                border-radius: 0;
+                border-radius: 8px;
             }
             QWidget#tiny-node-row:hover, QWidget#tiny-node-row[hovered="true"] {
                 background: rgba(255, 255, 255, 0.15);
                 border: 1px solid rgba(255, 255, 255, 0.32);
+                border-radius: 8px;
             }
             QWidget#tiny-node-row QLabel {
                 color: rgba(240, 244, 248, 0.92);
@@ -574,6 +575,21 @@ class TinyModeWidget(QtWidgets.QWidget):
 class _NodeRowWidget(QtWidgets.QWidget):
     """Lightweight widget showing a node name with progress feedback."""
 
+    PROGRESS_STYLE_TEMPLATE = """
+        QProgressBar {{
+            background: #2c2c2c;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            padding: 1px 2px;
+            color: rgba(240, 244, 248, 0.9);
+            text-align: center;
+        }}
+        QProgressBar::chunk {{
+            background-color: {chunk_color};
+            border-radius: 5px;
+        }}
+    """
+
     COLOR_ERROR = "#c94d4d"
     COLOR_COMPLETE = "#3d995b"
     COLOR_ACTIVE = "#d0a23f"
@@ -601,11 +617,19 @@ class _NodeRowWidget(QtWidgets.QWidget):
 
         self.progress_bar = QtWidgets.QProgressBar()
         self.progress_bar.setRange(0, 100)
-        self.progress_bar.setMinimumHeight(14)
+        self.progress_bar.setMinimumHeight(16)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setAlignment(QtCore.Qt.AlignCenter)
+        self.progress_bar.setFormat("Ready")
+        self.progress_bar.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
         # Ensure stylesheet-driven coloring per row
-        self.progress_bar.setStyleSheet("")
+        self._current_chunk_color: Optional[str] = None
+        self.progress_bar.setStyleSheet(
+            self.PROGRESS_STYLE_TEMPLATE.format(chunk_color=self.COLOR_IDLE)
+        )
+        self._current_chunk_color = self.COLOR_IDLE
         layout.addWidget(self.progress_bar)
 
         self._node_name: str = ""
@@ -633,32 +657,23 @@ class _NodeRowWidget(QtWidgets.QWidget):
 
         tooltip = info.name or display_name or info.workflow_path or info.workflow_name or ""
         self.name_label.setToolTip(tooltip)
-        self.progress_bar.setToolTip(status_text)
+        safe_status = (status_text or "").strip() or "Ready"
+        self.progress_bar.setToolTip(safe_status)
 
         progress_value = 0
         if info.progress >= 0:
             progress_value = max(0, min(int(info.progress * 100), 100))
         self.progress_bar.setValue(progress_value)
-        self.progress_bar.setFormat(status_text)
+        self.progress_bar.setFormat(safe_status)
         self._apply_progress_palette(info)
 
     def _apply_progress_palette(self, info: runtime.SceneNodeInfo) -> None:
         chunk_color = self._progress_color(info)
+        if chunk_color == self._current_chunk_color:
+            return
+        self._current_chunk_color = chunk_color
         self.progress_bar.setStyleSheet(
-            f"""
-            QProgressBar {{
-                background: #2c2c2c;
-                border: 1px solid #4a4a4a;
-                border-radius: 0;
-                padding: 1px 2px;
-                color: rgba(240, 244, 248, 0.9);
-                text-align: center;
-            }}
-            QProgressBar::chunk {{
-                background-color: {chunk_color};
-                border-radius: 0;
-            }}
-            """
+            self.PROGRESS_STYLE_TEMPLATE.format(chunk_color=chunk_color)
         )
 
     def _progress_color(self, info: runtime.SceneNodeInfo) -> str:

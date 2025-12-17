@@ -963,18 +963,15 @@ QPushButton#NewWorkflowButton:pressed {{
         self.setMinimumSize(config.TINY_MODE_MIN_WIDTH, config.TINY_MODE_MIN_HEIGHT)
         
         self.tiny_mode_widget.set_host(self.host)
+        cached_nodes = None
         try:
             if hasattr(self, "charon_board_panel"):
                 self.charon_board_panel.refresh_nodes()
-                cache = getattr(self.charon_board_panel, "_node_cache", {}) or {}
-                self.tiny_mode_widget.prime_from_nodes(cache.values())
+                cached_nodes = (getattr(self.charon_board_panel, "_node_cache", {}) or {}).values()
         except Exception as exc:
-            system_warning(f"Failed to prime tiny mode nodes: {exc}")
+            system_warning(f"Failed to refresh tiny mode nodes: {exc}")
         self._move_comfy_footer_to_tiny_mode()
-        
-        # Switch to tiny mode widget
-        self.stacked_widget.setCurrentWidget(self.tiny_mode_widget)
-        
+
         use_defaults = self._use_tiny_offset_defaults_once or not self.tiny_mode_geometry
         if not use_defaults and self.tiny_mode_geometry:
             # Restore previous tiny mode geometry
@@ -999,6 +996,16 @@ QPushButton#NewWorkflowButton:pressed {{
             y = (screen.height() - self.height()) // 2
             offset_x, offset_y = self._get_tiny_mode_default_offset()
             self.move(x + offset_x, y + offset_y)
+
+        # Prime tiny mode after geometry is settled so initial layout uses the final width
+        if cached_nodes:
+            try:
+                self.tiny_mode_widget.prime_from_nodes(cached_nodes)
+            except Exception as exc:
+                system_warning(f"Failed to prime tiny mode nodes: {exc}")
+
+        # Switch to tiny mode widget after geometry is settled to avoid a visible resize jump
+        self.stacked_widget.setCurrentWidget(self.tiny_mode_widget)
         
         # Update window title
         self.setWindowTitle(f"{self.WINDOW_TITLE_BASE} (Tiny Mode)")
