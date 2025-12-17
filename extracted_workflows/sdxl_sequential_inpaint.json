@@ -1,0 +1,236 @@
+{
+  "1": {
+    "inputs": {
+      "image": "",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": "",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "13": {
+    "inputs": {
+      "grow_mask_by": 0,
+      "pixels": [
+        "1",
+        0
+      ],
+      "vae": [
+        "38",
+        2
+      ],
+      "mask": [
+        "224",
+        0
+      ]
+    },
+    "class_type": "VAEEncodeForInpaint",
+    "_meta": {
+      "title": "VAE Encode (for Inpainting)"
+    }
+  },
+  "25": {
+    "inputs": {
+      "channel": "red",
+      "image": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "ImageToMask",
+    "_meta": {
+      "title": "Convert Image to Mask"
+    }
+  },
+  "38": {
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "102": {
+    "inputs": {
+      "text": "tifa lockhart, cosplay, final fantasy",
+      "clip": [
+        "247",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "103": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "247",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "105": {
+    "inputs": {
+      "seed": 42,
+      "steps": 8,
+      "cfg": 1.48,
+      "sampler_name": "dpmpp_sde",
+      "scheduler": "sgm_uniform",
+      "denoise": 0.5,
+      "model": [
+        "38",
+        0
+      ],
+      "positive": [
+        "502",
+        0
+      ],
+      "negative": [
+        "502",
+        1
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "108": {
+    "inputs": {
+      "image": "",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "110": {
+    "inputs": {
+      "samples": [
+        "105",
+        0
+      ],
+      "vae": [
+        "38",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "111": {
+    "inputs": {
+      "images": [
+        "110",
+        0
+      ]
+    },
+    "class_type": "SaveImageWebsocket",
+    "_meta": {
+      "title": "SaveImageWebsocket"
+    }
+  },
+  "224": {
+    "inputs": {
+      "expand": 0,
+      "tapered_corners": true,
+      "mask": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "GrowMask",
+    "_meta": {
+      "title": "GrowMask"
+    }
+  },
+  "247": {
+    "inputs": {
+      "stop_at_clip_layer": -1,
+      "clip": [
+        "38",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "CLIP Set Last Layer"
+    }
+  },
+  "500": {
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Depth Map"
+    },
+    "inputs": {
+      "image": "depth_map.png",
+      "upload": "image"
+    }
+  },
+  "501": {
+    "class_type": "ControlNetLoader",
+    "_meta": {
+      "title": "Load Depth ControlNet"
+    },
+    "inputs": {
+      "control_net_name": "controlnet_depth_sdxl.safetensors"
+    }
+  },
+  "502": {
+    "class_type": "ControlNetApplyAdvanced",
+    "_meta": {
+      "title": "Apply Depth ControlNet"
+    },
+    "inputs": {
+      "strength": 0.5,
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "positive": [
+        "102",
+        0
+      ],
+      "negative": [
+        "103",
+        0
+      ],
+      "control_net": [
+        "501",
+        0
+      ],
+      "image": [
+        "500",
+        0
+      ],
+      "vae": [
+        "38",
+        2
+      ]
+    }
+  }
+}
