@@ -13,6 +13,7 @@ charon/
 |-- script_table_model.py     # Script table Qt model
 |-- folder_table_model.py     # Folder table Qt model
 |-- script_validator.py       # Centralized script validation logic
+|-- validation_resolver.py    # Model / custom node auto-resolve helpers
 |-- cache_manager.py          # Persistent memory cache system
 |-- charon_logger.py            # Logging system with strict separation
 |-- utilities.py              # Utility helpers and sorting
@@ -84,6 +85,7 @@ ui/
 |-- button_delegate.py            # Run button delegate
 |-- tag_bar.py                    # Vertical tag filter bar
 |-- tag_manager_dialog.py         # Tag management dialog
+|-- validation_dialog.py         # Validation checklist / resolve UI
 |-- flash_utils.py                # Row flash helper
 |-- window_manager.py             # Window creation/docking logic
 `-- keybinds/                     # Keybind system

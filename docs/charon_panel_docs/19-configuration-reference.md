@@ -139,6 +139,15 @@ CACHE_VALIDATION_TTL = 600  # 10 minutes
 # MAX_HOT_FOLDERS = 20  # Not configurable
 ```
 
+## Application Settings (UI)
+
+Global UI toggles live in `APP_SETTING_DEFINITIONS` (`config.py`). Each key is scoped per host (Maya, Nuke, Standalone, etc.) and persisted in the user settings database.
+
+- `run_at_startup` / `startup_mode` / `always_on_top`: Classic window-management options surfaced in the Settings dialog.
+- `advanced_user_mode`: Unlocks optional expert features such as the *Show Raw Validation Payload* entry in the Script Panel. Defaults to `"off"` to keep production builds streamlined.
+
+The settings dialog reads and writes these keys through `KeybindManager.get_all_app_settings()` so any new definition appears automatically without additional wiring.
+
 ## Icon System Configuration
 
 ### Icon Loading Settings

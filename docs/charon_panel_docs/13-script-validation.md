@@ -186,14 +186,27 @@ The validation system provides clear error messages:
 Beyond script metadata checks, Charon performs pre-flight validation for ComfyUI workflows:
 
 - **Entry Point**: `charon.comfy_validation.validate_comfy_environment()` inspects the configured Comfy install, embedded Python, required models, and custom nodes. Missing pieces are returned as `ValidationIssue` objects.
-- **UI Integration**: The script browser triggers validation via the new *Validate* column. States progress from *Validate* → *Validating…* → *Resolve* → *✓ Passed*. Results are cached per workflow hash so the UI can display status without re-hitting ComfyUI every time.
+- **UI Integration**: The script browser triggers validation via the *Validate* column. States progress from *Validate* ? *Validating�* ? *Resolve* ? *? Passed*. Results are cached per workflow hash so the UI can display status without re-hitting ComfyUI every time.
 - **Per-User Cache**: Validation payloads persist under `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache\<workflow>_<hash>\status.json`. This keeps personal model layouts and overrides local to each artist.
-- **Execution Guard**: Grab/Execute is disabled until a workflow reaches *✓ Passed*, preventing surprise failures when models or custom nodes are missing.
+- **Execution Guard**: Grab/Execute remains disabled until a workflow reaches *? Passed*, preventing surprise failures when models or custom nodes are missing.
+
+### Validation Result Dialog
+
+Selecting *Resolve* opens a rich checklist (`ValidationResolveDialog`) that summarises every `ValidationIssue` returned by the validator:
+
+- **Checklist Rows**: Each issue renders as a pass/fail row with a concise summary and the original detail text.
+- **Formatted Details**: Missing assets call out the exact filename and the directories ComfyUI searched (for example, `Cannot find <b>FLUX1\flux1-fill-dev.safetensors</b> under <b>models/unet, models/diffusion_models</b>`).
+- **Auto Resolve Buttons**: Supported issues expose an *Auto Resolve* button that delegates to the helpers in `charon.validation_resolver` (copying models, cloning custom nodes, etc.).
+- **Advanced Mode Raw View**: When **Advanced User Mode** is enabled, the context menu on the *Validate* column adds *Show Raw Validation Payload*, opening the JSON payload for power users.
+- **Activity Log**: Each auto-resolve attempt appends a note at the bottom of the dialog so artists can see what changed.
+
+The validation dialog is intentionally read-only; actual fixes are deferred to the resolve helpers so they can be reused from scripting or future tooling.
 
 ### Custom Node & Model Resolution
-- **Dynamic Categories**: Model discovery asks the running ComfyUI instance (via `folder_paths`) to resolve each filename, so reorganized libraries (e.g. `models/unet`) are detected automatically.
-- **Custom Node Script**: A small helper spins up the embedded interpreter, loads ComfyUI, and reports any node classes that failed to register.
-- **Error Surfacing**: The *Resolve* dialog displays the raw payload, including missing models and stack traces, to guide artists towards fixes.
+
+- **Dynamic Categories**: Model discovery asks the running ComfyUI instance (via `folder_paths`) to resolve each filename, so reorganized libraries (for example `models/unet`) are detected automatically.
+- **Custom Node Script**: A helper spins up the embedded interpreter, loads ComfyUI, and reports any node classes that failed to register.
+- **Resolve Helpers**: `charon.validation_resolver` contains the tooling used by the UI to attempt fixes; validation itself remains a read-only check.
 
 ## Best Practices
 
@@ -239,3 +252,4 @@ if props["should_fade"]:
 - Dependency checking (required modules/plugins)
 - Version compatibility validation
 - Script signing/security validation
+
