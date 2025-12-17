@@ -912,6 +912,49 @@ class CharonWindow(QtWidgets.QWidget):
         self.mode_3d_button.toggled.connect(self._on_3d_mode_toggled)
         info_layout.addWidget(self.mode_3d_button)
         
+        info_layout.addSpacing(8)
+
+        # ACEScg Toggle Button
+        self._aces_off_style = """
+            QPushButton {
+                padding: 0px 12px;
+                border: 1px solid #2c323c;
+                border-radius: 4px;
+                background-color: #37383D;
+                color: #e8eaef;
+            }
+            QPushButton:hover { background-color: #404248; }
+            QPushButton:pressed { background-color: #2f3034; }
+        """
+        self._aces_on_style = """
+            QPushButton {
+                padding: 0px 12px;
+                border: 1px solid #2f9e44;
+                border-radius: 4px;
+                background-color: #37b24d;
+                color: white;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #40c057; }
+        """
+        
+        self.aces_toggle_button = QtWidgets.QPushButton("ACES Off", info_container)
+        self.aces_toggle_button.setCheckable(True)
+        self.aces_toggle_button.setFixedHeight(24)
+        self.aces_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.aces_toggle_button.setStyleSheet(self._aces_off_style)
+        self.aces_toggle_button.setToolTip("Toggle ACEScg color space handling for ComfyUI integration")
+        self.aces_toggle_button.toggled.connect(self._on_aces_toggle_changed)
+        
+        from .. import preferences
+        initial_aces_state = preferences.get_preference("aces_mode_enabled", False)
+        self.aces_toggle_button.setChecked(initial_aces_state)
+        if initial_aces_state:
+             self.aces_toggle_button.setText("ACES On")
+             self.aces_toggle_button.setStyleSheet(self._aces_on_style)
+
+        info_layout.addWidget(self.aces_toggle_button)
+        
         content_layout.addWidget(info_container)
         
         content_layout.addSpacing(10)
@@ -1237,22 +1280,6 @@ class CharonWindow(QtWidgets.QWidget):
         self.header_refresh_button.clicked.connect(self.on_refresh_clicked)
         self.actions_layout.addWidget(self.header_refresh_button)
 
-        # ACEScg Toggle Button
-        self.aces_toggle_button = QtWidgets.QPushButton("ACES Off", self.actions_container)
-        self.aces_toggle_button.setCheckable(True)
-        self.aces_toggle_button.setFixedHeight(button_height)
-        self.aces_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.aces_toggle_button.setStyleSheet(action_style)
-        self.aces_toggle_button.setToolTip("Toggle ACEScg color space handling for ComfyUI integration")
-        self.aces_toggle_button.toggled.connect(self._on_aces_toggle_changed)
-        
-        # Insert to the left of Refresh
-        refresh_index = self.actions_layout.indexOf(self.header_refresh_button)
-        if refresh_index >= 0:
-            self.actions_layout.insertWidget(refresh_index, self.aces_toggle_button)
-        else:
-            self.actions_layout.addWidget(self.aces_toggle_button)
-
         settings_icon, settings_box = _make_symbol_icon("⏣")
         self.header_settings_button = QtWidgets.QPushButton("Settings", self.actions_container)
         self.header_settings_button.setIcon(settings_icon)
@@ -1555,8 +1582,8 @@ QPushButton#NewWorkflowButton:pressed {{
                     self.aces_toggle_button.setStyleSheet(self._aces_on_style)
             else:
                 self.aces_toggle_button.setText("ACES Off")
-                if hasattr(self, '_default_action_style'):
-                    self.aces_toggle_button.setStyleSheet(self._default_action_style)
+                if hasattr(self, '_aces_off_style'):
+                    self.aces_toggle_button.setStyleSheet(self._aces_off_style)
     
     def _run_script_by_path(self, script_path: str):
         """Run a script by its path - delegates to execute_script."""
