@@ -22,6 +22,31 @@ CACHE_KEY = "comfy_validation_cache"
 BANNER_PREF_KEY = "comfy_validator_banner_dismissed"
 CACHE_TTL_SECONDS = 900  # 15 minutes
 MODEL_EXTENSIONS = (".ckpt", ".safetensors", ".pth", ".pt", ".bin", ".onnx", ".yaml")
+MODEL_CATEGORY_PREFIXES = {
+    "diffusion_models",
+    "checkpoints",
+    "unet",
+    "unets",
+    "text_encoders",
+    "text-encoders",
+    "clip",
+    "clip_vision",
+    "clip-vision",
+    "loras",
+    "vae",
+    "vae_approx",
+    "vae-approx",
+    "embeddings",
+    "controlnet",
+    "hypernetworks",
+    "upscale_models",
+    "upscale",
+    "motion_models",
+    "motion_loras",
+    "styles",
+    "style_models",
+    "ipadapter",
+}
 IGNORED_NODE_TYPES = {
     "",
     "note",
@@ -1444,6 +1469,31 @@ def _normalize_workflow_entry(value: str) -> str:
         return normalized.replace("/", "\\")
     return normalized
 
+
+def _value_has_path_component(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    return "/" in str(value).replace("\\", "/")
+
+
+def _strip_category_prefix(value: str) -> str:
+    normalized = (value or "").replace("\\", "/").lstrip("/")
+    if not normalized:
+        return normalized
+    lowered = normalized.lower()
+    if lowered.startswith("models/"):
+        parts = normalized.split("/", 1)
+        normalized = parts[1] if len(parts) > 1 else ""
+    segments = [segment for segment in normalized.split("/") if segment]
+    if len(segments) <= 1:
+        return normalized
+    first_lower = segments[0].lower()
+    if first_lower in MODEL_CATEGORY_PREFIXES:
+        trimmed = "/".join(segments[1:])
+        if trimmed:
+            return trimmed
+    return normalized
+
 def _derive_workflow_value_from_path(
     path_value: Optional[str],
     signature: Optional[Tuple[Optional[str], Optional[str], Optional[str]]],
@@ -1453,33 +1503,46 @@ def _derive_workflow_value_from_path(
     if not path_value:
         return None
     abs_path = os.path.abspath(path_value)
+    original_name = None
     category = None
     if signature and len(signature) >= 2:
+        original_name = signature[0]
         category = signature[1]
+    prefer_simple_name = bool(original_name) and not _value_has_path_component(original_name)
+    simple_value = _normalize_workflow_entry(os.path.basename(abs_path))
+
+    def _finalize(candidate: str) -> str:
+        stripped = _strip_category_prefix(candidate)
+        normalized_candidate = _normalize_workflow_entry(stripped)
+        if prefer_simple_name and simple_value:
+            if _value_has_path_component(stripped) or _value_has_path_component(normalized_candidate):
+                return simple_value
+        return normalized_candidate
+
     if category:
         category_root = os.path.join(models_root, category)
         if os.path.isdir(category_root):
             try:
                 rel = os.path.relpath(abs_path, category_root)
                 if not rel.startswith('..'):
-                    return _normalize_workflow_entry(rel)
+                    return _finalize(rel)
             except ValueError:
                 pass
     if models_root and os.path.isdir(models_root):
         try:
             rel = os.path.relpath(abs_path, models_root)
             if not rel.startswith('..'):
-                return _normalize_workflow_entry(rel)
+                return _finalize(rel)
         except ValueError:
             pass
     if comfy_dir:
         try:
             rel = os.path.relpath(abs_path, comfy_dir)
             if not rel.startswith('..'):
-                return _normalize_workflow_entry(rel)
+                return _finalize(rel)
         except ValueError:
             pass
-    return _normalize_workflow_entry(abs_path)
+    return _finalize(abs_path)
 
 def _filter_missing_with_resolved_cache(
     missing: Iterable[Dict[str, Any]],
