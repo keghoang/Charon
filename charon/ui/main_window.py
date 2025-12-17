@@ -491,6 +491,13 @@ class CharonWindow(QtWidgets.QWidget):
         self.actions_layout.setSpacing(8)
         content_layout.addSpacing(10)
         content_layout.addWidget(self.actions_container)
+        
+        # Project Label (Moved from footer)
+        self.project_label = QtWidgets.QLabel(self.normal_widget)
+        self.project_label.setObjectName("charonProjectLabel")
+        self.project_label.setStyleSheet("color: #7f848e; font-size: 11px;")
+        content_layout.addWidget(self.project_label)
+        
         content_layout.addSpacing(10)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
@@ -671,29 +678,21 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.setSpacing(4)
         footer_layout.setVerticalSpacing(5)
 
-        # Left Column: Project Label (Created first for font reference)
-        self.project_label = QtWidgets.QLabel(parent)
-        self.project_label.setObjectName("charonProjectLabel")
-        self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.project_label.setWordWrap(False)
-        self.project_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
-        self.project_label.setMinimumWidth(280)
-
         # Left Column: GPU Label (Row 0) - Aligned Bottom to match GPU bars
         self.gpu_label = QtWidgets.QLabel(parent)
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.gpu_label.setWordWrap(False)
+        # Use existing font since project_label is created earlier now
         gpu_font = QtGui.QFont(self.project_label.font())
         gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
         
-        # Add to layout: GPU on top (Row 0), Project on bottom (Row 1)
+        # GPU Label stays on Row 0 (Top Left)
         footer_layout.addWidget(self.gpu_label, 0, 0, Qt.AlignLeft | Qt.AlignBottom)
-        footer_layout.addWidget(self.project_label, 1, 0, Qt.AlignLeft | Qt.AlignVCenter)
+
+        # Note: Project label removed from footer (Row 1 Left is empty)
 
         # Spacer Column (Row 0-1, Col 1)
         footer_layout.setColumnStretch(1, 1)
@@ -863,6 +862,10 @@ QPushButton#NewWorkflowButton:pressed {{
         left_margin = max(0, tab_width)
         if hasattr(self, "actions_layout"):
             self.actions_layout.setContentsMargins(left_margin, 0, 0, 0)
+        
+        # Also align the project label which is below the actions
+        if hasattr(self, "project_label"):
+            self.project_label.setContentsMargins(left_margin, 0, 0, 0)
 
     def _apply_main_background(self):
         """Apply the primary background color across the window surfaces."""
