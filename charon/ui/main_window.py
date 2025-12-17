@@ -445,16 +445,18 @@ class CharonWindow(QtWidgets.QWidget):
         )
         main_layout.setSpacing(config.UI_ELEMENT_SPACING + 4)
 
+        content_margin = 10
+
         # Text-only header (replaces legacy banner)
         header_layout = QtWidgets.QVBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setContentsMargins(content_margin, 0, content_margin, 0)
         header_layout.setSpacing(2)
         title_label = QtWidgets.QLabel("Charon")
         title_label.setObjectName("CharonTitle")
-        title_label.setStyleSheet("font-size: 30px; font-weight: 700;")
+        title_label.setStyleSheet("font-size: 30px; font-weight: 700; color: #ffffff;")
         subtitle_label = QtWidgets.QLabel("Nuke/ComfyUI Integration")
         subtitle_label.setObjectName("CharonSubtitle")
-        subtitle_label.setStyleSheet("font-size: 15px; color: palette(midlight);")
+        subtitle_label.setStyleSheet("font-size: 15px; color: #ffffff;")
         header_layout.addWidget(title_label)
         header_layout.addWidget(subtitle_label)
         header_layout.addStretch(0)
@@ -473,7 +475,7 @@ class CharonWindow(QtWidgets.QWidget):
         
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
-        content_layout.setContentsMargins(10, 10, 10, 10)
+        content_layout.setContentsMargins(content_margin, 10, content_margin, 10)
         content_layout.setSpacing(8)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
