@@ -917,7 +917,7 @@ class CharonWindow(QtWidgets.QWidget):
         # ACEScg Toggle Button
         self._aces_off_style = """
             QPushButton {
-                padding: 0px 12px;
+                padding: 0px 8px;
                 border: 1px solid #2c323c;
                 border-radius: 4px;
                 background-color: #37383D;
@@ -928,12 +928,12 @@ class CharonWindow(QtWidgets.QWidget):
         """
         self._aces_on_style = """
             QPushButton {
-                padding: 0px 12px;
+                padding: 0px 8px;
                 border: 1px solid #1c7ed6;
                 border-radius: 4px;
                 background-color: #339af0;
                 color: white;
-                font-weight: bold;
+                font-weight: normal;
             }
             QPushButton:hover { background-color: #4dabf7; }
         """
