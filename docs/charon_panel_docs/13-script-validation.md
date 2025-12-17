@@ -1,4 +1,4 @@
-# Script Validation System
+﻿# Script Validation System
 
 The Script Validation System provides centralized logic for determining whether scripts can be executed, how they should be displayed, and what visual properties they should have. This ensures consistent behavior across all UI components.
 
@@ -186,8 +186,8 @@ The validation system provides clear error messages:
 Beyond script metadata checks, Charon performs pre-flight validation for ComfyUI workflows:
 
 - **Entry Point**: `charon.comfy_validation.validate_comfy_environment()` inspects the configured Comfy install, embedded Python, required models, and custom nodes. Missing pieces are returned as `ValidationIssue` objects.
-- **UI Integration**: The script browser triggers validation via the *Validate* column. States progress from *Validate* ? *Validating…* ? *Resolve* ? *? Passed*. Results are cached per workflow hash so the UI can display status without re-hitting ComfyUI every time.
-- **Per-User Cache**: Validation payloads persist under `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache\<workflow>_<hash>\status.json`. This keeps personal model layouts and overrides local to each artist.
+- **UI Integration**: The script browser triggers validation via the *Validate* column. States progress from *Validate* ? *Validatingâ€¦* ? *Resolve* ? *? Passed*. Results are cached per workflow hash so the UI can display status without re-hitting ComfyUI every time.
+- **Per-User Cache**: Validation payloads persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json`. This keeps personal model layouts and overrides local to each artist.
 - **Execution Guard**: Grab/Execute remains disabled until a workflow reaches *? Passed*, preventing surprise failures when models or custom nodes are missing.
 
 ### Validation Result Dialog
@@ -202,11 +202,11 @@ Selecting *Resolve* opens a rich checklist (`ValidationResolveDialog`) that summ
 
 The validation dialog is intentionally read-only; actual fixes are deferred to the resolve helpers so they can be reused from scripting or future tooling.
 
-- **Live Status**: As soon as the last missing model is resolved, the section header flips to the green **✓ Passed** state. The Action column grows to fit the “Resolved” label and buttons disable once a row is fixed.
+- **Live Status**: As soon as the last missing model is resolved, the section header flips to the green **âœ“ Passed** state. The Action column grows to fit the â€œResolvedâ€ label and buttons disable once a row is fixed.
 
 #### Validation Artifacts
 
-Every validation run now writes per-user artifacts beside the validated workflow (stored under %LOCALAPPDATA%/Charon/plugins/charon/Charon_repo_local/workflow/<user>/<workflow>/.charon_cache/validation/):
+Every validation run now writes per-user artifacts beside the validated workflow (stored under %LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<relative_path>\.charon_cache\validation\):
 
 - validation_result_raw.json captures the first validation payload exactly as ComfyUI returned it. This file is never deleted automatically, giving artists a canonical snapshot.
 - validation_resolve_log.json is an ordered list of resolution events (button clicks, auto-resolve copies, etc.) so support can review what changed post-validation.
@@ -263,4 +263,5 @@ if props["should_fade"]:
 - Dependency checking (required modules/plugins)
 - Version compatibility validation
 - Script signing/security validation
+
 
