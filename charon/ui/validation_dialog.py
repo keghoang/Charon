@@ -63,6 +63,7 @@ COLORS = {
     "text_sub": "#a1a1aa",
     "danger": "#ef4444",
     "success": "#22c55e",
+    "accent": "#3b82f6",
     "restart": "#f97316",
     "restart_hover": "#fb923c",
     "border": "#3f3f46",
@@ -171,6 +172,17 @@ def _build_icon(name: str) -> QtGui.QIcon:
         path.lineTo(18, 28)
         path.lineTo(30, 12)
         painter.drawPath(path)
+
+    elif name == "header_info":
+        painter.setBrush(QtGui.QColor(COLORS["accent"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, 40, 40)
+        painter.setBrush(QtGui.QColor("#ffffff"))
+        # Exclamation mark
+        # Dot
+        painter.drawEllipse(18, 29, 4, 4)
+        # Bar
+        painter.drawRoundedRect(18, 10, 4, 16, 2, 2)
 
     elif name == "check":
         pen = QtGui.QPen(QtGui.QColor(COLORS["success"]), 2.5)
@@ -723,14 +735,15 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         header_layout.setSpacing(15)
 
         self._header_icon = QtWidgets.QLabel()
-        self._header_icon.setPixmap(_build_icon("header_error").pixmap(40, 40))
+        self._header_icon.setPixmap(_build_icon("header_info").pixmap(40, 40))
         self._header_icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
 
         text_stack = QtWidgets.QVBoxLayout()
         text_stack.setSpacing(0)
 
-        self._header_title = QtWidgets.QLabel("Validation Failed")
+        self._header_title = QtWidgets.QLabel("Validation in progress")
         self._header_title.setObjectName("Heading")
+        self._header_title.setStyleSheet(f"color: {COLORS['accent']};")
         self._header_subtitle = QtWidgets.QLabel("Issues need attention")
         self._header_subtitle.setObjectName("SubHeading")
 
@@ -1057,9 +1070,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 subtitle_text = "Restart ComfyUI to finish resolving"
             self._header_subtitle.setText(subtitle_text)
         if self._header_title:
-            self._header_title.setText("Validation Successful" if total_missing == 0 else "Validation Failed")
+            if total_missing == 0:
+                self._header_title.setText("Validation Successful")
+                self._header_title.setStyleSheet("")
+            else:
+                self._header_title.setText("Validation in progress")
+                self._header_title.setStyleSheet(f"color: {COLORS['accent']};")
         if self._header_icon:
-            icon_name = "header_success" if total_missing == 0 else "header_error"
+            icon_name = "header_success" if total_missing == 0 else "header_info"
             self._header_icon.setPixmap(_build_icon(icon_name).pixmap(40, 40))
 
         if self._success_subtitle:

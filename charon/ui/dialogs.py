@@ -1093,11 +1093,18 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 QtWidgets.QLineEdit.Normal, str(current_val or "")
             )
         elif val_type == "integer" or val_type == "INT":
-            new_val, ok = QtWidgets.QInputDialog.getInt(
-                self, "Change Default Value",
-                f"Enter new integer value for '{data.get('label')}':",
-                int(current_val or 0)
+            # Use getText to avoid C++ int overflow for large seeds
+            current_str = str(current_val or 0)
+            text_val, ok = QtWidgets.QInputDialog.getText(
+                self, "Change Default Value", 
+                f"Enter new integer value for '{data.get('label')}':", 
+                QtWidgets.QLineEdit.Normal, current_str
             )
+            if ok:
+                try:
+                    new_val = int(text_val)
+                except ValueError:
+                    ok = False
         elif val_type == "float" or val_type == "FLOAT":
             new_val, ok = QtWidgets.QInputDialog.getDouble(
                 self, "Change Default Value",
