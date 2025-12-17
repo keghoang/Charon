@@ -1395,6 +1395,7 @@ def process_charonop_node():
         result_file = os.path.join(results_dir, f"charon_result_{int(time.time())}.json")
 
         def update_progress(progress, status='Processing', error=None, extra=None):
+            nonlocal current_node_state
             try:
                 node.knob('charon_progress').setValue(progress)
                 node.knob('charon_status').setValue(status)
@@ -1407,6 +1408,9 @@ def process_charonop_node():
                 lifecycle = 'Error'
             elif progress >= 1.0:
                 lifecycle = 'Completed'
+
+            current_node_state = lifecycle
+            apply_status_color(current_node_state)
 
             payload = load_status_payload()
             runs = ensure_history(payload)
