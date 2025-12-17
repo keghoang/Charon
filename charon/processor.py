@@ -2587,16 +2587,17 @@ def process_charonop_node():
                                         _remove_mismatched_reads(required_class)
 
                                     read_node = find_linked_read_node()
-                                    if read_node is not None and not reuse_existing:
-                                        unlink_read_node(read_node)
-                                        read_node = None
                                     if read_node is not None:
                                         try:
                                             current_class = getattr(read_node, "Class", lambda: "")()
                                         except Exception:
                                             current_class = ""
-                                        if current_class != required_class:
+                                        if not reuse_existing or (current_class and current_class != required_class):
                                             unlink_read_node(read_node)
+                                            try:
+                                                nuke.delete(read_node)
+                                            except Exception:
+                                                pass
                                             read_node = None
 
                                     if read_node is None:
