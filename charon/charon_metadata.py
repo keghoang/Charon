@@ -141,7 +141,6 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         "charon_meta": stored_meta,
         "run_on_main": bool(raw_meta.get("run_on_main", False)),
     }
-    system_debug(f"Loaded metadata parameters: {normalized_parameters}")
 
     return metadata
 
@@ -172,7 +171,6 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
     except Exception:
         system_debug(f"Failed to write metadata at {charon_path}")
         return None
-    system_debug(f"Wrote metadata parameters: {payload.get('parameters')}")
 
     return load_charon_metadata(script_path)
 
