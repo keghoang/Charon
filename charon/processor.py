@@ -1204,39 +1204,30 @@ def _wait_for_single_image(client, prompt_id, timeout=300):
         time.sleep(1.0)
     return None
 
-def _create_step2_contact_sheet(charon_node, image_paths):
+def _create_step2_result_group(charon_node, image_paths):
     import nuke
-    
-    # Calculate layout (same as coverage rig: 3 cols, 2 rows)
-    # 0:Init, 1:Right, 2:Back, 3:Left, 4:Top, 5:Bottom
-    # Row 1: Init, Right, Back (0, 1, 2)
-    # Row 2: Left, Top, Bottom (3, 4, 5) ? 
-    # Actually coverage rig layout was:
-    # ("Init",   0,   0,   0, 0) -> 0
-    # ("Right",  90,  0,   1, 0) -> 1
-    # ("Back",   180, 0,   2, 0) -> 2
-    # ("Left",   270, 0,   3, 0) -> 3
-    # ("Top",    0,   90,  0, 1) -> 4
-    # ("Bottom", 0,   -90, 1, 1) -> 5
-    # Grid X/Y logic was: x + y*4. 
-    # Row 0: Init(0), Right(1), Back(2), Left(3) -- Wait, grid_x goes up to 3.
-    # Ah, the user's previous code had:
-    # x_pos = (grid_x + grid_y * 4) * 200
-    # The contact sheet uses inputs in order.
-    # We will just connect them in order.
     
     start_x = charon_node.xpos() + 200
     start_y = charon_node.ypos()
     
+    group = nuke.createNode("Group")
+    group.setName("Charon_Step2_Output")
+    group.setXYpos(start_x, start_y)
+    
+    group.begin()
+    
     reads = []
+    inner_x = 0
+    inner_y = 0
+    
     for idx, path in enumerate(image_paths):
         r = nuke.createNode("Read")
         r['file'].setValue(path.replace('\\', '/'))
-        r.setXYpos(start_x + (idx * 100), start_y)
+        r.setXYpos(inner_x + (idx * 150), inner_y)
         reads.append(r)
         
     cs = nuke.createNode("ContactSheet")
-    cs.setXYpos(start_x, start_y + 200)
+    cs.setXYpos(inner_x, inner_y + 200)
     cs['width'].setValue(3072)
     cs['height'].setValue(2048)
     cs['rows'].setValue(2)
@@ -1246,6 +1237,14 @@ def _create_step2_contact_sheet(charon_node, image_paths):
     
     for i, r in enumerate(reads):
         cs.setInput(i, r)
+        
+    output = nuke.createNode("Output")
+    output.setInput(0, cs)
+    output.setXYpos(cs.xpos(), cs.ypos() + 100)
+    
+    group.end()
+
+
 
 
 def process_charonop_node():
@@ -3528,9 +3527,10 @@ def process_charonop_node():
                     if image_paths:
                         try:
                             import nuke
-                            nuke.executeInMainThread(lambda: _create_step2_contact_sheet(node, image_paths))
+                            nuke.executeInMainThread(lambda: _create_step2_result_group(node, image_paths))
                         except Exception as cs_err:
-                            log_debug(f"Step 2 ContactSheet failed: {cs_err}", "WARNING")
+                            log_debug(f"Step 2 Result Group failed: {cs_err}", "WARNING")
+                    batch_outputs = []
 
                 node_x, node_y = _safe_node_coords()
                 result_data = {
