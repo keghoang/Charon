@@ -437,25 +437,29 @@ class CharonWindow(QtWidgets.QWidget):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
         main_layout = QtWidgets.QVBoxLayout(parent)
-        main_layout.setContentsMargins(config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS, 
-                                      config.UI_WINDOW_MARGINS, config.UI_WINDOW_MARGINS)
-        main_layout.setSpacing(config.UI_ELEMENT_SPACING)
+        main_layout.setContentsMargins(
+            config.UI_WINDOW_MARGINS,
+            config.UI_WINDOW_MARGINS,
+            config.UI_WINDOW_MARGINS,
+            config.UI_WINDOW_MARGINS,
+        )
+        main_layout.setSpacing(config.UI_ELEMENT_SPACING + 4)
 
         # Text-only header (replaces legacy banner)
         header_layout = QtWidgets.QVBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(4)
+        header_layout.setSpacing(2)
         title_label = QtWidgets.QLabel("Charon")
         title_label.setObjectName("CharonTitle")
-        title_label.setStyleSheet("font-size: 26px; font-weight: 600;")
+        title_label.setStyleSheet("font-size: 30px; font-weight: 700;")
         subtitle_label = QtWidgets.QLabel("Nuke/ComfyUI Integration")
         subtitle_label.setObjectName("CharonSubtitle")
-        subtitle_label.setStyleSheet("font-size: 14px; color: palette(midlight);")
+        subtitle_label.setStyleSheet("font-size: 15px; color: palette(midlight);")
         header_layout.addWidget(title_label)
         header_layout.addWidget(subtitle_label)
         header_layout.addStretch(0)
         main_layout.addLayout(header_layout)
-        main_layout.addSpacing(config.UI_ELEMENT_SPACING)
+        main_layout.addSpacing(config.UI_ELEMENT_SPACING + 2)
 
         # Add horizontal separator
         separator = QtWidgets.QFrame()
@@ -465,12 +469,12 @@ class CharonWindow(QtWidgets.QWidget):
         main_layout.addWidget(separator)
         
         # Add spacing after separator
-        main_layout.addSpacing(config.UI_ELEMENT_SPACING)
+        main_layout.addSpacing(config.UI_ELEMENT_SPACING + 2)
         
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
-        content_layout.setContentsMargins(4, 4, 4, 4)  # Small margins
-        content_layout.setSpacing(2)  # Minimal spacing
+        content_layout.setContentsMargins(10, 10, 10, 10)
+        content_layout.setSpacing(8)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
         self.main_splitter = QtWidgets.QSplitter(Qt.Horizontal)
