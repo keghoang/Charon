@@ -86,8 +86,9 @@ class SceneNodesPanel(QtWidgets.QWidget):
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
         margin = getattr(config, "UI_WINDOW_MARGINS", 4)
+        spacing = getattr(config, "UI_ELEMENT_SPACING", 6)
         layout.setContentsMargins(margin, margin, margin, margin)
-        layout.setSpacing(getattr(config, "UI_ELEMENT_SPACING", 6))
+        layout.setSpacing(spacing)
 
         header_layout = QtWidgets.QHBoxLayout()
         header_layout.setSpacing(6)
@@ -143,11 +144,12 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self.table.setItemDelegateForColumn(1, delegate)
 
         header = self.table.horizontalHeader()
-        header.setStretchLastSection(True)
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        header.resizeSection(0, 160)
-        header.resizeSection(1, 220)
-        header.resizeSection(2, 160)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
 
         vertical_header = self.table.verticalHeader()
         if vertical_header:
@@ -167,7 +169,8 @@ class SceneNodesPanel(QtWidgets.QWidget):
         self.info_label.setStyleSheet("color: #a0a0a0; font-size: 11px;")
         self.info_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.info_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        self.info_label.setFixedHeight(18)
+        self.info_label.setMinimumHeight(18)
+        self.info_label.setMaximumHeight(18)
         layout.addWidget(self.info_label)
 
     # ------------------------------------------------------------------ Refresh logic
@@ -320,13 +323,13 @@ class SceneNodesPanel(QtWidgets.QWidget):
             return
 
         if info.workflow_path:
-            text = f"Workflow: {info.workflow_name} — {info.workflow_path}"
+            self._footer_text = f"Workflow: {info.workflow_name} — {info.workflow_path}"
+            self.info_label.setToolTip(info.workflow_path or "")
         else:
-            text = f"Node: {info.name}"
+            self._footer_text = f"Node: {info.name}"
+            self.info_label.setToolTip("")
 
-        self._footer_text = text
         self._apply_footer_text()
-        self.info_label.setToolTip(info.workflow_path or "")
 
     def _show_context_menu(self, position):
         item = self.table.itemAt(position)
@@ -544,7 +547,13 @@ class SceneNodesPanel(QtWidgets.QWidget):
             self.info_label.setText("")
             return
         metrics = self.info_label.fontMetrics()
-        width = max(self.info_label.width(), 200)
+        width = self.info_label.width()
+        if width <= 0 and self.table:
+            width = self.table.viewport().width()
+        if width <= 0:
+            width = self.width()
+        if width <= 0:
+            width = 1
         elided = metrics.elidedText(self._footer_text, Qt.ElideMiddle, width)
         self.info_label.setText(elided)
 
