@@ -144,15 +144,8 @@ class CharonWindow(QtWidgets.QWidget):
         self.setup_ui()
         self._apply_main_background()
 
-        # Clean up missing bookmarks
-        missing_bookmarks = user_settings_db.cleanup_missing_bookmarks()
-        if missing_bookmarks:
-            bookmark_list = "\n".join(missing_bookmarks)
-            QtWidgets.QMessageBox.information(
-                self,
-                "Removed Bookmarks",
-                f"The following bookmarked workflows were not found and have been removed:\n\n{bookmark_list}"
-            )
+        # Clean up missing bookmarks in background
+        self._folder_probe_executor.submit(self._async_bookmark_cleanup)
 
         # Set window properties
         self.setWindowTitle(self.WINDOW_TITLE_BASE)
@@ -183,6 +176,30 @@ class CharonWindow(QtWidgets.QWidget):
         self._startup_mode_pending = mode
         if mode == "tiny" and hasattr(self, "enter_tiny_mode"):
             self.enter_tiny_mode()
+
+    def _async_bookmark_cleanup(self):
+        """Run bookmark cleanup in background thread."""
+        try:
+            from ..settings import user_settings_db
+            missing = user_settings_db.cleanup_missing_bookmarks()
+            if missing:
+                # Dispatch UI update to main thread
+                QtCore.QMetaObject.invokeMethod(
+                    self,
+                    lambda: self._show_bookmark_cleanup_dialog(missing),
+                    QtCore.Qt.QueuedConnection
+                )
+        except Exception as e:
+            system_warning(f"Bookmark cleanup failed: {e}")
+
+    def _show_bookmark_cleanup_dialog(self, missing):
+        """Show the bookmark cleanup dialog on main thread."""
+        bookmark_list = "\n".join(missing)
+        QtWidgets.QMessageBox.information(
+            self,
+            "Removed Bookmarks",
+            f"The following bookmarked workflows were not found and have been removed:\n\n{bookmark_list}"
+        )
 
     def _debug_user_action(self, message: str) -> None:
         """Emit a concise debug line for user-triggered UI actions."""
@@ -1529,24 +1546,52 @@ QPushButton#NewWorkflowButton:pressed {{
         label.setToolTip(f"Project not found, saving to {destination}")
 
     def _refresh_gpu_display(self):
-        """Update the footer with detected GPU/VRAM summary."""
+        """Update the footer with detected GPU/VRAM summary (async)."""
         label = getattr(self, "gpu_label", None)
         if label is None:
             return
-        if not getattr(self, "_gpu_summary", None):
+            
+        # Use cached value if available
+        if getattr(self, "_gpu_summary", None):
+            summary = self._gpu_summary
+            label.setText(f"GPU: {summary}")
+            label.setToolTip(summary)
+            return
+
+        label.setText("GPU: Detecting...")
+        
+        def worker():
             try:
-                # Get raw entries without prefix
                 entries = self._detect_nvidia_gpus()
                 if not entries:
                     entries = self._detect_wmi_gpus()
-                self._gpu_summary = "; ".join(entries) if entries else "Unknown GPU"
+                summary = "; ".join(entries) if entries else "Unknown GPU"
             except Exception as exc:
-                system_debug(f"GPU detection fallback failed: {exc}")
-                self._gpu_summary = "Unknown GPU"
-        summary = self._gpu_summary or "Unknown GPU"
-        # Prefix added back per user request
-        label.setText(f"GPU: {summary}")
-        label.setToolTip(summary)
+                system_debug(f"GPU detection failed: {exc}")
+                summary = "Unknown GPU"
+            return summary
+
+        def on_complete(summary):
+            self._gpu_summary = summary
+            if getattr(self, "gpu_label", None):
+                self.gpu_label.setText(f"GPU: {summary}")
+                self.gpu_label.setToolTip(summary)
+        
+        future = self._folder_probe_executor.submit(worker)
+        
+        def callback(f):
+            try:
+                result = f.result()
+            except:
+                result = "Unknown GPU"
+            
+            QtCore.QMetaObject.invokeMethod(
+                label,
+                lambda: on_complete(result),
+                QtCore.Qt.QueuedConnection
+            )
+            
+        future.add_done_callback(callback)
     
     def _on_keybind_triggered(self, action: str):
         """Handle keybind trigger from keybind manager."""
