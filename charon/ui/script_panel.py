@@ -115,6 +115,9 @@ class ScriptPanel(QtWidgets.QWidget):
         self._validation_cache = {}
         self._comfy_connected = False
         self._closing = False
+        self._load_sequence = 0
+        self._active_load_id = None
+        self._active_folder_path = None
         
         # Setup the UI
         self.layout = QtWidgets.QVBoxLayout(self)
@@ -310,10 +313,15 @@ class ScriptPanel(QtWidgets.QWidget):
         self.folder_loader = workflow_model.FolderLoader(self)
         self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
         self.folder_loader.finished.connect(self._on_folder_load_finished)
+        self.folder_loader.load_id = None
 
     def _on_folder_load_finished(self):
         """Ensure UI is re-enabled even if a load was interrupted."""
-        self._loading = False
+        # Only mark finished if this was the active load
+        sender = self.sender()
+        sender_id = getattr(sender, "load_id", None) if sender else None
+        if sender_id is None or sender_id == self._active_load_id:
+            self._loading = False
         try:
             self.script_view.setEnabled(True)
         except Exception:
@@ -439,6 +447,13 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Store the parent folder for create script functionality
         self.parent_folder = folder_path
+        self._active_folder_path = folder_path
+        self._load_sequence += 1
+        self._active_load_id = self._load_sequence
+        try:
+            self.folder_loader.load_id = self._active_load_id
+        except Exception:
+            pass
 
         # Guard against browsing outside the Charon workflow repository
         if folder_path:
@@ -484,6 +499,19 @@ class ScriptPanel(QtWidgets.QWidget):
     
     def on_scripts_loaded(self, scripts):
         """Handle when scripts are loaded into the model"""
+        sender = self.sender()
+        sender_id = getattr(sender, "load_id", None) if sender else None
+        sender_path = getattr(sender, "folder_path", None) if sender else None
+
+        # Ignore stale emissions from previous loads
+        if sender_id is not None and sender_id != self._active_load_id:
+            return
+        if self._active_folder_path and sender_path:
+            if os.path.normpath(sender_path).lower() != os.path.normpath(self._active_folder_path).lower():
+                return
+        if not self._loading:
+            return
+
         # Cache hotkeys and bookmarks to avoid repeated DB queries
         if not hasattr(self, '_cached_hotkeys') or not hasattr(self, '_cached_bookmarks'):
             self._refresh_user_data_cache()
