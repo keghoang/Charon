@@ -191,7 +191,7 @@ class WindowManager:
                     window.setAttribute(attr, True)
         
         # Set window title
-        window.setWindowTitle(f"Galt - {host}")
+        window.setWindowTitle(f"Charon - {host}")
         
         system_debug(f"Applied window config for {host}: {host_config['description']}")
     
