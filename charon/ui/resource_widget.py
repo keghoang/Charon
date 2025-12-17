@@ -130,7 +130,7 @@ class ResourceWidget(QWidget):
         
         # Feedback Label (Row 0, Col 3) - spans 2 rows
         self.flush_feedback = QLabel("")
-        self.flush_feedback.setStyleSheet("color: #cfd3dc; font-size: 10px; margin-left: 4px;")
+        self.flush_feedback.setStyleSheet("color: #cfd3dc; font-size: 10px; margin-left: 0px;")
         self.flush_feedback.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.grid.addWidget(self.flush_feedback, 0, 3, 2, 1)
         
@@ -146,7 +146,7 @@ class ResourceWidget(QWidget):
 
     def _update_anim(self):
         self.anim_dots = (self.anim_dots + 1) % 4
-        self.flush_feedback.setText(f"Flushing{' .' * self.anim_dots}")
+        self.flush_feedback.setText(f"Flushing{'.' * self.anim_dots}")
 
     def _flush_vram(self):
         self.pre_flush_vram = self.current_total_vram_gb
