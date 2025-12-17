@@ -9,7 +9,7 @@ from typing import Dict, Optional
 from ...qt_compat import QtWidgets, QtCore, QtGui, WindowContextHelpButtonHint, WindowCloseButtonHint
 from ...settings import user_settings_db
 from ...charon_logger import system_info
-from ... import config, workflow_local_store
+from ... import config, workflow_local_store, preferences
 from .keybind_manager import KeybindManager
 from .local_handler import LocalKeybindHandler
 from ..dialogs import HotkeyDialog
@@ -53,13 +53,61 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.tab_widget = QtWidgets.QTabWidget()
         layout.addWidget(self.tab_widget)
         
-        # Create tabs - Global first, then Charon
-        self._create_global_tab()
-        self._create_local_tab()
+        # Create tabs in requested order: ComfyUI, host settings, global, then Charon
+        self._create_comfy_tab()
         if self._host_allows_settings:
             self._create_settings_tab()
+        self._create_global_tab()
+        self._create_local_tab()
         # Conflicts tab removed - Charon handles conflicts automatically
-        
+
+    def _create_comfy_tab(self):
+        """Create ComfyUI settings tab (launch path)."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(widget)
+
+        info = QtWidgets.QLabel(
+            "Set the ComfyUI launch path used for validation and launches."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        form.setFormAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+
+        self.comfy_path_edit = QtWidgets.QLineEdit()
+        self.comfy_path_edit.setPlaceholderText("Path to ComfyUI launch .bat or .py")
+        self.comfy_path_edit.editingFinished.connect(self._save_comfy_path)
+        current_path = preferences.get_preference("comfyui_launch_path", "").strip()
+        self.comfy_path_edit.setText(current_path)
+
+        path_buttons = QtWidgets.QHBoxLayout()
+        browse_btn = QtWidgets.QPushButton("Browse")
+        browse_btn.clicked.connect(self._browse_comfy_path)
+        save_btn = QtWidgets.QPushButton("Save")
+        save_btn.clicked.connect(self._save_comfy_path)
+        path_buttons.addWidget(browse_btn)
+        path_buttons.addWidget(save_btn)
+        path_buttons.addStretch()
+
+        path_row = QtWidgets.QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(6)
+        path_row.addWidget(self.comfy_path_edit)
+        path_row.addLayout(path_buttons)
+
+        path_container = QtWidgets.QWidget()
+        path_container.setLayout(path_row)
+        form.addRow("ComfyUI Path:", path_container)
+        layout.addLayout(form)
+
+        self.comfy_status_label = QtWidgets.QLabel("")
+        self.comfy_status_label.setStyleSheet("color: palette(mid);")
+        layout.addWidget(self.comfy_status_label)
+        layout.addStretch()
+
+        self.tab_widget.addTab(widget, "Settings ComfyUI")
     
     def _create_settings_tab(self):
         """Create the application settings tab."""
@@ -1054,6 +1102,28 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                 "Unable to open the settings folder.",
             )
             return
+
+    # -------------------------------------------------- ComfyUI settings
+    def _update_comfy_path(self, path: str) -> None:
+        path = (path or "").strip()
+        self.comfy_path_edit.setText(path)
+        preferences.set_preference("comfyui_launch_path", path, parent=self)
+        self.comfy_status_label.clear()
+
+    def _save_comfy_path(self) -> None:
+        path = self.comfy_path_edit.text()
+        self._update_comfy_path(path)
+
+    def _browse_comfy_path(self) -> None:
+        start_dir = os.path.dirname(self.comfy_path_edit.text().strip()) or os.getcwd()
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select ComfyUI Launch Script",
+            start_dir,
+            "Scripts (*.bat *.py);;All Files (*)",
+        )
+        if file_path:
+            self._update_comfy_path(file_path)
 
     def _format_action_name(self, action: str) -> str:
         """Format action name for display."""

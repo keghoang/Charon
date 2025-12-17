@@ -96,13 +96,15 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         layout.addWidget(self.separator_label)
 
         self.settings_button = QtWidgets.QToolButton()
-        self.settings_button.setText("\u2699")
+        self.settings_button.setText("")  # Hide gear icon; popover moved to main Settings button
         self.settings_button.setAutoRaise(True)
         self.settings_button.setCursor(QtCore.Qt.PointingHandCursor)
-        self.settings_button.setToolTip("ComfyUI connection settings")
+        self.settings_button.setToolTip("")
         self.settings_button.setMinimumWidth(20)
         self.settings_button.installEventFilter(self)
         self.settings_button.clicked.connect(lambda: self._show_settings_popover(auto_focus=True))
+        self.settings_button.setVisible(False)
+        self.separator_label.setVisible(False)
         layout.addWidget(self.settings_button)
 
         self._blink_timer = QtCore.QTimer(self)
@@ -161,6 +163,11 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     # ----------------------------------------------------------- Connection
     def _check_connection(self, manual: bool = False) -> None:
+        latest_path = preferences.get_preference(self._PATH_SETTING_KEY, "").strip()
+        if latest_path != (self._comfy_path or ""):
+            self._comfy_path = latest_path
+            if self._comfy_path:
+                extend_sys_path_with_comfy(self._comfy_path)
         if self._managed_process and self._managed_process.poll() is not None:
             self._managed_process = None
             self._managed_launch = False
@@ -392,29 +399,11 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._apply_button_style(button, primary, "#c92a2a", hover=hover)
     # -------------------------------------------------------------- Popover
     def _show_settings_popover(self, auto_focus: bool = False) -> None:
-        if self._popover and self._popover.isVisible():
-            if auto_focus:
-                self._popover.focus_path_edit()
-            return
-
-        active = ConnectionSettingsPopover.active_popover()
-        if active and active is not self._popover:
-            active.close()
-
-        popover = ConnectionSettingsPopover(self, self._comfy_path)
-        popover.path_selected.connect(self._update_path)
-        popover.retest_requested.connect(lambda: self._check_connection(manual=True))
-        popover.finished.connect(lambda _result: self._clear_popover())
-
-        button_rect = self.settings_button.rect()
-        global_pos = self.settings_button.mapToGlobal(button_rect.bottomLeft())
-        popover.move(global_pos)
-        popover.show()
-        if auto_focus:
-            popover.focus_path_edit()
-
-        self._popover = popover
-        ConnectionSettingsPopover.set_active_popover(popover)
+        QtWidgets.QMessageBox.information(
+            self,
+            "ComfyUI Path",
+            "Configure the ComfyUI launch path in Settings → Settings ComfyUI.",
+        )
 
     def _clear_popover(self) -> None:
         if self._popover is not None:
