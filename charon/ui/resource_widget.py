@@ -176,10 +176,7 @@ class ResourceWidget(QWidget):
 
     def _show_flush_result(self):
         diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
-        if diff < 0.1:
-            self.flush_feedback.setText("Flushed")
-        else:
-            self.flush_feedback.setText(f"Freed {diff:.1f}GB")
+        self.flush_feedback.setText(f"Freed {diff:.2f}GB")
         
         self.flush_btn.setEnabled(True)
         QTimer.singleShot(6000, lambda: self.flush_feedback.setText(""))
