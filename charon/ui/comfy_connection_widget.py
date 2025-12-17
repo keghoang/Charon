@@ -2,6 +2,7 @@ import os
 import time
 import subprocess
 import threading
+import weakref
 from typing import Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui
@@ -44,13 +45,13 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
         self._watch_timer = QtCore.QTimer(self)
         self._watch_timer.setInterval(2500)
-        self._watch_timer.timeout.connect(self._check_connection_trigger)
+        self._watch_timer.timeout.connect(self._check_connection)
 
         if self._comfy_path:
             extend_sys_path_with_comfy(self._comfy_path)
             self._watch_timer.start()
             self._set_status("checking", False)
-            QtCore.QTimer.singleShot(0, self._check_connection_trigger)
+            QtCore.QTimer.singleShot(0, self._check_connection)
         else:
             self._set_status("path_required", False)
             QtCore.QTimer.singleShot(0, self._prompt_for_path)
@@ -148,18 +149,11 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         extend_sys_path_with_comfy(path)
         if not self._watch_timer.isActive():
             self._watch_timer.start()
-        self._check_connection_trigger(manual=True)
-
-    def _check_connection_trigger(self, manual: bool = False) -> None:
-        if self._check_in_progress:
-            return
-        self._check_connection(manual=manual)
+        self._check_connection(manual=True)
 
     # ----------------------------------------------------------- Connection
     def _check_connection(self, manual: bool = False) -> None:
-        if not self._comfy_path or self._check_in_progress:
-            return
-        if self._is_shutting_down:
+        if not self._comfy_path or self._check_in_progress or self._is_shutting_down:
             return
 
         now = time.time()
@@ -175,7 +169,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
             self._manual_cursor_override = True
 
-        target_ref = QtCore.QPointer(self)
+        target_ref = weakref.ref(self)
 
         def worker():
             connected = False
@@ -189,8 +183,9 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 connected = False
                 client = None
 
-            if target_ref:
-                target_ref._connection_check_finished.emit(connected, client, manual)
+            widget = target_ref()
+            if widget and not getattr(widget, "_is_shutting_down", False):
+                widget._connection_check_finished.emit(connected, client, manual)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -454,7 +449,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             system_info("Sent ComfyUI shutdown request.")
             self._launch_in_progress = False
             self._set_status("checking", False)
-            QtCore.QTimer.singleShot(1500, self._check_connection_trigger)
+            QtCore.QTimer.singleShot(1500, lambda: self._check_connection(manual=False))
         else:
             QtWidgets.QMessageBox.warning(
                 self,
