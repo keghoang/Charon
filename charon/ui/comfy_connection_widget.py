@@ -508,6 +508,30 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         else:
             self._launch_comfyui()
 
+    def _write_task_launcher_script(
+        self, workdir: str, launch_line: str, disable_flag: str
+    ) -> Optional[str]:
+        """
+        Write a short .cmd launcher to keep Task Scheduler /tr under length limits.
+        """
+        try:
+            workdir = workdir or os.getcwd()
+            root = preferences.get_preferences_root(parent=self, ensure_dir=True)
+            script_path = os.path.join(root, "comfyui_task_launcher.cmd")
+            lines = [
+                "@echo off",
+                f'cd /d "{workdir}"',
+                f'set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% {disable_flag}"',
+                launch_line,
+                "",
+            ]
+            with open(script_path, "w", encoding="utf-8") as handle:
+                handle.write("\r\n".join(lines))
+            return script_path
+        except Exception as exc:  # pragma: no cover - defensive path
+            system_warning(f"Could not prepare ComfyUI launcher script: {exc}")
+            return None
+
     def _launch_comfyui(self) -> None:
         if not self._comfy_path:
             QtWidgets.QMessageBox.warning(self, "Launch ComfyUI", "Please set the ComfyUI launch path first.")
@@ -531,43 +555,80 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         python_exe = comfy_env.get("python_exe")
         main_py = os.path.join(comfy_dir, "main.py")
 
-        if python_exe and os.path.exists(main_py):
-            task_command = (
-                f'cmd /c cd /d "{comfy_dir}" && {env_prefix}"{python_exe}" -u "{main_py}" {disable_flag}'
-            )
-        else:
-            task_command = f'cmd /c cd /d "{base_dir}" && {env_prefix}"{path}" {disable_flag}'
-        create_cmd = [
-            "schtasks",
-            "/create",
-            "/tn",
-            task_name,
-            "/tr",
-            task_command,
-            "/sc",
-            "once",
-            "/st",
-            "00:00",
-            "/f",
-        ]
-        run_cmd = ["schtasks", "/run", "/tn", task_name]
-        delete_cmd = ["schtasks", "/delete", "/tn", task_name, "/f"]
+        use_embedded_python = bool(python_exe and os.path.exists(main_py))
+        launcher_dir = comfy_dir if use_embedded_python else base_dir
+        launch_line = (
+            f'"{python_exe}" -u "{main_py}" {disable_flag}'
+            if use_embedded_python
+            else f'"{path}" {disable_flag}'
+        )
+        task_command = f'cmd /c cd /d "{launcher_dir}" && {env_prefix}{launch_line}'
+        task_command_limit = 261
+        used_task_script = False
 
-        try:
+        if len(task_command) > task_command_limit:
+            script_path = self._write_task_launcher_script(launcher_dir, launch_line, disable_flag)
+            if script_path:
+                task_command = f'"{script_path}"'
+                used_task_script = True
+                system_warning(
+                    "Task Scheduler /tr exceeded 261 characters; using cached launcher script."
+                )
+            else:
+                system_warning("Task Scheduler /tr too long; fallback script unavailable.")
+
+        def run_scheduler(command: str):
+            create_cmd = [
+                "schtasks",
+                "/create",
+                "/tn",
+                task_name,
+                "/tr",
+                command,
+                "/sc",
+                "once",
+                "/st",
+                "00:00",
+                "/f",
+            ]
+            run_cmd = ["schtasks", "/run", "/tn", task_name]
+            delete_cmd = ["schtasks", "/delete", "/tn", task_name, "/f"]
             create_result = subprocess.run(create_cmd, check=True, capture_output=True, text=True)
             run_result = subprocess.run(run_cmd, check=True, capture_output=True, text=True)
             subprocess.run(delete_cmd, check=False, capture_output=True, text=True)
+            return create_result, run_result
+
+        def record_success(create_result, run_result) -> None:
             self._managed_process = None
             self._launch_in_progress = True
             self._launch_started_at = time.time()
             self._managed_launch = True
             self._restart_pending = False
             self._set_status("launching", self._connected)
+            suffix = " (launcher script fallback)" if used_task_script else ""
             system_info(
                 f"Launched ComfyUI via Task Scheduler ({task_name}) from {path}: "
-                f"{create_result.stdout} {run_result.stdout}"
+                f"{create_result.stdout} {run_result.stdout}{suffix}"
             )
+
+        def is_tr_length_error(exc: subprocess.CalledProcessError) -> bool:
+            text = f"{exc.stderr or ''} {exc.stdout or ''}".lower()
+            return "261" in text and "/tr" in text
+
+        try:
+            create_result, run_result = run_scheduler(task_command)
+            record_success(create_result, run_result)
         except subprocess.CalledProcessError as exc:
+            if not used_task_script and is_tr_length_error(exc):
+                script_path = self._write_task_launcher_script(launcher_dir, launch_line, disable_flag)
+                if script_path:
+                    try:
+                        used_task_script = True
+                        create_result, run_result = run_scheduler(f'"{script_path}"')
+                        record_success(create_result, run_result)
+                        return
+                    except subprocess.CalledProcessError as fallback_exc:
+                        exc = fallback_exc
             self._managed_process = None
             self._launch_in_progress = False
             QtWidgets.QMessageBox.critical(
