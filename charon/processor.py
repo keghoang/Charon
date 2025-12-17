@@ -1304,7 +1304,20 @@ def _create_step2_result_group(charon_node, image_paths):
     cs['roworder'].setValue("TopBottom")
     
     for i, r in enumerate(reads):
-        cs.setInput(i, r)
+        # Create Text node for label
+        txt = nuke.createNode("Text2")
+        txt.setInput(0, r)
+        try:
+            filename = os.path.basename(r['file'].value())
+            txt['message'].setValue(filename)
+            txt['box'].setValue([0, 0, 1000, 100]) # Bottom left box
+            txt['yjustify'].setValue("bottom")
+            txt['global_font_scale'].setValue(0.5)
+        except Exception:
+            pass
+        txt.setXYpos(r.xpos(), r.ypos() + 100)
+        
+        cs.setInput(i, txt)
     
     for n in nuke.selectedNodes():
         n.setSelected(False)
@@ -4743,9 +4756,24 @@ def _create_generic_result_group(charon_node, image_paths):
         r = nuke.createNode("Read")
         r['file'].setValue(path.replace('\\', '/'))
         r['on_error'].setValue("nearest frame")
-        r.setXYpos(i * 100, -100)
-        cs.setInput(i, r)
+        r.setXYpos(i * 150, -300) # Spacing adjustment
+        
+        # Create Text node for label
+        txt = nuke.createNode("Text2")
+        txt.setInput(0, r)
+        try:
+            filename = os.path.basename(path)
+            txt['message'].setValue(filename)
+            txt['box'].setValue([0, 0, 1000, 100])
+            txt['yjustify'].setValue("bottom")
+            txt['global_font_scale'].setValue(0.5)
+        except Exception:
+            pass
+        txt.setXYpos(r.xpos(), r.ypos() + 150)
+        
+        cs.setInput(i, txt)
         r.setSelected(False)
+        txt.setSelected(False)
         
     last_node = cs
     

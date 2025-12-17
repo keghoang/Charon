@@ -9,7 +9,7 @@ class FolderItem:
         self.name = name
         self.path = path
         self.is_special = is_special  # For Bookmarks folder
-        self.is_compatible = True  # Default to optimistic True until checked
+        self.is_compatible = False  # Default to False (grey) until verified
         
 
 class FolderTableModel(QtCore.QAbstractTableModel):
