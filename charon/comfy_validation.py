@@ -1166,8 +1166,19 @@ def _validate_models_browser(
             data=data,
         )
 
+    # Always run backend validation so we can merge browser-captured metadata with resolver results.
+    backend_issue = _validate_models(env_info, workflow_bundle)
+    backend_data = backend_issue.data if isinstance(backend_issue, ValidationIssue) else {}
+    backend_missing = []
+    backend_found = []
+    backend_paths = {}
+    if isinstance(backend_data, dict):
+        backend_missing = backend_data.get("missing_models") or backend_data.get("missing") or []
+        backend_found = backend_data.get("found") or []
+        backend_paths = backend_data.get("model_paths") or {}
+
     if not browser_payload:
-        return _validate_models(env_info, workflow_bundle)
+        return backend_issue
 
     capture_info = browser_payload.get("model_capture") if isinstance(browser_payload, dict) else {}
     capture_invoked = bool(capture_info.get("invoked")) if isinstance(capture_info, dict) else False
@@ -1178,11 +1189,6 @@ def _validate_models_browser(
     )
     data["model_paths"] = normalized_paths
     data["model_capture"] = capture_info if isinstance(capture_info, dict) else {}
-
-    # Fallback: if the browser did not report any missing models, defer to the backend resolver
-    # so non-template workflows (no embedded model metadata) are still validated.
-    if missing_models is None or (isinstance(missing_models, list) and len(missing_models) == 0):
-        return _validate_models(env_info, workflow_bundle)
 
     if not isinstance(missing_models, list):
         missing_models = []
@@ -1229,32 +1235,68 @@ def _validate_models_browser(
 
         missing_entries.append(entry)
 
-    workflow_folder = workflow_bundle.get("folder") if isinstance(workflow_bundle, dict) else None
-    data["missing_models"] = missing_entries
+    # Merge browser-captured missing entries with backend resolver results, deduplicating by (name, category).
+    def _merge_missing(browser_list: List[Dict[str, Any]], backend_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    if missing_entries:
-        detail_lines = []
-        for entry in missing_entries:
-            name_value = entry.get("name") or entry.get("folder_path") or "Model file"
-            directory_value = entry.get("category") or ""
-            folder_hint = entry.get("folder_path")
-            url_value = entry.get("url")
-            parts = [str(name_value)]
-            if directory_value:
-                parts.append(f"folder: {directory_value}")
-            if folder_hint:
-                parts.append(f"path: {folder_hint}")
-            if entry.get("directory_invalid"):
-                parts.append("directory invalid")
-            if url_value:
-                parts.append(f"url: {url_value}")
-            detail_lines.append(" | ".join(parts))
+        def _key_for(entry: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+            name_value = str(entry.get("name") or entry.get("path") or entry.get("file") or "").strip()
+            if not name_value:
+                return None
+            category_value = str(entry.get("category") or entry.get("directory") or entry.get("folder") or "").strip().lower()
+            return (name_value.lower(), category_value)
+
+        def _merge_into(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+            for field in ("url", "category", "directory", "folder_path", "node_type"):
+                if field in source and source.get(field) and not target.get(field):
+                    target[field] = source[field]
+
+            def _merge_list(key: str, values: Any) -> None:
+                if not isinstance(values, list):
+                    return
+                existing = target.setdefault(key, [])
+                if not isinstance(existing, list):
+                    existing = []
+                    target[key] = existing
+                for val in values:
+                    if isinstance(val, str) and val not in existing:
+                        existing.append(val)
+
+            _merge_list("attempted_directories", source.get("attempted_directories") or source.get("searched"))
+            _merge_list("attempted_categories", source.get("attempted_categories") or source.get("attempted"))
+
+        for entry in (browser_list or []) + (backend_list or []):
+            if not isinstance(entry, dict):
+                continue
+            key = _key_for(entry)
+            if not key:
+                continue
+            if key not in merged:
+                merged[key] = dict(entry)
+            else:
+                _merge_into(merged[key], entry)
+        return list(merged.values())
+
+    merged_missing = _merge_missing(missing_entries, backend_missing)
+
+    # Build final issue combining browser metadata with backend results.
+    data["missing_models"] = merged_missing
+    data["found"] = backend_found
+    if backend_paths and not data.get("model_paths"):
+        data["model_paths"] = backend_paths
+    # Preserve resolver info from backend if present.
+    if isinstance(backend_data, dict) and backend_data.get("resolver"):
+        data.setdefault("resolver", backend_data.get("resolver"))
+
+    if merged_missing:
+        summary = f"Missing {len(merged_missing)} model file(s)."
+        detail_lines = backend_issue.details if isinstance(backend_issue, ValidationIssue) else []
         return ValidationIssue(
             key="models",
             label="Models available",
             ok=False,
-            summary=f"Missing {len(missing_entries)} model file(s).",
-            details=detail_lines,
+            summary=summary,
+            details=detail_lines or [],
             data=data,
         )
 
