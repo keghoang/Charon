@@ -194,6 +194,7 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.restart_ready = False
         self.restart_seen_down = False
         self.restart_timer: Optional[QtCore.QTimer] = None
+        self.animation_tick = 0
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(30, 30, 30, 30)
@@ -344,6 +345,13 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         if self.progress_val < self.progress_target:
             self.progress_val += 2
             self.pbar.setValue(self.progress_val)
+        
+        # Animate "Installing..." text
+        if not self.btn_next.isEnabled() and "Installing" in self.btn_next.text():
+            self.animation_tick += 1
+            if self.animation_tick % 6 == 0:
+                dots = (self.animation_tick // 6) % 4
+                self.btn_next.setText(f"Installing{'.' * dots}")
 
     def setup_step3_ready(self) -> None:
         page = QtWidgets.QWidget()
@@ -420,6 +428,7 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
     def _start_installation(self) -> None:
         self.install_desc.setText("Starting setup process...")
         self.progress_val = 0
+        self.animation_tick = 0
         self.progress_target = 5
         self.pbar.setValue(0)
         self.install_ready_label.setVisible(False)
