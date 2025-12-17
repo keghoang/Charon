@@ -37,6 +37,18 @@ class ComfyUIClient:
             logger.error("Failed to get system stats: %s", exc)
             return None
 
+    def get_object_info(self):
+        """Fetch object information (node definitions) from ComfyUI."""
+        try:
+            request = urllib.request.Request(f"{self.base_url}/object_info")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.getcode() == 200:
+                    return json.loads(response.read().decode("utf-8"))
+            return None
+        except Exception as exc:
+            logger.error("Failed to get object info: %s", exc)
+            return None
+
     def upload_image(self, image_path):
         try:
             if not os.path.exists(image_path):

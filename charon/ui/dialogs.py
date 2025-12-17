@@ -53,25 +53,37 @@ def _compute_workflow_hash(path: str) -> Optional[str]:
 
 
 def _is_placeholder_label(label: Optional[str]) -> bool:
-    """Return True when the label is just a widgets_values placeholder."""
+    """Return True when the label is just a widgets_values placeholder or generic 'Value X'."""
     if not label:
         return False
     normalized = str(label).strip().lower()
     if normalized.startswith("widgets_values[") and normalized.endswith("]"):
         return True
+    # Remove type info like " (integer)" from "value 1 (integer)"
     normalized = re.sub(r"\s*\([^)]+\)\s*$", "", normalized)
     return bool(re.fullmatch(r"value\s+\d+", normalized))
 
 
-def _has_meaningful_labels(candidates: Tuple[ExposableNode, ...]) -> bool:
-    """Detect whether any attribute has a descriptive label."""
-    for node in candidates or ():
-        for attr in node.attributes or ():
-            label_placeholder = _is_placeholder_label(attr.label)
-            key_placeholder = _is_placeholder_label(attr.key)
-            if not label_placeholder and not key_placeholder:
-                return True
-    return False
+def _are_candidates_valid(candidates: Tuple[ExposableNode, ...]) -> bool:
+    """
+    Validate that the candidates contain meaningful, non-placeholder names.
+    Returns False if any candidate uses a raw 'widgets_values' key or generic 'Value X' label,
+    indicating a heuristic fallback was likely used.
+    """
+    if not candidates:
+        return True 
+
+    for node in candidates:
+        for attr in node.attributes:
+            # If the key itself is a raw widgets_values index, it's definitely from a heuristic scan
+            if str(attr.key).startswith("widgets_values["):
+                return False
+            
+            # If the label is generic "Value X", it's also likely a bad scan
+            if _is_placeholder_label(attr.label):
+                return False
+                
+    return True
 
 
 def _serialize_candidates(candidates: Tuple[ExposableNode, ...]) -> List[Dict[str, Any]]:
@@ -169,8 +181,8 @@ def _store_cached_parameters(path: Optional[str], data) -> None:
         return
 
     candidates = tuple(data or ())
-    if not _has_meaningful_labels(candidates):
-        system_debug("Parameter discovery yielded only placeholder labels; skipping cache write.")
+    if not _are_candidates_valid(candidates):
+        system_debug("Parameter discovery yielded placeholder labels; skipping cache write.")
         return
     payload = {
         "schema": _CACHE_SCHEMA_VERSION,
@@ -747,7 +759,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_group.setTitle(base_title)
 
         cached = _get_cached_parameters(self._workflow_path)
-        if cached is not None and _has_meaningful_labels(cached):
+        if cached is not None and _are_candidates_valid(cached):
             self._stop_scan_animation()
             system_debug("Metadata dialog loaded parameters from cache.")
             self._render_parameter_candidates(cached)
