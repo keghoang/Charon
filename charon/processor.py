@@ -3021,6 +3021,9 @@ def process_charonop_node():
                 
                 if is_step2:
                     setup_result = {}
+                    import threading
+                    setup_event = threading.Event()
+
                     def _step2_setup_task():
                         try:
                             import nuke
@@ -3050,10 +3053,13 @@ def process_charonop_node():
                             setup_result['views'] = views
                         except Exception as e:
                             log_debug(f"Step 2 setup task error: {e}", "WARNING")
+                        finally:
+                            setup_event.set()
 
                     try:
                         import nuke
                         nuke.executeInMainThread(_step2_setup_task)
+                        setup_event.wait()
                         step2_views = setup_result.get('views', [])
                         
                         if step2_views:
@@ -3306,12 +3312,17 @@ def process_charonop_node():
                         view_path = os.path.join(temp_root, view_filename).replace('\\', '/')
                         
                         try:
+                            render_event = threading.Event()
                             def _step2_render_task():
-                                with rig_group_ref:
-                                    _render_nuke_node(view_node, view_path)
+                                try:
+                                    with rig_group_ref:
+                                        _render_nuke_node(view_node, view_path)
+                                finally:
+                                    render_event.set()
                             
                             import nuke
                             nuke.executeInMainThread(_step2_render_task)
+                            render_event.wait()
                             
                             view_upload = comfy_client.upload_image(view_path)
                             if view_upload:
