@@ -6,8 +6,9 @@ import time
 from typing import Dict, Optional
 
 from ..qt_compat import QtWidgets, QtCore, Qt, QtGui
-from .. import config
+from .. import config, preferences
 from ..charon_logger import system_debug, system_warning, system_error
+from ..script_table_model import ScriptTableModel
 from .. import scene_nodes_runtime as runtime
 
 
@@ -357,7 +358,44 @@ class SceneNodesPanel(QtWidgets.QWidget):
         copy_info = misc_menu.addAction("Copy Info")
         copy_info.triggered.connect(lambda: self._copy_node_info(info))
 
+        override_action = menu.addAction("Override Validation (Force Passed)")
+        override_action.triggered.connect(lambda: self._override_validation(info))
+
         menu.exec_(self.table.viewport().mapToGlobal(position))
+
+    def _override_validation(self, info: runtime.SceneNodeInfo) -> None:
+        """
+        Force validation to Passed for this workflow without running checks.
+        """
+        try:
+            # Persist forced state into preferences cache used by the validation dialog
+            cache = preferences.load_preferences()
+        except Exception:
+            cache = {}
+        forced = cache.get("forced_validation") or {}
+        forced[info.workflow_path] = {
+            "state": "validated",
+            "message": "Validation overridden",
+            "timestamp": time.time(),
+        }
+        cache["forced_validation"] = forced
+        try:
+            preferences.save_preferences(cache)
+        except Exception as exc:
+            system_warning(f"Failed to save override validation preference: {exc}")
+
+        try:
+            # Update table model roles so UI reflects the override immediately
+            model = self.table.model().sourceModel()
+            index = model.index_from_name(info.name)
+            if index.isValid():
+                model.setData(index, "validated", ScriptTableModel.ValidationStateRole)
+                model.setData(index, True, ScriptTableModel.ValidationEnabledRole)
+                model.setData(index, {"overridden": True}, ScriptTableModel.ValidationPayloadRole)
+        except Exception as exc:
+            system_warning(f"Failed to update validation state in UI: {exc}")
+
+        system_debug(f"[Validation] Override set to Passed for {info.workflow_path}")
 
     def _on_double_click(self, item):
         if not item:
