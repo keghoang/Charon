@@ -10,6 +10,8 @@ import logging
 import sys
 from typing import Optional
 import os
+from datetime import datetime
+import threading
 
 # Configure the system logger
 _system_logger: Optional[logging.Logger] = None
@@ -94,6 +96,80 @@ def system_error(message: str) -> None:
 def system_critical(message: str) -> None:
     """Log a critical system message."""
     _get_system_logger().critical(message)
+
+
+def _debug_mode_enabled(config_module=None) -> bool:
+    config_module = None
+    try:
+        from charon import config as global_config  # type: ignore
+        config_module = global_config
+    except ImportError:
+        try:
+            from . import config as local_config  # type: ignore
+            config_module = local_config
+        except ImportError:
+            config_module = None
+
+    if config_module is None:
+        # When config is unavailable, err on the side of emitting to aid debugging
+        return True
+    return bool(getattr(config_module, "DEBUG_MODE", False))
+
+
+def _write_user_action_line(text: str) -> None:
+    """Append a single line to the user action log."""
+    try:
+        from .paths import get_charon_temp_dir
+
+        root = get_charon_temp_dir()
+        log_dir = os.path.join(root, "debug")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "user_actions.log")
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+    except Exception:
+        # Logging to file should never break the UI flow
+        pass
+
+
+def log_user_action(message: str) -> None:
+    """
+    Persist a user-action breadcrumb to the debug log directory.
+    Only emits when DEBUG_MODE is enabled to avoid noisy files.
+    """
+    if not _debug_mode_enabled():
+        return
+
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        thread = threading.current_thread()
+        thread_label = f"{thread.name}:{thread.ident}"
+        _write_user_action_line(f"[{timestamp}] {message} (pid={os.getpid()} thread={thread_label})")
+    except Exception:
+        pass
+
+
+def log_user_action_detail(action: str, **fields) -> None:
+    """
+    Structured breadcrumb writer for background work.
+    Only emits when DEBUG_MODE is enabled.
+    """
+    if not _debug_mode_enabled():
+        return
+
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        thread = threading.current_thread()
+        parts = [
+            f"action={action}",
+            f"pid={os.getpid()}",
+            f"thread={thread.name}:{thread.ident}",
+        ]
+        for key, value in fields.items():
+            parts.append(f"{key}={value}")
+        _write_user_action_line(f"[{timestamp}] " + " ".join(parts))
+    except Exception:
+        pass
 
 
 # Qt-specific message handler that uses our logging system
