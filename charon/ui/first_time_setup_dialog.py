@@ -8,7 +8,7 @@ from ..qt_compat import QtWidgets, QtGui, QtCore
 from ..charon_logger import system_error, system_info
 from .. import preferences
 from ..comfy_restart import send_shutdown_signal
-from ..dependency_check import PREF_DEPENDENCIES_VERIFIED
+from ..dependency_check import PREF_DEPENDENCIES_VERIFIED, ensure_manager_security_level
 from pathlib import Path
 from ..paths import get_default_comfy_launch_path, get_charon_temp_dir
 from ..setup_manager import SetupManager
@@ -526,6 +526,13 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         try:
             preferences.set_preference("comfyui_launch_path", self.comfy_path)
             preferences.set_preference(PREF_DEPENDENCIES_VERIFIED, True)
+            
+            # Force security level configuration before first run to avoid Manager issues
+            try:
+                ensure_manager_security_level("weak", comfy_path_override=self.comfy_path)
+            except Exception:
+                pass
+                
             system_info("First-time setup completed; dependencies verified.")
         except Exception as exc:  # pragma: no cover - defensive path
             system_error(f"Failed to persist first-time setup preferences: {exc}")
