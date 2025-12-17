@@ -1817,7 +1817,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     pass
                 button.update()
                 button.repaint()
-        method_detail = note or display_text
+        method_detail = row_info.get("resolve_method") or note or display_text
         row_info["resolve_method"] = method_detail
         issue_row = row_info.get("issue_row")
         if isinstance(issue_row, IssueRow):
@@ -2501,6 +2501,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 success, message = self._apply_model_override(original_name, workflow_value)
                 if success:
                     note = f"Selected local model: {display_text}"
+                    row_info["resolve_method"] = row_info.get("resolve_method") or note
                     system_debug(
                         "[Validation] Local model resolved | "
                         f"selected='{selected}' workflow_value='{workflow_value}'"
@@ -2580,6 +2581,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     success, message = self._copy_shared_model(selected, expected_path)
                     if success:
                         note = f"Downloaded {file_name} to {destination_display}."
+                        row_info["resolve_method"] = row_info.get("resolve_method") or note
                         notified_manual = True
                         system_debug(
                             "[Validation] Global Repo copy completed | "
@@ -2626,6 +2628,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     urllib.request.urlretrieve(url_value, temp_path)
                     os.replace(temp_path, expected_path)
                     note = f"Downloaded {file_name} from URL to {destination_display}."
+                    row_info["resolve_method"] = row_info.get("resolve_method") or note
                     workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
                     self._mark_model_resolved(
                         row,
@@ -2663,6 +2666,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     f"path='{expected_path}'"
                 )
                 note = f"Found existing model at {destination_display}."
+                row_info["resolve_method"] = row_info.get("resolve_method") or note
                 self._mark_model_resolved(
                     row,
                     "Resolved",
