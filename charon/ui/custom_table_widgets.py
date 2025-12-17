@@ -1,4 +1,6 @@
 import os
+import shutil
+from pathlib import Path
 from typing import Callable, Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, AlignLeft, AlignVCenter, exec_menu
@@ -345,6 +347,9 @@ class ScriptTableView(QtWidgets.QTableView):
             override_action = menu.addAction("Override Validation (Force Passed)")
             override_action.triggered.connect(lambda: self.script_override_validation.emit(script_path))
 
+            reset_cache_action = menu.addAction("Reset Local Cache")
+            reset_cache_action.triggered.connect(lambda: self._reset_local_cache(script_path))
+
             exec_menu(menu, event.globalPos())
             return
 
@@ -412,7 +417,7 @@ class ScriptTableView(QtWidgets.QTableView):
     def _showEmptySpaceMenu(self, event):
         """Show context menu for empty space in the workflow panel."""
         menu = QtWidgets.QMenu(self)
-        
+
         # New Workflow action
         new_script_action = menu.addAction("New Workflow")
         new_script_action.triggered.connect(self.createScriptInCurrentFolder.emit)
@@ -420,8 +425,85 @@ class ScriptTableView(QtWidgets.QTableView):
         # Open Folder action
         open_folder_action = menu.addAction("Open Folder")
         open_folder_action.triggered.connect(self.openCurrentFolder.emit)
-        
+
         exec_menu(menu, event.globalPos())
+
+    def _reset_local_cache(self, script_path: str) -> None:
+        """Remove the per-workflow cache under Charon_repo_local."""
+        try:
+            from ..workflow_local_store import (
+                get_local_repository_root,
+                get_local_workflow_folder,
+            )
+        except Exception:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Reset Failed",
+                "Could not locate the local repository helper.",
+            )
+            return
+
+        if not script_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Reset Failed",
+                "Workflow path is unavailable.",
+            )
+            return
+
+        remote_folder = os.path.abspath(script_path)
+        local_folder = get_local_workflow_folder(remote_folder, ensure=False)
+        if not local_folder:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Cache Not Found",
+                "No local cache folder exists for this workflow.",
+            )
+            return
+
+        repo_root = Path(get_local_repository_root(ensure=False)).resolve()
+        target = Path(local_folder).resolve()
+        if repo_root and not str(target).lower().startswith(str(repo_root).lower()):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Reset Failed",
+                "Refusing to remove cache outside the local repository.",
+            )
+            return
+
+        if not target.exists():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Cache Not Found",
+                "No local cache folder exists for this workflow.",
+            )
+            return
+
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Reset Local Cache",
+            f"Delete the local cache for this workflow?\n\n{target}",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+
+        try:
+            shutil.rmtree(target)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Reset Failed",
+                f"Failed to delete local cache:\n{exc}",
+            )
+            return
+
+        QtWidgets.QMessageBox.information(
+            self,
+            "Reset Complete",
+            "Local cache folder removed.\nThe next run will recreate it as needed.",
+        )
 
 
 class FolderTableView(QtWidgets.QTableView):
