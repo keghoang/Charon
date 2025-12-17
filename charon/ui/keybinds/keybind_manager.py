@@ -11,6 +11,7 @@ from .local_handler import LocalKeybindHandler
 from .global_handler import GlobalKeybindHandler
 from .conflict_resolver import ConflictResolver
 from ...settings import user_settings_db
+from ... import config
 import os
 
 
@@ -42,6 +43,8 @@ class KeybindManager(QtCore.QObject):
         self.global_handler = GlobalKeybindHandler(main_window, host)
         self.conflict_resolver = ConflictResolver(self)
         self.app_settings = user_settings_db.get_app_settings_for_host(self.host)
+        self._debug_logging_active: Optional[bool] = None
+        self._apply_debug_logging_setting(initial=True)
         
         # Connect signals
         self.local_handler.keybind_triggered.connect(self._on_local_keybind)
@@ -307,11 +310,14 @@ class KeybindManager(QtCore.QObject):
         str_value = str(value)
         user_settings_db.set_app_setting_for_host(key, self.host, str_value)
         self.app_settings[key] = str_value
+        if key == "debug_logging":
+            self._apply_debug_logging_setting()
 
     def reset_app_settings_to_defaults(self) -> None:
         """Reset all application settings for the current host to defaults."""
         user_settings_db.reset_app_settings_for_host(self.host)
         self.app_settings = user_settings_db.get_app_settings_for_host(self.host)
+        self._apply_debug_logging_setting()
 
     def get_all_app_settings(self) -> Dict[str, str]:
         """Return a copy of cached application settings."""
@@ -352,3 +358,24 @@ class KeybindManager(QtCore.QObject):
             }
             for local_action, global_script, key_seq in conflicts
         ]
+
+    def _apply_debug_logging_setting(self, *, initial: bool = False) -> None:
+        """Ensure config.DEBUG_MODE matches the stored preference."""
+        value = self.app_settings.get("debug_logging", "off")
+        enabled = str(value).lower() == "on"
+        previous = self._debug_logging_active
+        config.DEBUG_MODE = enabled
+        self._debug_logging_active = enabled
+        should_log = False
+        if previous is None:
+            should_log = enabled
+        else:
+            should_log = previous != enabled
+        if should_log:
+            from ...charon_logger import system_info
+            state = "enabled" if enabled else "disabled"
+            system_info(f"Debug logging {state} for host '{self.host}'.")
+
+    def apply_debug_logging_setting(self) -> None:
+        """Public wrapper so UI can re-apply after batch updates."""
+        self._apply_debug_logging_setting()

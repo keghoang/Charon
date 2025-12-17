@@ -21,10 +21,10 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     Returns:
         CharonWindow: The main window instance
     """
-    # Set global debug mode
-    config.DEBUG_MODE = debug
     # Use host override or detect host
     detected_host = host_override or utilities.detect_host()
+    # Set global debug mode (CLI flag takes precedence over stored preference)
+    config.DEBUG_MODE = bool(debug)
     system_info(f"Host detected/forced as: {detected_host}")
     
     # Setup paths - either from script_paths or global_path or config default
@@ -38,6 +38,21 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     # Initialize the database with the determined global path
     from .settings import user_settings_db
     user_settings_db.initialize(global_repo)
+
+    if not config.DEBUG_MODE:
+        try:
+            debug_pref = user_settings_db.get_app_setting_for_host("debug_logging", detected_host, default="off")
+            config.DEBUG_MODE = str(debug_pref).lower() == "on"
+            if config.DEBUG_MODE:
+                system_info(f"Debug logging enabled via settings for host '{detected_host}'.")
+        except Exception as exc:
+            system_error(f"Failed to apply debug logging preference: {exc}")
+    elif debug:
+        try:
+            # Persist CLI override so UI reflects the change
+            user_settings_db.set_app_setting_for_host("debug_logging", detected_host, "on")
+        except Exception as exc:
+            system_error(f"Failed to persist debug logging override: {exc}")
     
     # Create directory if it doesn't exist
     if not os.path.exists(global_repo):

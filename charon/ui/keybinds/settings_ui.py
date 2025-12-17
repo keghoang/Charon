@@ -202,6 +202,29 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         table.setCellWidget(row, 1, container)
         self._settings_widgets["advanced_user_mode"] = advanced_checkbox
 
+        # Debug logging row (toggle button)
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QtWidgets.QTableWidgetItem("Debug Logging"))
+        debug_value = app_settings.get("debug_logging", "off") == "on"
+        debug_button = QtWidgets.QPushButton()
+        debug_button.setCheckable(True)
+        debug_button.setFixedHeight(24)
+        debug_button.setMinimumWidth(80)
+        debug_button.setChecked(debug_value)
+        self._apply_debug_button_style(debug_button, debug_value)
+        debug_button.toggled.connect(
+            lambda checked, button=debug_button: self._on_debug_toggle(button, checked)
+        )
+        container = QtWidgets.QWidget()
+        container_layout = QtWidgets.QHBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setAlignment(QtCore.Qt.AlignCenter)
+        container_layout.addWidget(debug_button)
+        container.setFixedWidth(VALUE_COLUMN_WIDTH)
+        table.setCellWidget(row, 1, container)
+        self._settings_widgets["debug_logging"] = debug_button
+
 
         # Always on Top row (checkbox)
         row = table.rowCount()
@@ -280,6 +303,11 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             elif isinstance(widget, QtWidgets.QCheckBox):
                 desired = values.get(key, meta.get("default", "off"))
                 widget.setChecked(desired == "on")
+            elif isinstance(widget, QtWidgets.QPushButton) and widget.isCheckable():
+                desired = values.get(key, meta.get("default", "off"))
+                checked = str(desired).lower() == "on"
+                widget.setChecked(checked)
+                self._apply_debug_button_style(widget, checked)
             elif isinstance(widget, QtWidgets.QSpinBox):
                 desired = values.get(key, meta.get("default", "0"))
                 try:
@@ -287,6 +315,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                 except (TypeError, ValueError):
                     widget.setValue(0)
             widget.blockSignals(False)
+        self.keybind_manager.apply_debug_logging_setting()
 
     def _on_combo_changed(self, key: str, value: Optional[str]) -> None:
         """Persist combo-box setting changes."""
@@ -323,6 +352,11 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
 
         if key == "always_on_top":
             self._refresh_tiny_mode_if_needed()
+
+    def _on_debug_toggle(self, button: QtWidgets.QPushButton, checked: bool) -> None:
+        """Toggle debug logging preference."""
+        self._apply_debug_button_style(button, checked)
+        self.keybind_manager.set_app_setting("debug_logging", "on" if checked else "off")
 
     def _on_spin_changed(self, key: str, value: int) -> None:
         """Persist spin-box setting changes."""
@@ -362,6 +396,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self._load_app_settings()
         self._notify_tiny_offset_changed()
         self._refresh_tiny_mode_if_needed()
+        self.keybind_manager.apply_debug_logging_setting()
 
     def _refresh_tiny_mode_if_needed(self):
         parent = self.parent()
@@ -417,7 +452,35 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         layout.addLayout(reset_layout)
         
         self.tab_widget.addTab(widget, "Charon Keybinds")
-    
+
+    def _apply_debug_button_style(self, button: QtWidgets.QPushButton, checked: bool) -> None:
+        """Update the appearance/text of the debug toggle button."""
+        button.setText("On" if checked else "Off")
+        if checked:
+            button.setStyleSheet(
+                "QPushButton {"
+                " background-color: #228B22;"
+                " color: white;"
+                " border: none;"
+                " border-radius: 4px;"
+                " padding: 2px 10px;"
+                " }"
+                "QPushButton:pressed {"
+                " background-color: #196f1a;"
+                " }"
+            )
+        else:
+            button.setStyleSheet(
+                "QPushButton {"
+                " background-color: #2f3542;"
+                " color: #f0f0f0;"
+                " border-radius: 4px;"
+                " padding: 2px 10px;"
+                " }"
+                "QPushButton:pressed {"
+                " background-color: #3d4350;"
+                " }"
+            )
     def _create_global_tab(self):
         """Create the global keybinds tab."""
         widget = QtWidgets.QWidget()
