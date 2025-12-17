@@ -1306,6 +1306,37 @@ def _create_step2_result_group(charon_node, image_paths):
     output.setXYpos(cs.xpos(), cs.ypos() + 100)
     
     group.end()
+    
+    from . import preferences
+    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+    
+    if aces_enabled:
+        # Use existing helper or reimplement safely? 
+        # INVERSE_VIEW_TRANSFORM_GROUP is available globally
+        from .paths import get_charon_temp_dir
+        ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_step2_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
+        try:
+            with open(ivt_temp, "w") as f:
+                f.write(INVERSE_VIEW_TRANSFORM_GROUP)
+            
+            # Deselect group so paste doesn't auto-connect wrong or something?
+            # nodePaste connects to selected?
+            # We want to connect to 'group'.
+            # If we select 'group', nodePaste might connect input 0 to it.
+            group.setSelected(True)
+            
+            nuke.nodePaste(ivt_temp)
+            ivt_node = nuke.selectedNode()
+            ivt_node.setInput(0, group)
+            ivt_node.setXpos(group.xpos())
+            ivt_node.setYpos(group.ypos() + 200)
+            
+        except Exception as e:
+            log_debug(f"Failed to create Step 2 IVT node: {e}", "WARNING")
+        finally:
+            if os.path.exists(ivt_temp):
+                try: os.remove(ivt_temp)
+                except: pass
 
 
 
