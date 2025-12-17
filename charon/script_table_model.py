@@ -188,33 +188,44 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if hasattr(script, 'hotkey') and script.hotkey:
                     return script.hotkey
                 return ""
-                
+            
             elif col == self.COL_VALIDATE:
                 state = self._get_validation_state_for_script(script)
                 entry = self._get_validation_entry_for_script(script)
+                payload = entry.get("payload") if isinstance(entry, dict) else {}
+                restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
                 phase = int(entry.get("phase", 0)) if isinstance(entry, dict) else 0
+                if restart_required:
+                    return "⚠ ComfyUI Restart required"
                 if state == "validated":
                     return "✔ Ready"
                 if state == "needs_resolve":
                     return "⚠ Missing Models or Nodes"
                 if state == "validating":
                     dots = "." * (phase % 4)
-                    return f"⏳ Resolve in progress{dots}"
+                    return f"⏳ Activating{dots}"
                 return "Inactive"
             elif col == self.COL_RUN:
                 state = self._get_validation_state_for_script(script)
+                entry = self._get_validation_entry_for_script(script)
+                payload = entry.get("payload") if isinstance(entry, dict) else {}
+                restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
+                if restart_required:
+                    return "Fix Issue"
                 if state == "validated":
                     return "Grab"
                 if state == "needs_resolve":
                     return "Fix Issue"
                 if state == "validating":
-                    return "Resolve..."
+                    return "Activate"
                 return "Activate"
                 
         elif role == ForegroundRole:
             if col == self.COL_NAME:
                 return self.get_foreground_brush(script)
-                    
+            if col == self.COL_VALIDATE:
+                return QtGui.QBrush(QtGui.QColor("#e0e4eb"))
+            
         elif role == TextAlignmentRole:
             if col == self.COL_HOTKEY:
                 return AlignCenter

@@ -43,8 +43,11 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
                 is_enabled = bool(can_use)
 
         validation_state = None
+        validation_payload = None
         if source_model and source_index.isValid():
             validation_state = source_model.data(source_index, ScriptTableModel.ValidationStateRole)
+            validation_payload = source_model.data(source_index, ScriptTableModel.ValidationPayloadRole) or {}
+        restart_required = bool(validation_payload.get("restart_required") or validation_payload.get("requires_restart"))
 
         opt = QtWidgets.QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
@@ -73,13 +76,17 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
                 text_color = QtGui.QColor("#ffffff")
                 if opt.state & QtWidgets.QStyle.State_MouseOver:
                     background_color = background_color.lighter(110)
-            elif validation_state == "needs_resolve":
+            elif validation_state == "needs_resolve" or restart_required:
                 background_color = QtGui.QColor(0, 0, 0, 0)
                 border_color = QtGui.QColor("#4dabf7")
                 text_color = QtGui.QColor("#4dabf7")
                 if opt.state & QtWidgets.QStyle.State_MouseOver:
                     border_color = border_color.lighter(110)
                     text_color = border_color
+            elif validation_state == "validating":
+                background_color = palette.mid().color()
+                border_color = palette.mid().color()
+                text_color = palette.midlight().color()
             else:
                 background_color = QtGui.QColor(0, 0, 0, 0)
                 border_color = QtGui.QColor("#37b24d")
