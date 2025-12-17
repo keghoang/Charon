@@ -2396,7 +2396,9 @@ def process_charonop_node():
         is_step2 = False
         try:
             from .metadata_manager import get_charon_config
-            check_path = workflow_path or node.metadata('charon/workflow_path')
+            source_path = _safe_knob_value(node, 'charon_source_workflow_path')
+            check_path = source_path or workflow_path or node.metadata('charon/workflow_path')
+            
             log_debug(f"Checking Step 2 status for path: {check_path}")
             if check_path and os.path.exists(check_path):
                 target_dir = os.path.dirname(check_path) if os.path.isfile(check_path) else check_path
