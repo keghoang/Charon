@@ -31,7 +31,15 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         self.host = "None"
         self.validation_states = {}
         self._system_vram_gb = None
-    
+        self._is_3d_mode = False
+
+    def set_3d_mode(self, enabled: bool):
+        """Set the 3D mode state and refresh views."""
+        if self._is_3d_mode != enabled:
+            self._is_3d_mode = enabled
+            # Force full update
+            self.layoutChanged.emit()
+
     def _has_valid_entry_file(self, script: ScriptItem) -> bool:
         """Check if script has a valid entry file (uses cached validation)"""
         has_entry, _ = ScriptValidator.has_valid_entry(script.path, script.metadata)
@@ -170,6 +178,9 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
     
     def get_foreground_brush(self, script: ScriptItem):
         """Get the foreground brush for a script item."""
+        if self._is_3d_mode:
+            return QtGui.QBrush(QtGui.QColor("#339af0"))
+
         from .utilities import apply_incompatible_opacity
         props = ScriptValidator.get_visual_properties(
             script.path,
@@ -331,6 +342,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 
         elif role == ForegroundRole:
             if col == self.COL_NAME:
+                if self._is_3d_mode:
+                    return QtGui.QBrush(QtGui.QColor("#5d9cec"))
                 return self.get_foreground_brush(script)
             if col == self.COL_VRAM:
                 vram = self._compute_vram_status(script)

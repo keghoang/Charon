@@ -306,6 +306,8 @@ class ScriptPanel(QtWidgets.QWidget):
     def set_3d_mode(self, enabled: bool):
         """Toggle between regular and 3D Texturing workflows."""
         self._3d_mode_enabled = enabled
+        if hasattr(self, 'script_model'):
+            self.script_model.set_3d_mode(enabled)
         self._apply_tag_filter()
 
     def _reset_folder_loader(self):
