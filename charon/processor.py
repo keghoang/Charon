@@ -1654,6 +1654,8 @@ def process_charonop_node():
         except Exception:
             workflow_path = ''
 
+        workflow_display_name = _resolve_workflow_display_name()
+
         if not workflow_data_str or not input_mapping_str:
             log_debug('No workflow data found on CharonOp node', 'ERROR')
             raise RuntimeError('Missing workflow data on CharonOp node')
@@ -2262,6 +2264,8 @@ def process_charonop_node():
                                         _resolve_nuke_script_name(),
                                         raw_extension,
                                         user_slug=user_slug,
+                                        workflow_name=workflow_display_name,
+                                        category="2D",
                                     )
                                     log_debug(f'Resolved output path: {allocated_output_path}')
                                     success = comfy_client.download_image(output_filename, allocated_output_path)
