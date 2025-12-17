@@ -1,5 +1,5 @@
 from ..qt_compat import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QProgressBar, 
+    QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QProgressBar, 
     Qt, QSizePolicy, QFrame
 )
 from ..resource_monitor import ResourceMonitor
