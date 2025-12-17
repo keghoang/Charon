@@ -762,6 +762,8 @@ class CharonWindow(QtWidgets.QWidget):
             
             # Background
             bg = nuke.createNode("Constant")
+            bg.setName("BG_Constant")
+            bg['channels'].setValue("rgb")
             bg['color'].setValue([0.36, 0.36, 0.36, 1])
             bg.setXYpos(x_pos + 100, 400)
             
