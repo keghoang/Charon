@@ -103,12 +103,19 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.comfy_status_label.setStyleSheet("color: palette(mid);")
         layout.addWidget(self.comfy_status_label)
 
+        layout.addStretch()
+
+        footer_layout = QtWidgets.QHBoxLayout()
+        footer_layout.addStretch()
+
         dep_check_btn = QtWidgets.QPushButton("Check Dependencies")
         dep_check_btn.setToolTip("Verify python environment and required custom nodes")
+        dep_check_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        dep_check_btn.setFixedWidth(140)
         dep_check_btn.clicked.connect(self._check_dependencies)
-        layout.addWidget(dep_check_btn)
-
-        layout.addStretch()
+        
+        footer_layout.addWidget(dep_check_btn)
+        layout.addLayout(footer_layout)
 
         self.tab_widget.addTab(widget, "Settings ComfyUI")
     
