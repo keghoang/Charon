@@ -1427,6 +1427,23 @@ QPushButton#NewWorkflowButton:pressed {{
         except Exception:
             return None
 
+    @staticmethod
+    def _is_supported_gpu(name: str) -> bool:
+        """
+        Check if the GPU is a supported GeForce RTX 30xx/40xx/50xx card.
+        Ignores A2000, 20xx series, and non-GeForce cards.
+        """
+        if not name:
+            return False
+        
+        name_clean = name.strip()
+        if "GeForce RTX" not in name_clean:
+            return False
+            
+        import re
+        # Match 30xx, 40xx, 50xx
+        return bool(re.search(r"\b(30|40|50)\d{2}\b", name_clean))
+
     def _detect_nvidia_gpus(self) -> list[str]:
         """Use nvidia-smi for accurate VRAM reporting when available."""
         cmd = [
@@ -1452,6 +1469,10 @@ QPushButton#NewWorkflowButton:pressed {{
             if len(parts) < 2:
                 continue
             name, mem_mib = parts[0], parts[1]
+            
+            if not self._is_supported_gpu(name):
+                continue
+                
             mem_gb = self._round_gb(mem_mib, 1024)
             if mem_gb:
                 entries.append(f"{name} ({mem_gb} GB)")
@@ -1490,6 +1511,10 @@ QPushButton#NewWorkflowButton:pressed {{
             if not isinstance(record, dict):
                 continue
             name = str(record.get("Name") or "").strip()
+            
+            if not self._is_supported_gpu(name):
+                continue
+                
             raw_ram = record.get("AdapterRAM")
             mem_gb = None
             if isinstance(raw_ram, (int, float)):
