@@ -1619,10 +1619,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         resolved = bool(result.resolved)
         note = "; ".join(result.resolved or result.failed or result.notes or [])
         if not resolved and result.failed:
+            display_message = self._format_playwright_error_message("\n".join(result.failed))
             QtWidgets.QMessageBox.warning(
                 self,
                 "Install Failed",
-                "\n".join(result.failed),
+                display_message,
             )
             if isinstance(issue_row, IssueRow) and note:
                 issue_row.lbl_sub.setText(note)
@@ -1665,7 +1666,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         issue_row: Optional[IssueRow] = context.get("issue_row")  # type: ignore[assignment]
         button: Optional[QtWidgets.QPushButton] = context.get("button")  # type: ignore[assignment]
         self._cleanup_custom_nodes_worker()
-        QtWidgets.QMessageBox.warning(self, "Install Failed", message)
+        display_message = self._format_playwright_error_message(message)
+        QtWidgets.QMessageBox.warning(self, "Install Failed", display_message)
         if isinstance(issue_row, IssueRow):
             issue_row.reset_to_idle()
         if button:
@@ -3977,6 +3979,31 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return max(int(value), 0)
         except Exception:
             return 0
+
+    @staticmethod
+    def _format_playwright_error_message(message: str) -> str:
+        # Check for Playwright connection refused errors
+        if "net::ERR_CONNECTION_REFUSED" in message:
+            return (
+                "Could not connect to ComfyUI server to install custom nodes.\n"
+                "Please ensure ComfyUI is running and accessible (check the Charon footer status).\n\n"
+                f"Original Error: {message}"
+            )
+        # Check for Playwright browser not found errors
+        if "BrowserType.launch: executable doesn't exist" in message:
+            return (
+                "Playwright browser not found. This might indicate an incomplete Playwright installation.\n"
+                "Try running the First Time Setup again, or manually install Playwright browsers.\n\n"
+                f"Original Error: {message}"
+            )
+        # Check for Playwright timeout errors
+        if "Timeout" in message and "Playwright" in message:
+            return (
+                "Playwright operation timed out. This could be due to a slow ComfyUI server startup "
+                "or a network issue. Check ComfyUI server status.\n\n"
+                f"Original Error: {message}"
+            )
+        return message
 
     def _set_issue_row_subtitle(self, row_info: Optional[Dict[str, Any]], message: str) -> None:
         if not isinstance(row_info, dict):
