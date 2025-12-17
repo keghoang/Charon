@@ -125,6 +125,15 @@ def create_charon_group_node(
     _hide_knob(node_id_knob, nuke)
     node.addKnob(node_id_knob)
 
+    try:
+        link_anchor_value = int(node_id_value, 16) / float(16 ** len(node_id_value))
+    except Exception:
+        link_anchor_value = time.time() % 1.0
+    link_anchor_knob = nuke.Double_Knob("charon_link_anchor", "Charon Link Anchor")
+    link_anchor_knob.setValue(link_anchor_value)
+    _hide_knob(link_anchor_knob, nuke)
+    node.addKnob(link_anchor_knob)
+
     read_id_knob = nuke.String_Knob("charon_read_node_id", "Linked Read Node ID", "")
     _hide_knob(read_id_knob, nuke)
     node.addKnob(read_id_knob)

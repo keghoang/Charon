@@ -688,6 +688,32 @@ def process_charonop_node():
 
         charon_node_id = ensure_charon_node_id()
 
+        def ensure_link_anchor_value():
+            try:
+                anchor_knob = node.knob('charon_link_anchor')
+            except Exception:
+                anchor_knob = None
+            anchor_value = None
+            if anchor_knob is not None:
+                try:
+                    anchor_value = float(anchor_knob.value())
+                except Exception:
+                    anchor_value = None
+            if not anchor_value:
+                try:
+                    anchor_value = int(charon_node_id, 16) / float(16 ** len(charon_node_id))
+                except Exception:
+                    anchor_value = (time.time() % 1.0) or 0.5
+                if anchor_knob is not None:
+                    try:
+                        anchor_knob.setValue(anchor_value)
+                    except Exception:
+                        pass
+            write_metadata('charon/link_anchor', anchor_value or "")
+            return anchor_value or 0.0
+
+        link_anchor_value = ensure_link_anchor_value()
+
         def iter_candidate_read_nodes():
             try:
                 return list(nuke.allNodes('Read'))
@@ -871,6 +897,31 @@ def process_charonop_node():
                     pass
             ensure_read_node_info(read_node, read_id)
             assign_read_label(read_node)
+
+            try:
+                read_anchor_knob = read_node.knob('charon_link_anchor')
+            except Exception:
+                read_anchor_knob = None
+            if read_anchor_knob is None:
+                try:
+                    read_anchor_knob = nuke.Double_Knob('charon_link_anchor', 'Charon Link Anchor')
+                    read_anchor_knob.setFlag(nuke.NO_ANIMATION)
+                    read_anchor_knob.setFlag(nuke.INVISIBLE)
+                    read_node.addKnob(read_anchor_knob)
+                except Exception:
+                    read_anchor_knob = None
+            if read_anchor_knob is not None:
+                try:
+                    read_anchor_knob.setExpression(f"{node.fullName()}.charon_link_anchor")
+                except Exception:
+                    try:
+                        read_anchor_knob.clearAnimated()
+                    except Exception:
+                        pass
+                    try:
+                        read_anchor_knob.setValue(link_anchor_value)
+                    except Exception:
+                        pass
             try:
                 knob = node.knob('charon_read_node')
                 if knob is not None:
@@ -955,6 +1006,19 @@ def process_charonop_node():
                 pass
             write_metadata('charon/read_node', "")
             try:
+                anchor_knob = read_node.knob('charon_link_anchor')
+            except Exception:
+                anchor_knob = None
+            if anchor_knob is not None:
+                try:
+                    anchor_knob.clearAnimated()
+                except Exception:
+                    pass
+                try:
+                    anchor_knob.setValue(0.0)
+                except Exception:
+                    pass
+            try:
                 payload = load_status_payload()
             except Exception:
                 payload = None
@@ -1000,10 +1064,14 @@ def process_charonop_node():
                 except Exception:
                     pass
 
+            target_read_name = f"CharonRead_{charon_node_id}"
             try:
-                read_node.setName(f"{node.name()}_Preview")
+                read_node.setName(target_read_name)
             except Exception:
-                pass
+                try:
+                    read_node.setName("CharonRead")
+                except Exception:
+                    pass
             try:
                 read_node['file'].setValue(placeholder_path.replace("\\", "/"))
             except Exception as assign_error:
@@ -1691,6 +1759,14 @@ def process_charonop_node():
                                             read_node.setXpos(result_data['node_x'])
                                             read_node.setYpos(result_data['node_y'] + 60)
                                             read_node.setSelected(True)
+                                            target_read_name = f"CharonRead_{charon_node_id}"
+                                            try:
+                                                read_node.setName(target_read_name)
+                                            except Exception:
+                                                try:
+                                                    read_node.setName("CharonRead")
+                                                except Exception:
+                                                    pass
                                             log_debug('Created new Read node for output.')
                                         else:
                                             try:
