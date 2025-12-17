@@ -1,4 +1,4 @@
-from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, PointingHandCursor, QEvent
+from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, QEvent
 from ..metadata_manager import is_folder_compatible_with_host
 from .. import config
 from ..utilities import apply_incompatible_opacity, is_compatible_with_host
@@ -33,38 +33,17 @@ class FolderPanel(QtWidgets.QWidget):
         # Import config for standardized header height
         from .. import config
         
-        # Header with title and collapse button - standardized height
+        # Header with title - standardized height
         header_container = QtWidgets.QWidget()
         header_container.setFixedHeight(config.UI_PANEL_HEADER_HEIGHT)
         header_layout = QtWidgets.QHBoxLayout(header_container)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         title_label = QtWidgets.QLabel("Folders")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
-        
-        # Create collapse button at far right
-        self.collapse_button = QtWidgets.QPushButton("<<")
-        self.collapse_button.setStyleSheet("""
-            QPushButton {
-                color: palette(mid);
-                background-color: transparent;
-                border: none;
-                padding: 0px 4px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: palette(midlight);
-                border-radius: 2px;
-            }
-        """)
-        self.collapse_button.setCursor(PointingHandCursor)
-        
-        header_layout.addWidget(self.collapse_button)
+
         self.layout.addWidget(header_container)
-        
-        # Connect collapse button
-        self.collapse_button.clicked.connect(self.collapse_requested.emit)
         
         # Create folder view with custom deselection behavior
         self.folder_view = FolderTableView()

@@ -19,7 +19,7 @@ try:
 except ImportError:
     # Fallback for CLI usage
     class FallbackConfig:
-        TINY_MODE_WIDTH = 240
+        TINY_MODE_WIDTH = 250
         TINY_MODE_HEIGHT = 140
         TINY_MODE_MIN_WIDTH = 180
         TINY_MODE_MIN_HEIGHT = 120
@@ -138,14 +138,34 @@ class TinyModeWidget(QtWidgets.QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        self.empty_label = QtWidgets.QLabel("Loading CharonOps...")
-        self.empty_label.setAlignment(QtCore.Qt.AlignCenter)
-        empty_font = self.empty_label.font()
+        surface_frame = QtWidgets.QFrame()
+        surface_frame.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        surface_frame.setObjectName("tiny-mode-surface")
+        surface_layout = QtWidgets.QVBoxLayout(surface_frame)
+        surface_layout.setContentsMargins(0, 0, 0, 0)
+        surface_layout.setSpacing(6)
+
+        card_frame = QtWidgets.QFrame()
+        card_frame.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        card_frame.setObjectName("tiny-mode-card")
+        card_layout = QtWidgets.QStackedLayout(card_frame)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.empty_state_widget = QtWidgets.QWidget()
+        self.empty_state_widget.setObjectName("tiny-mode-empty")
+        empty_layout = QtWidgets.QVBoxLayout(self.empty_state_widget)
+        empty_layout.setContentsMargins(12, 16, 12, 16)
+        empty_layout.setSpacing(4)
+        empty_layout.setAlignment(QtCore.Qt.AlignCenter)
+        self.empty_state_label = QtWidgets.QLabel("Loading CharonOps...")
+        self.empty_state_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.empty_state_label.setWordWrap(True)
+        empty_font = self.empty_state_label.font()
         empty_font.setPointSize(max(9, empty_font.pointSize()))
-        self.empty_label.setFont(empty_font)
-        self.empty_label.setStyleSheet("color: palette(mid);")
-        self.empty_label.setWordWrap(True)
-        layout.addWidget(self.empty_label)
+        self.empty_state_label.setFont(empty_font)
+        empty_layout.addStretch(1)
+        empty_layout.addWidget(self.empty_state_label, 0, QtCore.Qt.AlignCenter)
+        empty_layout.addStretch(1)
 
         self.node_list = QtWidgets.QListWidget()
         self.node_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
@@ -153,9 +173,15 @@ class TinyModeWidget(QtWidgets.QWidget):
         self.node_list.setUniformItemSizes(True)
         self.node_list.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.node_list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.node_list.setSpacing(6)
         self.node_list.itemDoubleClicked.connect(self._on_node_item_double_clicked)
-        layout.addWidget(self.node_list, 1)
-        self.node_list.hide()
+
+        card_layout.addWidget(self.empty_state_widget)
+        card_layout.addWidget(self.node_list)
+        self._card_layout = card_layout
+
+        surface_layout.addWidget(card_frame, 1)
+        layout.addWidget(surface_frame, 1)
 
         footer_layout = QtWidgets.QHBoxLayout()
         footer_layout.setContentsMargins(0, 4, 0, 0)
@@ -170,6 +196,23 @@ class TinyModeWidget(QtWidgets.QWidget):
         footer_layout.addWidget(self._comfy_placeholder_label, 1)
         layout.addLayout(footer_layout)
         self._comfy_footer_layout = footer_layout
+
+        self.setStyleSheet(
+            """
+            #tiny-mode-card {
+                background-color: rgba(15, 23, 42, 0.85);
+                border: 1px solid rgba(94, 106, 128, 0.4);
+                border-radius: 8px;
+            }
+            #tiny-mode-card QListWidget {
+                background-color: transparent;
+                border: none;
+            }
+            #tiny-mode-empty QLabel {
+                color: rgba(226, 232, 240, 0.8);
+            }
+            """
+        )
 
     def attach_comfy_footer(self, widget: QtWidgets.QWidget) -> None:
         """Attach the shared ComfyUI footer widget to tiny mode."""
@@ -246,19 +289,18 @@ class TinyModeWidget(QtWidgets.QWidget):
         self.node_list.clear()
 
         if not self._latest_infos:
-            self.node_list.hide()
-            if hasattr(self, "empty_label"):
+            if hasattr(self, "empty_state_label"):
                 if self._primed and (self._has_displayed_nodes or self._empty_refresh_count >= 2):
-                    self.empty_label.setText("No CharonOps detected.")
+                    self.empty_state_label.setText("No CharonOps found")
                 else:
-                    self.empty_label.setText("Loading CharonOps...")
-                self.empty_label.show()
+                    self.empty_state_label.setText("Loading CharonOps...")
+            if hasattr(self, "_card_layout") and hasattr(self, "empty_state_widget"):
+                self._card_layout.setCurrentWidget(self.empty_state_widget)
             self.node_list.setUpdatesEnabled(True)
             return
 
-        self.node_list.show()
-        if hasattr(self, "empty_label"):
-            self.empty_label.hide()
+        if hasattr(self, "_card_layout"):
+            self._card_layout.setCurrentWidget(self.node_list)
 
         for info in self._latest_infos:
             item = QtWidgets.QListWidgetItem()

@@ -202,12 +202,12 @@ class KeybindManager(QtCore.QObject):
             # Toggle tiny mode
             self.set_tiny_mode(not self.tiny_mode_active)
             
-            # Send system info about the mode change
-            from ...charon_logger import system_info
+            # Send debug log about the mode change
+            from ...charon_logger import system_debug
             if self.tiny_mode_active:
-                system_info("Tiny mode on")
+                system_debug("Tiny mode on")
             else:
-                system_info("Tiny mode off")
+                system_debug("Tiny mode off")
         
         self.keybind_triggered.emit('local', action)
     

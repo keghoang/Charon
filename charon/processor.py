@@ -536,7 +536,7 @@ def _inject_png_text_chunk(image_path: str, key: str, text: str) -> None:
     try:
         payload = key.encode('latin-1') + b'\x00' + text.encode('latin-1')
     except UnicodeEncodeError:
-        payload = key.encode('latin-1', errors='ignore') + b'\x00' + text.encode('ascii', errors='ignore')
+        payload = key.encode('latin-1', errors='ignore') + b'\x00' + text.encode('utf-8', errors='ignore')
 
     chunk = bytearray()
     chunk.extend(len(payload).to_bytes(4, 'big'))
@@ -561,6 +561,17 @@ def embed_png_metadata(image_path: str, metadata: Dict[str, Any]) -> None:
         log_debug(f'Could not serialize metadata for PNG: {exc}', 'WARNING')
         return
     _inject_png_text_chunk(image_path, 'CharonMetadata', payload)
+
+
+def embed_png_workflow(image_path: str, workflow_payload: str) -> None:
+    if not image_path or not image_path.lower().endswith('.png'):
+        return
+    if not workflow_payload:
+        return
+    try:
+        _inject_png_text_chunk(image_path, 'workflow', workflow_payload)
+    except Exception as exc:
+        log_debug(f'Failed to embed workflow metadata: {exc}', 'WARNING')
 
 
 def _batch_nav_command(step: int) -> str:
@@ -2266,6 +2277,8 @@ def process_charonop_node():
                                         'seed_offset': seed_offset,
                                     }
                                     embed_png_metadata(normalized_output_path, metadata_payload)
+                                    if workflow_data_str:
+                                        embed_png_workflow(normalized_output_path, workflow_data_str)
                                     batch_entry = {
                                         'batch_index': batch_index + 1,
                                         'batch_total': batch_count,

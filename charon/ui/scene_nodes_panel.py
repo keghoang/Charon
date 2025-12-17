@@ -332,6 +332,9 @@ class SceneNodesPanel(QtWidgets.QWidget):
             return
 
         menu = QtWidgets.QMenu(self)
+        header = info.workflow_name or info.name
+        if header:
+            menu.addSection(header)
 
         process_action = menu.addAction("Execute Node...")
         process_action.triggered.connect(lambda: self._process_node(info.node, require_confirmation=False))
