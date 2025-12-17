@@ -223,7 +223,7 @@ def _write_charon_log(
         }
         log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except Exception as exc:  # pragma: no cover - defensive
-        system_error(f"Failed to write charon_log.json: {exc}")
+        system_error(f"Failed to write charon_log.json at {log_path}: {exc}")
 
 
 def ensure_requirements_with_log(parent=None) -> bool:
@@ -258,6 +258,9 @@ def ensure_requirements_with_log(parent=None) -> bool:
         setup_ran = True
         setup_ok = run_first_time_setup_if_needed(parent=parent, force=True)
         # Refresh env in case setup updated paths
+        prefs = preferences.load_preferences()
+        refreshed_path = prefs.get("comfyui_launch_path") or get_default_comfy_launch_path()
+        comfy_path = refreshed_path or comfy_path
         env = resolve_comfy_environment(comfy_path)
         comfy_dir = env.get("comfy_dir")
         python_exe = env.get("python_exe")
