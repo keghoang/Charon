@@ -3396,14 +3396,39 @@ def process_charonop_node():
                                 elif batch_index == 5: angle_desc = "to view from bottom"
                                 
                                 if angle_desc:
-                                    log_debug(f"Step 2: Attempting to inject angle '{angle_desc}'...")
-                                    for nid, ndata in prompt_payload.items():
-                                        inputs = ndata.get('inputs')
-                                        if isinstance(inputs, dict):
-                                            for key, val in inputs.items():
-                                                if isinstance(val, str) and "*charon_angle*" in val:
-                                                    inputs[key] = val.replace("*charon_angle*", angle_desc)
-                                                    log_debug(f"Step 2: Injected angle '{angle_desc}' into node {nid} input {key}")
+                                    # Try to get template from knob
+                                    prompt_template = ""
+                                    for spec in parameter_specs_local:
+                                        if spec.get('attribute') == 'prompt':
+                                            knob_name = spec.get('knob')
+                                            if knob_name:
+                                                try:
+                                                    prompt_template = node.knob(knob_name).value()
+                                                except: pass
+                                            break
+                                    
+                                    injected_via_template = False
+                                    if prompt_template and "*charon_angle*" in prompt_template:
+                                        final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
+                                        log_debug(f"Step 2: Using prompt template: {final_prompt}")
+                                        
+                                        for nid, ndata in prompt_payload.items():
+                                            inputs = ndata.get('inputs')
+                                            if isinstance(inputs, dict):
+                                                if 'prompt' in inputs:
+                                                    inputs['prompt'] = final_prompt
+                                                    injected_via_template = True
+                                                    log_debug(f"Step 2: Injected prompt into node {nid} input 'prompt'")
+                                    
+                                    if not injected_via_template:
+                                        log_debug(f"Step 2: Attempting to inject angle '{angle_desc}' via token replacement...")
+                                        for nid, ndata in prompt_payload.items():
+                                            inputs = ndata.get('inputs')
+                                            if isinstance(inputs, dict):
+                                                for key, val in inputs.items():
+                                                    if isinstance(val, str) and "*charon_angle*" in val:
+                                                        inputs[key] = val.replace("*charon_angle*", angle_desc)
+                                                        log_debug(f"Step 2: Injected angle '{angle_desc}' into node {nid} input {key}")
 
                         except Exception as render_err:
                             log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
