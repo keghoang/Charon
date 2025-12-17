@@ -1,5 +1,4 @@
 from ..qt_compat import QtWidgets, QtCore, Qt, UserRole, exec_menu
-from ..utilities import is_compatible_with_host
 
 
 def create_tag_badge(tag_name, fixed_height=24):
@@ -245,36 +244,21 @@ class ScriptListView(DeselectionListView):
         # Add separator for hotkey action
         menu.addSeparator()
 
-        # Get script software from metadata
-        script_sw = "None"
-        if script.has_metadata() and script.metadata.get("software"):
-            from galt.metadata_manager import get_software_for_host
-            script_sw = get_software_for_host(script.metadata, self.host)
-
-        # Check for software compatibility to enable/disable the hotkey option
-        software_match = is_compatible_with_host(script.metadata, self.host)
-        
-        # Get current hotkey for this script to display correct menu item
+        # Hotkey action
+        script_sw = self.host if self.host and str(self.host).lower() != "none" else "nuke"
         current_hotkey = user_settings_db.get_hotkey_for_script(normalized_path, script_sw)
-        
+
         if current_hotkey:
-            hotkey_action = menu.addAction(f"✗ Remove Hotkey ({current_hotkey})")
-            # Always allow removal regardless of entry file status
+            hotkey_action = menu.addAction(f"? Remove Hotkey ({current_hotkey})")
             hotkey_action.setEnabled(True)
         else:
-            hotkey_action = menu.addAction("▶ Assign Hotkey")
-            # For assignment, check both software compatibility AND entry file validity
+            hotkey_action = menu.addAction("? Assign Hotkey")
             from ..script_validator import ScriptValidator
             has_valid_entry, _ = ScriptValidator.has_valid_entry(script.path, script.metadata)
-            can_assign = software_match and has_valid_entry
-            
-            hotkey_action.setEnabled(can_assign)
-            if not software_match:
-                hotkey_action.setToolTip(f"Script software ({script_sw}) must match host ({self.host})")
-            elif not has_valid_entry:
+            hotkey_action.setEnabled(has_valid_entry)
+            if not has_valid_entry:
                 hotkey_action.setToolTip("Script must have a valid entry file (main.py, main.mel, etc.)")
 
-        # Connect the action to the new signal
         hotkey_action.triggered.connect(lambda: self.assignHotkeyRequested.emit(script_path))
         
         # Show menu at cursor position

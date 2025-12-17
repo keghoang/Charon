@@ -655,25 +655,17 @@ def create_script_sort_key(script_item, host):
     
     Priority order:
     1. Workflows with metadata (bookmarked first)
-    2. Workflows without metadata or tagged with "none" (bookmarked first)
+    2. Workflows without metadata (bookmarked first)
     
     Within each category, sort alphabetically by name.
     """
     name = script_item.name.lower()
     metadata = script_item.metadata
     is_bookmarked = getattr(script_item, 'is_bookmarked', False)
-    
+
     if not metadata:
-        # No metadata - treat as "none" software
         return (2, 0 if is_bookmarked else 1, name)
-    
-    # Preserve the legacy "none" grouping so folders lacking metadata still sort last
-    from .metadata_manager import get_software_for_host
-    software = (get_software_for_host(metadata, host) or "").lower()
-    if software == "none":
-        return (2, 0 if is_bookmarked else 1, name)
-    
-    # All other workflows are treated as compatible now that we only target Nuke
+
     return (1, 0 if is_bookmarked else 1, name)
 
 

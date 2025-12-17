@@ -1,8 +1,5 @@
 from ..qt_compat import QtCore, QtWidgets, QtGui, QStyledItemDelegate, Qt, KeepAspectRatio, SmoothTransformation, AlignLeft, AlignVCenter
 from ..utilities import is_compatible_with_host
-from ..metadata_manager import get_software_for_host
-from .. import config
-from ..icon_manager import get_icon_manager
 import os
 
 class RunButtonDelegate(QStyledItemDelegate):
@@ -229,17 +226,7 @@ class ScriptNameDelegate(QStyledItemDelegate):
                 # Calculate icon position (vertically centered)
                 icon_y = content_rect.top() + (content_rect.height() - self.custom_icon_size.height()) // 2
                 icon_rect = QtCore.QRect(content_rect.left(), icon_y, self.custom_icon_size.width(), self.custom_icon_size.height())
-                
-                # Apply opacity if script is incompatible
-                is_compatible = source_model.data(source_index, ScriptTableModel.CompatibleRole)
-                has_valid_entry = source_model.data(source_index, ScriptTableModel.ValidEntryRole)
-                
-                if not is_compatible or not has_valid_entry:
-                    painter.setOpacity(config.INCOMPATIBLE_OPACITY)
-                    
                 painter.drawPixmap(icon_rect, custom_pixmap)
-                painter.setOpacity(1.0)  # Reset opacity
-                
                 custom_icon_offset = self.custom_icon_size.width() + self.text_padding
         
         # Adjust content rect for custom icon
@@ -285,86 +272,3 @@ class ScriptNameDelegate(QStyledItemDelegate):
         return size
 
 
-class SoftwareIconDelegate(QStyledItemDelegate):
-    """Delegate that displays software icons in a dedicated column"""
-    
-    def __init__(self, parent=None):
-        super(SoftwareIconDelegate, self).__init__(parent)
-        self.icon_manager = get_icon_manager()  # Use global icon manager
-        self.icon_size = self.icon_manager.get_icon_size()  # Get size from manager
-        self.host = "None"  # Current host for opacity comparison
-        
-    def set_host(self, host):
-        """Set the current host for software compatibility checks"""
-        self.host = host
-        
-    def paint(self, painter, option, index):
-        """Paint the software icons"""
-        # Initialize the style option
-        opt = QtWidgets.QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        
-        # Save painter state
-        painter.save()
-        
-        # Get the model and script data
-        model = index.model()
-        from ..script_table_model import ScriptTableModel
-        
-        # Handle proxy models
-        source_model = model
-        source_index = index
-        if hasattr(model, 'sourceModel'):
-            source_model = model.sourceModel()
-            source_index = model.mapToSource(index)
-        
-        # Draw the background
-        style = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
-        style.drawPrimitive(QtWidgets.QStyle.PE_PanelItemViewItem, opt, painter, opt.widget)
-        
-        # Get script and software list
-        script = source_model.data(source_index, ScriptTableModel.ScriptRole)
-        if not script or not script.metadata:
-            painter.restore()
-            return
-            
-        software_list = script.metadata.get("software", [])
-        if not software_list:
-            painter.restore()
-            return
-            
-        # Get compatibility status
-        is_compatible = source_model.data(source_index, ScriptTableModel.CompatibleRole)
-        has_valid_entry = source_model.data(source_index, ScriptTableModel.ValidEntryRole)
-        
-        # Calculate content rect with minimal padding
-        content_rect = opt.rect.adjusted(2, 0, -2, 0)
-        
-        # Draw icons centered in the cell
-        total_width = len(software_list) * self.icon_size.width() + (len(software_list) - 1) * 2  # 2px spacing
-        x_offset = content_rect.left() + (content_rect.width() - total_width) // 2
-        
-        for software in software_list:
-            pixmap = self.icon_manager.get_icon(software)
-            if pixmap:
-                # Calculate icon position (vertically centered)
-                icon_y = content_rect.top() + (content_rect.height() - self.icon_size.height()) // 2
-                icon_rect = QtCore.QRect(x_offset, icon_y, self.icon_size.width(), self.icon_size.height())
-                
-                # Apply opacity based on both script compatibility and software match
-                if not is_compatible or not has_valid_entry:
-                    # Script can't run at all - use incompatible opacity
-                    painter.setOpacity(config.INCOMPATIBLE_OPACITY)
-                elif software.lower() == self.host.lower():
-                    # Software matches current host - full opacity
-                    painter.setOpacity(1.0)
-                else:
-                    # Software doesn't match current host - faded
-                    painter.setOpacity(config.INCOMPATIBLE_OPACITY)
-                    
-                painter.drawPixmap(icon_rect, pixmap)
-                painter.setOpacity(1.0)  # Reset opacity
-                
-                x_offset += self.icon_size.width() + 2  # 2px spacing between icons
-        
-        painter.restore() 
