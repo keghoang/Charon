@@ -44,7 +44,9 @@ def _filter_prompt_nodes(nodes: Iterable[ExposableNode]) -> Tuple[ExposableNode,
     for node in nodes or ():
         name = (node.name or "").strip().lower()
         normalized = name.replace(" ", "")
-        if normalized in {"loadimage", "saveimage"} or name.startswith("load image") or name.startswith("save image"):
+        if normalized.startswith("loadimage") or normalized.startswith("saveimage"):
+            continue
+        if name.startswith("load image") or name.startswith("save image"):
             continue
         filtered.append(node)
     return tuple(filtered)
@@ -97,11 +99,11 @@ def discover_prompt_widget_parameters(
 
     resolved = _discover_with_node_library(workflow_document)
     if resolved:
-        return resolved
+        return _filter_prompt_nodes(resolved)
 
     resolved = _discover_with_external_process(workflow_document)
     if resolved:
-        return resolved
+        return _filter_prompt_nodes(resolved)
 
     return _filter_prompt_nodes(_discover_with_widget_heuristic(workflow_document))
 

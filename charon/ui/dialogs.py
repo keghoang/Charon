@@ -23,6 +23,7 @@ import json
 _CACHE_SCHEMA_VERSION = 1
 _CACHE_FILENAME = "input_mapping_cache.json"
 _MEMORY_CACHE: Dict[str, Tuple[str, Tuple[ExposableNode, ...]]] = {}
+_ACTIVE_DISCOVERY_THREADS: List[QtCore.QThread] = []
 
 
 def _cache_key(path: str) -> str:
@@ -593,6 +594,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.setWindowTitle("Edit Workflow Metadata")
         self.setMinimumWidth(420)
 
+        self._dialog_closing: bool = False
         self._metadata = dict(metadata or {})
         raw_parameters = self._metadata.get("parameters") or []
         if isinstance(raw_parameters, list):
@@ -683,6 +685,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setHeaderHidden(True)
         self.input_mapping_tree.setRootIsDecorated(True)
         self.input_mapping_tree.setAlternatingRowColors(True)
+        self._apply_parameter_tree_palette()
         group_layout.addWidget(self.input_mapping_tree)
 
         self.input_mapping_message = QtWidgets.QLabel()
@@ -692,6 +695,48 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         layout.addWidget(self.input_mapping_group)
         self.input_mapping_tree.itemChanged.connect(self._on_parameter_item_changed)
         self._populate_input_mapping_preview()
+
+    def _apply_parameter_tree_palette(self) -> None:
+        """Apply a Nuke-style low-contrast palette for parameter selection."""
+        tree = getattr(self, "input_mapping_tree", None)
+        if tree is None:
+            return
+        tree.setObjectName("charon-parameter-tree")
+        checkmark_svg = (
+            "PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPScxNicgaGVpZ2h0PScxNicgdmlld0JveD0nMCAwIDE2IDE2Jz4K"
+            "ICA8cGF0aCBkPSdNMyAzIEwxMyAxMyBNMTMgMyBMMyAxMycgZmlsbD0nbm9uZScgc3Ryb2tlPSd3aGl0ZScgc3Ryb2tlLXdpZHRoPScyLjQnIHN0"
+            "cm9rZS1saW5lY2FwPSdyb3VuZCcvPgo8L3N2Zz4="
+        )
+        tree.setStyleSheet(
+            f"""
+            QTreeWidget#charon-parameter-tree {{
+                alternate-background-color: #323232;
+                background-color: #2b2b2b;
+                border: 1px solid #3a3a3a;
+            }}
+            QTreeWidget#charon-parameter-tree::item {{
+                color: #f0f0f0;
+            }}
+            QTreeWidget#charon-parameter-tree::item:selected,
+            QTreeWidget#charon-parameter-tree::item:selected:active,
+            QTreeWidget#charon-parameter-tree::item:selected:!active {{
+                background-color: #4c4c4c;
+                color: #ffffff;
+            }}
+            QTreeWidget#charon-parameter-tree::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 2px;
+                border: 1px solid #5a5a5a;
+                background-color: #3a3a3a;
+            }}
+            QTreeWidget#charon-parameter-tree::indicator:checked {{
+                background-color: #545454;
+                border-color: #dcdcdc;
+                image: url("data:image/svg+xml;base64,{checkmark_svg}");
+            }}
+            """
+        )
 
     def _populate_input_mapping_preview(self) -> None:
         """Populate the preview tree with prompt widget candidates from the workflow."""
@@ -719,29 +764,30 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_message.setText(self._scan_base_text)
         self._start_scan_animation()
 
-        thread = QtCore.QThread(self)
+        thread = QtCore.QThread()
         worker = _ParameterDiscoveryWorker(self._workflow_path)
         worker.moveToThread(thread)
 
         worker.finished.connect(self._on_parameter_discovery_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._clear_discovery_handles())
+        thread.finished.connect(lambda: _release_discovery_thread(thread))
+        thread.finished.connect(self._clear_discovery_handles)
 
         thread.started.connect(worker.run)
         self._discovery_thread = thread
         self._discovery_worker = worker
+        _register_discovery_thread(thread)
         thread.start()
 
     def _cancel_parameter_discovery(self) -> None:
-        if self._discovery_thread:
+        thread = self._discovery_thread
+        if thread:
             try:
-                self._discovery_thread.requestInterruption()
+                thread.requestInterruption()
             except Exception:
                 pass
-            self._discovery_thread.quit()
-            self._discovery_thread.wait(100)
+            thread.quit()
         self._clear_discovery_handles()
         self._stop_scan_animation()
 
@@ -774,6 +820,8 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self._scan_animation_phase = 0
 
     def _on_parameter_discovery_finished(self, candidates, error) -> None:
+        if self._dialog_closing:
+            return
         self._stop_scan_animation()
         if error:
             self.input_mapping_message.setText(str(error))
@@ -964,6 +1012,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         return selected
 
     def closeEvent(self, event):
+        self._dialog_closing = True
         self._cancel_parameter_discovery()
         super(CharonMetadataDialog, self).closeEvent(event)
 
@@ -1077,3 +1126,15 @@ class HotkeyDialog(QtWidgets.QDialog):
 
 
 
+def _register_discovery_thread(thread: QtCore.QThread) -> None:
+    """Keep the QThread alive until it actually stops."""
+    if thread not in _ACTIVE_DISCOVERY_THREADS:
+        _ACTIVE_DISCOVERY_THREADS.append(thread)
+
+
+def _release_discovery_thread(thread: QtCore.QThread) -> None:
+    try:
+        _ACTIVE_DISCOVERY_THREADS.remove(thread)
+    except ValueError:
+        pass
+    thread.deleteLater()
