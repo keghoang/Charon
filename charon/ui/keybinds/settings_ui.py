@@ -751,8 +751,21 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self.comfy_status_label.clear()
 
     def _save_comfy_path(self) -> None:
-        path = self.comfy_path_edit.text()
-        self._update_comfy_path(path)
+        new_path = self.comfy_path_edit.text().strip()
+        old_path = preferences.get_preference("comfyui_launch_path", "").strip()
+        
+        self._update_comfy_path(new_path)
+        
+        if new_path and new_path != old_path:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Path Changed",
+                "ComfyUI path has been updated.\n"
+                "First-Time Setup will now run to verify the new environment."
+            )
+            self.accept()
+            # Launch FTS using the parent window as the parent for the dialog
+            run_first_time_setup_if_needed(parent=self.parent(), force=True)
 
     def _browse_comfy_path(self) -> None:
         start_dir = os.path.dirname(self.comfy_path_edit.text().strip()) or os.getcwd()
