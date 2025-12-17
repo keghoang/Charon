@@ -68,18 +68,30 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
 
-        if opt.state & QtWidgets.QStyle.State_Selected:
-            background_color = palette.highlight().color()
-            text_color = palette.highlightedText().color()
+        if (
+            self._column == ScriptTableModel.COL_VALIDATE
+            and validation_state == "needs_resolve"
+        ):
+            background_color = QtGui.QColor("#B22222")
+            text_color = QtGui.QColor("#FFFFFF")
+            if not is_enabled:
+                background_color = palette.mid().color()
+                text_color = palette.midlight().color()
+            elif opt.state & QtWidgets.QStyle.State_MouseOver:
+                background_color = background_color.lighter(110)
         else:
-            background_color = palette.button().color()
-            text_color = palette.buttonText().color()
+            if opt.state & QtWidgets.QStyle.State_Selected:
+                background_color = palette.highlight().color()
+                text_color = palette.highlightedText().color()
+            else:
+                background_color = palette.button().color()
+                text_color = palette.buttonText().color()
 
-        if not is_enabled:
-            background_color = palette.mid().color()
-            text_color = palette.midlight().color()
-        elif opt.state & QtWidgets.QStyle.State_MouseOver:
-            background_color = background_color.lighter(110)
+            if not is_enabled:
+                background_color = palette.mid().color()
+                text_color = palette.midlight().color()
+            elif opt.state & QtWidgets.QStyle.State_MouseOver:
+                background_color = background_color.lighter(110)
 
         if self._pressed_index == index:
             background_color = background_color.darker(110)
@@ -98,7 +110,7 @@ class ButtonDelegate(QtWidgets.QStyledItemDelegate):
             self._column == ScriptTableModel.COL_VALIDATE
             and validation_state == "needs_resolve"
         ):
-            text_color = QtGui.QColor(178, 34, 34)
+            text_color = QtGui.QColor("#FFFFFF")
 
         painter.setPen(text_color)
         painter.drawText(button_rect, QtCore.Qt.AlignCenter, button_text)

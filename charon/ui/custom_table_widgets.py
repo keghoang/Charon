@@ -277,6 +277,10 @@ class ScriptTableView(QtWidgets.QTableView):
             revalidate_action = menu.addAction("Revalidate")
             revalidate_action.setEnabled(state != "validating")
             revalidate_action.triggered.connect(lambda: self.script_revalidate.emit(script_path))
+
+            view_result_action = menu.addAction("View Validation Result")
+            view_result_action.triggered.connect(lambda: self.script_show_validation_payload.emit(script_path))
+
             if advanced_mode:
                 raw_action = menu.addAction("Show Raw Validation Payload")
                 raw_action.triggered.connect(
