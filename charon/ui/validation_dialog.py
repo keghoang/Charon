@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..qt_compat import QtCore, QtGui, QtWidgets
 from ..paths import resolve_comfy_environment
-from ..charon_logger import system_debug
+from ..charon_logger import system_debug, system_warning
 from ..validation_resolver import (
     ResolutionResult,
     determine_expected_model_path,
@@ -332,7 +332,7 @@ class IssueRow(QtWidgets.QWidget):
 
 
 class _FileCopyWorker(QtCore.QObject):
-    progress = QtCore.Signal(int)
+    progress = QtCore.Signal(int, object, object)  # percent, copied_bytes, total_bytes
     finished = QtCore.Signal(bool, str)
     failed = QtCore.Signal(str)
     canceled = QtCore.Signal()
@@ -342,6 +342,10 @@ class _FileCopyWorker(QtCore.QObject):
         self._source = source
         self._destination = destination
         self._cancel_requested = False
+        try:
+            self._total_size = os.path.getsize(self._source)
+        except OSError:
+            self._total_size = 0
 
     @QtCore.Slot()
     def run(self) -> None:
@@ -353,12 +357,16 @@ class _FileCopyWorker(QtCore.QObject):
     def cancel(self) -> None:
         self._cancel_requested = True
 
+    @property
+    def total_size(self) -> int:
+        return self._total_size
+
     def _copy_with_progress(self) -> None:
         if not os.path.isfile(self._source):
             self.failed.emit("Source model file no longer exists.")
             return
         os.makedirs(os.path.dirname(self._destination), exist_ok=True)
-        total = os.path.getsize(self._source)
+        total = self._total_size or os.path.getsize(self._source)
         copied = 0
         chunk_size = 4 * 1024 * 1024
         temp_path = f"{self._destination}.tmp"
@@ -375,9 +383,77 @@ class _FileCopyWorker(QtCore.QObject):
                     dest.write(chunk)
                     copied += len(chunk)
                     percent = int((copied / total) * 100) if total else 0
-                    self.progress.emit(min(percent, 100))
+                    self.progress.emit(min(percent, 100), copied, total)
             os.replace(temp_path, self._destination)
             self.finished.emit(True, self._destination)
+        finally:
+            if os.path.exists(temp_path) and (self._cancel_requested or not os.path.exists(self._destination)):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+
+class _UrlDownloadWorker(QtCore.QObject):
+    progress = QtCore.Signal(int, object, object)  # percent, downloaded_bytes, total_bytes
+    finished = QtCore.Signal(bool, str)
+    failed = QtCore.Signal(str)
+    canceled = QtCore.Signal()
+
+    def __init__(self, url: str, destination: str, parent: Optional[QtCore.QObject] = None) -> None:
+        super().__init__(parent)
+        self._url = url
+        self._destination = destination
+        self._cancel_requested = False
+        self._total_size = 0
+
+    @property
+    def total_size(self) -> int:
+        return self._total_size
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            self._download_with_progress()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            self.failed.emit(str(exc))
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    def _download_with_progress(self) -> None:
+        temp_path = f"{self._destination}.download"
+        try:
+            with urllib.request.urlopen(self._url) as response:
+                total_header = response.getheader("Content-Length")
+                try:
+                    self._total_size = int(total_header) if total_header else 0
+                except (TypeError, ValueError):
+                    self._total_size = 0
+                os.makedirs(os.path.dirname(self._destination) or ".", exist_ok=True)
+                with open(temp_path, "wb") as dest:
+                    copied = 0
+                    chunk_size = 4 * 1024 * 1024
+                    while True:
+                        if self._cancel_requested:
+                            self.canceled.emit()
+                            return
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        dest.write(chunk)
+                        copied += len(chunk)
+                        percent = int((copied / self._total_size) * 100) if self._total_size else 0
+                        self.progress.emit(min(percent, 100), copied, self._total_size)
+            os.replace(temp_path, self._destination)
+            self.finished.emit(True, self._destination)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
         finally:
             if os.path.exists(temp_path) and (self._cancel_requested or not os.path.exists(self._destination)):
                 try:
@@ -467,6 +543,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_node_row_worker: Optional[_CustomNodeInstallWorker] = None
         self._custom_node_row_context: Optional[Dict[str, Any]] = None
         self._custom_node_install_queue: List[Dict[str, Any]] = []
+        self._model_copy_thread: Optional[QtCore.QThread] = None
+        self._model_copy_worker: Optional[_FileCopyWorker] = None
+        self._model_copy_context: Optional[Dict[str, Any]] = None
+        self._model_download_thread: Optional[QtCore.QThread] = None
+        self._model_download_worker: Optional[_UrlDownloadWorker] = None
+        self._model_download_context: Optional[Dict[str, Any]] = None
         restart_flag = False
         if isinstance(self._payload, dict):
             restart_flag = bool(
@@ -699,9 +781,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 if dirs:
                     normalized["attempted_directories"] = dirs
                 normalized_missing.append(normalized)
-            data["missing_models"] = normalized_missing
+            data["missing_models"] = self._dedupe_missing_models(normalized_missing)
+            deduped_missing = data["missing_models"]
             unresolved_models = [
-                e for e in normalized_missing if str(e.get("resolve_status") or "").strip() != "success"
+                e for e in deduped_missing if str(e.get("resolve_status") or "").strip() != "success"
             ]
             issue["ok"] = len(unresolved_models) == 0
             if issue["ok"]:
@@ -712,6 +795,38 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 issue["summary"] = f"All required model files resolved.{method_fragment}"
             else:
                 issue["summary"] = f"Missing {len(unresolved_models)} model file(s)."
+
+    def _dedupe_missing_models(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        def signature(entry: Dict[str, Any]) -> str:
+            name = self._normalize_identifier(entry.get("name")) or ""
+            base_name = self._normalize_identifier(os.path.basename(str(entry.get("name") or ""))) or ""
+            path_val = self._normalize_identifier(entry.get("path")) or ""
+            path_base = self._normalize_identifier(os.path.basename(str(entry.get("path") or ""))) or ""
+            return name or base_name or path_val or path_base
+
+        def score(entry: Dict[str, Any]) -> Tuple[int, int, int]:
+            is_metadata = 0 if entry.get("resolver_missing") else 1
+            raw = entry.get("raw") if isinstance(entry.get("raw"), dict) else {}
+            has_url = 1 if (entry.get("url") or raw.get("url")) else 0
+            has_folder = 1 if (entry.get("folder_path") or entry.get("path")) else 0
+            return (is_metadata, has_url, has_folder)
+
+        seen: Dict[str, int] = {}
+        deduped: List[Dict[str, Any]] = []
+        for entry in entries:
+            sig = signature(entry)
+            if not sig:
+                deduped.append(entry)
+                continue
+            if sig in seen:
+                idx = seen[sig]
+                existing = deduped[idx]
+                if score(entry) > score(existing):
+                    deduped[idx] = entry
+            else:
+                seen[sig] = len(deduped)
+                deduped.append(entry)
+        return deduped
 
     # --------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
@@ -728,7 +843,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         self._populate_sections()
         self._update_overall_state()
-        self.resize(520, 620)
+        self.resize(570, 620)
 
     def _build_failed_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
@@ -955,6 +1070,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             )
             models_root = row_info.get("models_root") or ""
             target_hint = display_source or models_root
+            subtitle_override = str(row_info.get("subtitle_override") or "").strip()
             subtitle_parts = []
             if category_value:
                 subtitle_parts.append(f"Folder: {category_value}")
@@ -962,7 +1078,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 subtitle_parts.append("Directory invalid")
             if url_value:
                 subtitle_parts.append(f"URL: {url_value}")
-            subtitle = " | ".join(subtitle_parts) if subtitle_parts else "Model location"
+            subtitle = subtitle_override or (
+                " | ".join(subtitle_parts) if subtitle_parts else "Model location"
+            )
             issue_row = IssueRow(
                 f"Missing model: {display_name}",
                 subtitle,
@@ -1110,6 +1228,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _process_next_auto_resolve_item(self) -> None:
         if not self._auto_resolve_running:
             return
+        if self._model_download_thread and self._model_download_thread.isRunning():
+            return
+        if self._model_copy_thread and self._model_copy_thread.isRunning():
+            return
         while self._auto_resolve_queue:
             issue_key, row_index = self._auto_resolve_queue.pop(0)
             widget_info = self._issue_widgets.get(issue_key) or {}
@@ -1127,6 +1249,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
             if issue_key == "models":
                 self._handle_model_auto_resolve(row_index)
+                if (self._model_copy_thread and self._model_copy_thread.isRunning()) or (
+                    self._model_download_thread and self._model_download_thread.isRunning()
+                ):
+                    return
                 QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
                 return
 
@@ -1136,6 +1262,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if not self._auto_resolve_running:
             return
         if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
+            return
+        if self._model_copy_thread and self._model_copy_thread.isRunning():
+            return
+        if self._model_download_thread and self._model_download_thread.isRunning():
             return
         QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
 
@@ -1215,6 +1345,24 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             callback()
         else:
             self._update_overall_state()
+
+    def _cleanup_model_copy_worker(self) -> None:
+        thread = self._model_copy_thread
+        self._model_copy_thread = None
+        self._model_copy_worker = None
+        self._model_copy_context = None
+        if thread:
+            thread.quit()
+            thread.wait(2000)
+
+    def _cleanup_model_download_worker(self) -> None:
+        thread = self._model_download_thread
+        self._model_download_thread = None
+        self._model_download_worker = None
+        self._model_download_context = None
+        if thread:
+            thread.quit()
+            thread.wait(2000)
 
     def _cleanup_custom_nodes_worker(self) -> None:
         thread = self._custom_nodes_thread
@@ -2247,7 +2395,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             reference["resolve_failed"] = ""
         # Avoid duplicating the resolve method in a separate note when already resolved.
         if note and lower_status not in {"resolved", "copied"}:
-            self._append_issue_note("models", note)
+            self._append_issue_note("models", note, row_info=row_info)
         # Update backing payload so reopen pulls resolved state from cache.
         issues = self._payload.get("issues") if isinstance(self._payload, dict) else None
         if isinstance(issues, list):
@@ -2326,49 +2474,283 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             self._workflow_bundle["workflow"] = self._workflow_override
         return True, ""
 
-    def _copy_shared_model(self, source: str, destination: str) -> Tuple[bool, Optional[str]]:
-        progress = QtWidgets.QProgressDialog("Copying model...", "Cancel", 0, 100, self)
-        progress.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
+    def _copy_shared_model(
+        self,
+        source: str,
+        destination: str,
+        *,
+        row: int,
+        row_info: Dict[str, Any],
+        workflow_value: str,
+        destination_display: str,
+        note: str,
+        file_name: str,
+    ) -> Tuple[Optional[bool], Optional[str]]:
+        if self._model_copy_thread and self._model_copy_thread.isRunning():
+            info_text = (
+                "A model copy from the Global Repo is already running. "
+                "Please wait for it to complete."
+            )
+            self._set_issue_row_subtitle(row_info, info_text)
+            return False, None
+
         worker = _FileCopyWorker(source, destination)
         thread = QtCore.QThread(self)
+        self._model_copy_worker = worker
+        self._model_copy_thread = thread
+        self._model_copy_context = {
+            "row": row,
+            "row_info": row_info,
+            "workflow_value": workflow_value,
+            "destination_display": destination_display,
+            "note": note,
+            "expected_path": destination,
+            "file_name": file_name,
+            "source": source,
+        }
+        row_info["copy_in_progress"] = True
         worker.moveToThread(thread)
 
-        result = {"success": False, "message": None}
-
-        def _handle_finished(_success: bool, _dest: str) -> None:
-            result["success"] = True
-            result["message"] = _dest
-            progress.setValue(100)
-            progress.accept()
-            thread.quit()
-
-        def _handle_failed(message: str) -> None:
-            result["success"] = False
-            result["message"] = message
-            progress.reject()
-            thread.quit()
-
-        def _handle_canceled() -> None:
-            result["success"] = False
-            result["message"] = "Copy canceled."
-            progress.reject()
-            thread.quit()
-
-        worker.progress.connect(progress.setValue)
-        worker.finished.connect(_handle_finished)
-        worker.failed.connect(_handle_failed)
-        worker.canceled.connect(_handle_canceled)
-        progress.canceled.connect(worker.cancel)
+        worker.progress.connect(self._on_model_copy_progress)
+        worker.finished.connect(
+            lambda success, dest: self._handle_model_copy_finished(success, dest)
+        )
+        worker.failed.connect(self._handle_model_copy_failed)
+        worker.canceled.connect(lambda: self._handle_model_copy_failed("Copy canceled."))
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
 
         thread.start()
-        progress.exec()
+        self._on_model_copy_progress(0, 0, worker.total_size)
+        return None
 
-        return bool(result["success"]), result["message"]
+    def _download_model_from_url(
+        self,
+        url: str,
+        destination: str,
+        *,
+        row: int,
+        row_info: Dict[str, Any],
+        workflow_value: Optional[str],
+        destination_display: str,
+        note: str,
+        file_name: str,
+    ) -> Tuple[Optional[bool], Optional[str]]:
+        if self._model_download_thread and self._model_download_thread.isRunning():
+            info_text = (
+                "A model download is already running. Please wait for it to complete."
+            )
+            self._set_issue_row_subtitle(row_info, info_text)
+            return False, None
+
+        worker = _UrlDownloadWorker(url, destination)
+        thread = QtCore.QThread(self)
+        self._model_download_worker = worker
+        self._model_download_thread = thread
+        self._model_download_context = {
+            "row": row,
+            "row_info": row_info,
+            "workflow_value": workflow_value,
+            "destination_display": destination_display,
+            "note": note,
+            "expected_path": destination,
+            "file_name": file_name,
+            "url": url,
+        }
+        row_info["download_in_progress"] = True
+        worker.moveToThread(thread)
+
+        worker.progress.connect(self._on_model_download_progress)
+        worker.finished.connect(
+            lambda success, dest: self._handle_model_download_finished(success, dest)
+        )
+        worker.failed.connect(self._handle_model_download_failed)
+        worker.canceled.connect(lambda: self._handle_model_download_failed("Download canceled."))
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        thread.start()
+        self._on_model_download_progress(0, 0, worker.total_size)
+        return None, None
+
+    def _on_model_copy_progress(self, percent: int, copied: int, total: int) -> None:
+        context = self._model_copy_context or {}
+        row_info = context.get("row_info") or {}
+        copied_bytes = self._clamp_size(copied)
+        total_bytes = self._clamp_size(total)
+        total_display = self._format_bytes_progress(total_bytes) if total_bytes else "unknown size"
+        subtitle = (
+            f"Copying from Global Repo: {percent}% "
+            f"({self._format_bytes_progress(copied_bytes)} / {total_display})"
+        )
+        self._set_issue_row_subtitle(row_info, subtitle)
+
+    def _on_model_download_progress(self, percent: int, copied: int, total: int) -> None:
+        context = self._model_download_context or {}
+        row_info = context.get("row_info") or {}
+        copied_bytes = self._clamp_size(copied)
+        total_bytes = self._clamp_size(total)
+        total_display = self._format_bytes_progress(total_bytes) if total_bytes else "unknown size"
+        subtitle = (
+            f"Downloading model: {percent}% "
+            f"({self._format_bytes_progress(copied_bytes)} / {total_display})"
+        )
+        self._set_issue_row_subtitle(row_info, subtitle)
+
+    def _handle_model_copy_finished(self, success: bool, destination: str) -> None:
+        context = self._model_copy_context or {}
+        row_info = context.get("row_info") or {}
+        row_info["copy_in_progress"] = False
+        row = context.get("row")
+        workflow_value = context.get("workflow_value")
+        destination_display = context.get("destination_display") or destination
+        note = context.get("note") or f"Found in Global Repo; downloaded to {destination_display}."
+        expected_path = context.get("expected_path") or destination
+        source = context.get("source") or ""
+
+        if not success:
+            self._handle_model_copy_failed(destination or "Copy failed.")
+            return
+
+        system_debug(
+            "[Validation] Global Repo copy completed | "
+            f"source='{source}' destination='{expected_path}'"
+        )
+        row_info["subtitle_override"] = note
+        row_info["resolve_method"] = row_info.get("resolve_method") or note
+        if isinstance(row, int):
+            self._mark_model_resolved(
+                row,
+                "Resolved",
+                destination_display,
+                note,
+                workflow_value,
+                resolved_path=expected_path,
+            )
+            self._record_resolved_model(expected_path, "Copied", row_info, workflow_value, note)
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.mark_as_successful(
+                row_info.get("success_text") or "Resolved",
+                detail=note,
+            )
+        button = row_info.get("button")
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(False)
+            button.setText("Resolved")
+        self._refresh_models_issue_status()
+        self._update_overall_state()
+        if self._workflow_folder:
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+            except Exception as exc:
+                system_warning(f"Failed to persist resolve status after model copy: {exc}")
+        self._cleanup_model_copy_worker()
+        self._continue_auto_resolve_queue()
+
+    def _handle_model_download_finished(self, success: bool, destination: str) -> None:
+        context = self._model_download_context or {}
+        row_info = context.get("row_info") or {}
+        row_info["download_in_progress"] = False
+        row = context.get("row")
+        workflow_value = context.get("workflow_value")
+        destination_display = context.get("destination_display") or destination
+        note = context.get("note") or f"Downloaded to {destination_display}."
+        expected_path = context.get("expected_path") or destination
+        url = context.get("url") or ""
+        if not workflow_value:
+            reference = row_info.get("reference") or {}
+            models_root = row_info.get("models_root") or ""
+            comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
+            workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+
+        if not success:
+            self._handle_model_download_failed(destination or "Download failed.")
+            return
+
+        system_debug(
+            "[Validation] URL model download completed | "
+            f"url='{url}' destination='{expected_path}'"
+        )
+        row_info["subtitle_override"] = note
+        row_info["resolve_method"] = row_info.get("resolve_method") or note
+        if isinstance(row, int):
+            self._mark_model_resolved(
+                row,
+                "Resolved",
+                destination_display,
+                note,
+                workflow_value,
+                resolved_path=expected_path,
+            )
+            self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value, note)
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.mark_as_successful(
+                row_info.get("success_text") or "Resolved",
+                detail=note,
+            )
+        button = row_info.get("button")
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(False)
+            button.setText("Resolved")
+        self._refresh_models_issue_status()
+        self._update_overall_state()
+        if self._workflow_folder:
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+            except Exception as exc:
+                system_warning(f"Failed to persist resolve status after URL download: {exc}")
+        self._cleanup_model_download_worker()
+        self._continue_auto_resolve_queue()
+
+    def _handle_model_download_failed(self, message: str) -> None:
+        context = self._model_download_context or {}
+        row_info = context.get("row_info") or {}
+        row_info["download_in_progress"] = False
+        message = message or "Download failed."
+        url = context.get("url") or ""
+        destination = context.get("expected_path") or ""
+        system_debug(
+            "[Validation] URL model download failed | "
+            f"url='{url}' destination='{destination}' message='{message}'"
+        )
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.reset_to_idle()
+        self._set_issue_row_subtitle(row_info, message)
+        button = row_info.get("button")
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(True)
+        self._cleanup_model_download_worker()
+        self._refresh_models_issue_status()
+        self._update_overall_state()
+        self._continue_auto_resolve_queue()
+
+    def _handle_model_copy_failed(self, message: str) -> None:
+        context = self._model_copy_context or {}
+        row_info = context.get("row_info") or {}
+        row_info["copy_in_progress"] = False
+        message = message or "Copy failed."
+        source = context.get("source") or ""
+        destination = context.get("expected_path") or ""
+        system_debug(
+            "[Validation] Global Repo copy failed | "
+            f"source='{source}' destination='{destination}' message='{message}'"
+        )
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.reset_to_idle()
+        self._set_issue_row_subtitle(row_info, message)
+        button = row_info.get("button")
+        if button and button is not getattr(issue_row, "btn_resolve", None):
+            button.setEnabled(True)
+        self._cleanup_model_copy_worker()
+        self._refresh_models_issue_status()
+        self._update_overall_state()
+        self._continue_auto_resolve_queue()
 
     def _select_candidate_path(
         self,
@@ -2403,6 +2785,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         status: str,
         row_info: Dict[str, Any],
         workflow_value: Optional[str],
+        resolve_method: Optional[str] = None,
     ) -> None:
         issue = self._issue_lookup.get("models")
         if not issue:
@@ -2417,6 +2800,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         reference_name = str(reference.get("name") or "")
         row_index = row_info.get("row_index")
         signature_value = row_info.get("reference_signature")
+        method_value = resolve_method or row_info.get("resolve_method")
         if isinstance(signature_value, tuple):
             signature_payload: Optional[List[Optional[str]]] = list(signature_value)
         elif isinstance(signature_value, list):
@@ -2434,6 +2818,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     entry["reference"] = reference_name
                 if workflow_value:
                     entry["workflow_value"] = workflow_value
+                if method_value:
+                    entry["resolve_method"] = method_value
                 if signature_payload is not None:
                     entry["signature"] = signature_payload
                 if original_signature_tuple and original_signature_tuple[0]:
@@ -2445,6 +2831,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 payload["reference"] = reference_name
             if workflow_value:
                 payload["workflow_value"] = workflow_value
+            if method_value:
+                payload["resolve_method"] = method_value
             if signature_payload is not None:
                 payload["signature"] = signature_payload
                 if signature_payload and signature_payload[0]:
@@ -2675,7 +3063,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         self._append_issue_note(
             "custom_nodes",
-            f"Manual install required for {package_display}. Install under custom_nodes and restart ComfyUI.",
+            f"Manual install required for {package_display}. "
+            "Install under custom_nodes and restart ComfyUI.",
+            row_info=row_info,
         )
         return False
 
@@ -2716,6 +3106,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         file_name: str,
         models_root: str,
         expected_path: Optional[str] = None,
+        row_info: Optional[Dict[str, Any]] = None,
+        prefix_note: Optional[str] = None,
     ) -> None:
         display_name = file_name or "the required model"
         if expected_path:
@@ -2727,28 +3119,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         else:
             destination_display = "your ComfyUI/models directory"
 
-        destination_fragment = f'<span style="color:#228B22;">{destination_display}</span>'
-        message = (
-            f"Could not locate <b>{display_name}</b>.<br>"
-            "Please download it manually, place it under "
-            f"{destination_fragment}.<br>"
-            "After that, click Resolve again."
-        )
-
-        dialog = QtWidgets.QMessageBox(self)
-        dialog.setIcon(QtWidgets.QMessageBox.Icon.Information)
-        dialog.setWindowTitle("Model Missing")
-        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        dialog.setText(message)
-        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
-        dialog.exec()
-
+        prefix = f"{prefix_note.strip()} " if isinstance(prefix_note, str) and prefix_note.strip() else ""
         note_text = (
-            f"Could not locate {display_name}. "
+            f"{prefix}Could not locate {display_name}. "
             f"Please download it manually and place it under {destination_display}. "
             "After that, click Resolve again."
         )
-        self._append_issue_note("models", note_text)
+        if isinstance(row_info, dict):
+            row_info["subtitle_override"] = note_text
+            issue_row = row_info.get("issue_row")
+        else:
+            issue_row = None
+
+        if isinstance(issue_row, IssueRow):
+            issue_row.lbl_sub.setText(note_text)
+            issue_row.lbl_sub.show()
+            issue_row.lbl_sub.adjustSize()
+            issue_row.updateGeometry()
 
     # ---------------------------------------------------------------- Actions
     def _handle_auto_resolve(self, issue_key: str) -> None:
@@ -2773,6 +3160,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         row_info = rows.get(row)
         if not row_info or row_info.get("resolved"):
             return
+        if row_info.get("copy_in_progress"):
+            system_debug("[Validation] Model copy already in progress; skipping duplicate resolve trigger.")
+            return
+        if row_info.get("download_in_progress"):
+            system_debug("[Validation] Model download already in progress; skipping duplicate resolve trigger.")
+            return
         issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
         if isinstance(issue_row, IssueRow):
@@ -2782,22 +3175,23 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         try:
             resolved = self._resolve_model_entry(row, row_info)
             if isinstance(issue_row, IssueRow):
-                if resolved:
+                if resolved is True:
                     detail_text = row_info.get("resolve_method") or None
                     issue_row.mark_as_successful(
                         row_info.get("success_text"),
                         detail=detail_text,
                     )
-                else:
+                elif resolved is False:
                     issue_row.reset_to_idle()
-            elif button and not resolved:
+            elif button and resolved is False:
                 button.setEnabled(True)
         except Exception as exc:  # pragma: no cover - defensive guard
             if isinstance(issue_row, IssueRow):
                 issue_row.reset_to_idle()
             elif button:
                 button.setEnabled(True)
-            QtWidgets.QMessageBox.warning(self, "Auto Resolve Failed", str(exc))
+            self._set_issue_row_subtitle(row_info, f"Auto resolve failed: {exc}")
+            system_debug(f"[Validation] Auto resolve failed for row {row}: {exc}")
         self._update_overall_state()
 
     def _handle_custom_node_auto_resolve(self, row: int) -> None:
@@ -2807,6 +3201,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         rows: Dict[int, Dict[str, Any]] = widget_info.get("rows") or {}
         row_info = rows.get(row)
         if not row_info or row_info.get("resolved"):
+            return
+        if row_info.get("copy_in_progress"):
+            system_debug("[Validation] Model copy already in progress; skipping duplicate resolve trigger.")
+            return
+        if row_info.get("download_in_progress"):
+            system_debug("[Validation] Model download already in progress; skipping duplicate resolve trigger.")
             return
         issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
@@ -2881,7 +3281,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "Custom Node Resolve Failed", str(exc))
         self._update_overall_state()
 
-    def _resolve_model_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
+    def _resolve_model_entry(self, row: int, row_info: Dict[str, Any]) -> Optional[bool]:
         reference = row_info.get("reference") or {}
         original_name = str(reference.get("name") or "").strip()
         system_debug(
@@ -2900,51 +3300,45 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
         expected_path: Optional[str] = None
         notified_manual = False
+
+        # 1) Local match (no prompt; pick first)
         local_matches = find_local_model_matches(reference, models_root)
         system_debug(
             "[Validation] Auto-resolve: local scan complete | "
             f"row={row} matches={len(local_matches) if local_matches else 0}"
         )
         if local_matches:
-            selected = self._select_candidate_path(
-                local_matches,
-                title="Select Model",
-                prompt="Choose the model file to reference in this workflow.",
-                models_root=models_root,
+            selected = local_matches[0]
+            system_debug(
+                "[Validation] Auto-resolve: local selection made | "
+                f"row={row} selected='{selected}'"
             )
-            if selected:
-                system_debug(
-                    "[Validation] Auto-resolve: local selection made | "
-                    f"row={row} selected='{selected}'"
+            workflow_value = self._compute_workflow_value(reference, selected, models_root, comfy_dir)
+            display_text = self._format_model_display_path(selected, models_root)
+            success, message = self._apply_model_override(original_name, workflow_value)
+            if success:
+                note = f"Selected local model: {display_text}"
+                row_info["resolve_method"] = row_info.get("resolve_method") or note
+                self._set_issue_row_subtitle(row_info, note)
+                self._mark_model_resolved(
+                    row,
+                    "Resolved",
+                    display_text,
+                    note,
+                    workflow_value,
+                    resolved_path=selected,
                 )
-                workflow_value = self._compute_workflow_value(reference, selected, models_root, comfy_dir)
-                display_text = self._format_model_display_path(selected, models_root)
-                success, message = self._apply_model_override(original_name, workflow_value)
-                if success:
-                    note = f"Selected local model: {display_text}"
-                    row_info["resolve_method"] = row_info.get("resolve_method") or note
-                    system_debug(
-                        "[Validation] Local model resolved | "
-                        f"selected='{selected}' workflow_value='{workflow_value}'"
-                    )
-                    self._mark_model_resolved(
-                        row,
-                        "Resolved",
-                        display_text,
-                        note,
-                        workflow_value,
-                        resolved_path=selected,
-                    )
-                    self._record_resolved_model(selected, "Resolved", row_info, workflow_value)
-                    self._refresh_models_issue_status()
-                    return True
-                if message:
-                    QtWidgets.QMessageBox.warning(self, "Workflow Update Failed", message)
-            else:
-                system_debug("[Validation] Auto-resolve: local selection skipped/canceled")
-        else:
-            system_debug("[Validation] Auto-resolve: no local matches found")
+                self._record_resolved_model(selected, "Resolved", row_info, workflow_value, note)
+                self._refresh_models_issue_status()
+                return True
+            warning_message = message or "Failed to update workflow with selected local model."
+            self._set_issue_row_subtitle(row_info, warning_message)
+            system_debug(
+                "[Validation] Local model resolve failed | "
+                f"row={row} selected='{selected}' reason='{warning_message}'"
+            )
 
+        # 2) Global repo (no prompt; pick first)
         file_name = os.path.basename(original_name) or os.path.basename(str(reference.get("name") or ""))
         shared_matches = find_shared_model_matches(file_name)
         system_debug(
@@ -2952,88 +3346,65 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             f"row={row} matches={len(shared_matches) if shared_matches else 0}"
         )
         if shared_matches:
-            selected = self._select_candidate_path(
-                shared_matches,
-                title="Download Model from Global Repo",
-                prompt=(
-                    "Could not locate model in your local ComfyUI folder.\n\n"
-                    f"{file_name} is available in the Global Repo. Download it?"
-                ),
+            selected = shared_matches[0]
+            system_debug(
+                "[Validation] Auto-resolve: shared repo selection made | "
+                f"row={row} selected='{selected}'"
             )
-            if selected:
+            expected_path = determine_expected_model_path(reference, models_root, comfy_dir)
+            system_debug(
+                "[Validation] Auto-resolve: computed expected path from shared repo | "
+                f"row={row} expected='{expected_path}' models_root='{models_root}' comfy_dir='{comfy_dir}'"
+            )
+            if not expected_path:
+                if models_root:
+                    expected_path = os.path.join(models_root, file_name)
+                else:
+                    expected_path = os.path.join(os.path.dirname(selected), file_name)
                 system_debug(
-                    "[Validation] Auto-resolve: shared repo selection made | "
-                    f"row={row} selected='{selected}'"
+                    "[Validation] Auto-resolve: fallback expected path | "
+                    f"row={row} expected='{expected_path}'"
                 )
-                expected_path = determine_expected_model_path(reference, models_root, comfy_dir)
-                system_debug(
-                    "[Validation] Auto-resolve: computed expected path from shared repo | "
-                    f"row={row} expected='{expected_path}' models_root='{models_root}' comfy_dir='{comfy_dir}'"
-                )
-                if not expected_path:
-                    if models_root:
-                        expected_path = os.path.join(models_root, file_name)
-                    else:
-                        expected_path = os.path.join(os.path.dirname(selected), file_name)
-                    system_debug(
-                        "[Validation] Auto-resolve: fallback expected path | "
-                        f"row={row} expected='{expected_path}'"
-                    )
-                workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
-                destination_display = self._format_model_display_path(expected_path, models_root)
-                download_text = (
-                    "Could not locate model in your local ComfyUI folder.<br>"
-                    f"<b>{file_name}</b> is available in the Global Repo. Download it?<br><br>"
-                    "Destination:<br>"
-                    f'<span style="color:#228B22;">{destination_display}</span>'
-                )
-                msg_box = QtWidgets.QMessageBox(self)
-                msg_box.setIcon(QtWidgets.QMessageBox.Icon.Question)
-                msg_box.setWindowTitle("Download Model from Global Repo")
-                msg_box.setTextFormat(QtCore.Qt.TextFormat.RichText)
-                msg_box.setText(download_text)
-                msg_box.setStandardButtons(
-                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
-                )
-                msg_box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
-                answer = msg_box.exec()
-
-                if answer == QtWidgets.QMessageBox.StandardButton.Yes:
-                    success, message = self._copy_shared_model(selected, expected_path)
-                    if success:
-                        note = f"Downloaded {file_name} to {destination_display}."
-                        row_info["resolve_method"] = row_info.get("resolve_method") or note
-                        notified_manual = True
-                        system_debug(
-                            "[Validation] Global Repo copy completed | "
-                            f"source='{selected}' destination='{expected_path}'"
-                        )
-                        self._mark_model_resolved(
-                            row,
-                            "Resolved",
-                            destination_display,
-                            note,
-                            workflow_value,
-                            resolved_path=expected_path,
-                        )
-                        self._record_resolved_model(expected_path, "Copied", row_info, workflow_value)
-                        self._refresh_models_issue_status()
-                        return True
-                    if message:
-                        system_debug(
-                            "[Validation] Global Repo copy failed | "
-                            f"source='{selected}' destination='{expected_path}' message='{message}'"
-                        )
-                        QtWidgets.QMessageBox.warning(self, "Copy Failed", message)
-            else:
-                self._append_issue_note("models", "Copy canceled by user.")
-                self._notify_manual_download(file_name, models_root, expected_path)
+            workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+            destination_display = self._format_model_display_path(expected_path, models_root)
+            note = f"Found in Global Repo; downloaded to {destination_display}."
+            copy_result, copy_message = self._copy_shared_model(
+                selected,
+                expected_path,
+                row=row,
+                row_info=row_info,
+                workflow_value=workflow_value,
+                destination_display=destination_display,
+                note=note,
+                file_name=file_name,
+            )
+            if copy_result is None:
                 notified_manual = True
-                system_debug("[Validation] Auto-resolve: shared repo download canceled by user")
-        else:
-            system_debug("[Validation] Auto-resolve: no shared repo matches found")
+                self._set_issue_row_subtitle(
+                    row_info,
+                    f"Copying from Global Repo to {destination_display}...",
+                )
+                return None
+            if copy_result:
+                row_info["resolve_method"] = row_info.get("resolve_method") or note
+                notified_manual = True
+                self._mark_model_resolved(
+                    row,
+                    "Resolved",
+                    destination_display,
+                    note,
+                    workflow_value,
+                    resolved_path=expected_path,
+                )
+                self._record_resolved_model(expected_path, "Copied", row_info, workflow_value, note)
+                self._refresh_models_issue_status()
+                return True
+            if copy_message:
+                self._set_issue_row_subtitle(row_info, copy_message)
+
+        # 3) Direct URL (no prompt)
         url_value = str(row_info.get("url") or reference.get("url") or "").strip()
-        if url_value and not notified_manual and not local_matches and not shared_matches:
+        if url_value and not notified_manual:
             expected_path = expected_path or determine_expected_model_path(reference, models_root, comfy_dir)
             if not expected_path:
                 expected_path = os.path.join(models_root or "", file_name)
@@ -3043,14 +3414,24 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     f"row={row} url='{url_value}' dest='{expected_path}'"
                 )
                 destination_display = self._format_model_display_path(expected_path, models_root)
-                try:
-                    os.makedirs(os.path.dirname(expected_path), exist_ok=True)
-                    temp_path = f"{expected_path}.download"
-                    urllib.request.urlretrieve(url_value, temp_path)
-                    os.replace(temp_path, expected_path)
-                    note = f"Downloaded {file_name} from URL to {destination_display}."
-                    row_info["resolve_method"] = row_info.get("resolve_method") or note
+                note = f"Downloaded {file_name} from URL to {destination_display}."
+                workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+                download_result, download_message = self._download_model_from_url(
+                    url_value,
+                    expected_path,
+                    row=row,
+                    row_info=row_info,
+                    workflow_value=workflow_value,
+                    destination_display=destination_display,
+                    note=note,
+                    file_name=file_name,
+                )
+                if download_result is None:
+                    notified_manual = True
+                    return None
+                if download_result:
                     workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+                    row_info["resolve_method"] = row_info.get("resolve_method") or note
                     self._mark_model_resolved(
                         row,
                         "Resolved",
@@ -3059,50 +3440,39 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         workflow_value,
                         resolved_path=expected_path,
                     )
-                    self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value)
+                    self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value, note)
                     self._refresh_models_issue_status()
                     return True
-                except Exception as exc:
-                    system_debug(
-                        "[Validation] Auto-resolve: URL download failed | "
-                        f"row={row} url='{url_value}' error='{exc}'"
-                    )
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        "Download Failed",
-                        f"Could not download model from URL.\n\nURL: {url_value}\nError: {exc}",
-                    )
+                if download_message:
+                    self._set_issue_row_subtitle(row_info, download_message)
         elif not url_value:
             system_debug("[Validation] Auto-resolve: no URL provided for missing model")
-        if not notified_manual:
-            if expected_path and os.path.exists(expected_path):
-                system_debug(
-                    "[Validation] Auto-resolve: found model already at expected path | "
-                    f"row={row} path='{expected_path}'"
-                )
-                workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
-                destination_display = self._format_model_display_path(expected_path, models_root)
-                system_debug(
-                    "[Validation] Detected model already present at expected path | "
-                    f"path='{expected_path}'"
-                )
-                note = f"Found existing model at {destination_display}."
-                row_info["resolve_method"] = row_info.get("resolve_method") or note
-                self._mark_model_resolved(
-                    row,
-                    "Resolved",
-                    destination_display,
-                    note,
-                    workflow_value,
-                    resolved_path=expected_path,
-                )
-                self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value)
-                self._refresh_models_issue_status()
-                return True
-            system_debug("[Validation] Auto-resolve: no automated resolution found; notifying manual download")
-            self._notify_manual_download(file_name, models_root, expected_path)
-        return False
 
+        # 4) Already present at expected path
+        if not notified_manual and expected_path and os.path.exists(expected_path):
+            system_debug(
+                "[Validation] Auto-resolve: found model already at expected path | "
+                f"row={row} path='{expected_path}'"
+            )
+            workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+            destination_display = self._format_model_display_path(expected_path, models_root)
+            note = f"Found existing model at {destination_display}."
+            row_info["resolve_method"] = row_info.get("resolve_method") or note
+            self._mark_model_resolved(
+                row,
+                "Resolved",
+                destination_display,
+                note,
+                workflow_value,
+                resolved_path=expected_path,
+            )
+            self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value, note)
+            self._refresh_models_issue_status()
+            return True
+
+        system_debug("[Validation] Auto-resolve: no automated resolution found; notifying manual download")
+        self._notify_manual_download(file_name, models_root, expected_path, row_info)
+        return False
 
     def _resolve_custom_node_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
         node_name = str(row_info.get("node_name") or "").strip()
@@ -3405,11 +3775,57 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         text = "\n\n".join(filter(None, messages)) or "No action was taken."
 
         QtWidgets.QMessageBox.information(self, "Auto Resolve", text)
-        self._append_issue_note(issue_key, text)
+        self._append_issue_note(
+            issue_key,
+            text,
+            unresolved_only=False,
+            overwrite=False,
+        )
         if self._workflow_folder:
             self._update_resolve_status_payload(issue_key, result)
 
     # ---------------------------------------------------------------- Helpers
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(value)
+        unit_idx = 0
+        while size >= 1024 and unit_idx < len(units) - 1:
+            size /= 1024.0
+            unit_idx += 1
+        return f"{size:.1f} {units[unit_idx]}" if unit_idx else f"{int(size)} {units[unit_idx]}"
+
+    @staticmethod
+    def _format_bytes_progress(value: int) -> str:
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(value)
+        unit_idx = 0
+        while size >= 1024 and unit_idx < len(units) - 1:
+            size /= 1024.0
+            unit_idx += 1
+        if unit_idx == 0:
+            return f"{int(size):7d} {units[unit_idx]}"
+        return f"{size:6.1f} {units[unit_idx]}"
+
+    @staticmethod
+    def _clamp_size(value: Any) -> int:
+        try:
+            return max(int(value), 0)
+        except Exception:
+            return 0
+
+    def _set_issue_row_subtitle(self, row_info: Optional[Dict[str, Any]], message: str) -> None:
+        if not isinstance(row_info, dict):
+            return
+        row_info["subtitle_override"] = message
+        issue_row = row_info.get("issue_row")
+        if isinstance(issue_row, IssueRow):
+            issue_row.lbl_sub.setText(message)
+            issue_row.lbl_sub.show()
+            issue_row.lbl_sub.adjustSize()
+            issue_row.updateGeometry()
+            issue_row.repaint()
+
     def _update_resolve_status_payload(
         self,
         issue_key: str,
@@ -3498,18 +3914,44 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         else:
             system_debug("[Validation] Skipped resolve status persist; workflow folder unavailable")
 
-    def _append_issue_note(self, issue_key: str, message: str) -> None:
-        widget_info = self._issue_widgets.get(issue_key)
-        if not widget_info:
-            return
-        label = QtWidgets.QLabel(message)
-        label.setWordWrap(True)
-        frame = widget_info.get("frame")
-        if isinstance(frame, QtWidgets.QFrame) and frame.layout():
-            frame.layout().addWidget(label)
-            return
-        if self._issues_layout:
-            self._issues_layout.addWidget(label)
+    def _append_issue_note(
+        self,
+        issue_key: str,
+        message: str,
+        *,
+        row_info: Optional[Dict[str, Any]] = None,
+        unresolved_only: bool = True,
+        overwrite: bool = True,
+    ) -> None:
+        def _apply_to_row(row_data: Dict[str, Any]) -> bool:
+            if unresolved_only and row_data.get("resolved"):
+                return False
+            if not overwrite and row_data.get("subtitle_override"):
+                return False
+            self._set_issue_row_subtitle(row_data, message)
+            return True
+
+        applied = False
+        if isinstance(row_info, dict):
+            applied = _apply_to_row(row_info)
+
+        widget_info = self._issue_widgets.get(issue_key) or {}
+        rows_mapping: Dict[Any, Dict[str, Any]] = widget_info.get("rows") or {}
+        if rows_mapping and not isinstance(row_info, dict):
+            for row_data in rows_mapping.values():
+                if not isinstance(row_data, dict):
+                    continue
+                applied = _apply_to_row(row_data) or applied
+
+        if not applied:
+            for issue_row in self._issue_rows.get(issue_key) or []:
+                if isinstance(issue_row, IssueRow):
+                    issue_row.lbl_sub.setText(message)
+                    issue_row.lbl_sub.show()
+                    issue_row.lbl_sub.adjustSize()
+                    issue_row.updateGeometry()
+                    issue_row.repaint()
+                    applied = True
 
     def _load_dependencies(self) -> List[Dict[str, Any]]:
         if self._dependencies_cache is not None:
