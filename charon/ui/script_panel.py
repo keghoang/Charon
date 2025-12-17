@@ -86,18 +86,25 @@ class ScriptPanel(QtWidgets.QWidget):
         button_height = config.UI_PANEL_HEADER_HEIGHT - 6
         self.new_script_button.setFixedHeight(button_height)
         
-        self.new_script_button.setStyleSheet(f"""
-            QPushButton {{
+        # Lighten the button so it reads as idle rather than pressed
+        self.new_script_button.setStyleSheet(
+            """
+            QPushButton {
                 padding: 0px 16px;
                 margin: 0px;
                 border: 1px solid palette(mid);
                 border-radius: 4px;
+                background-color: palette(button);
                 font-weight: bold;
-            }}
-            QPushButton:hover {{
+            }
+            QPushButton:hover {
+                background-color: palette(button).lighter(115);
+            }
+            QPushButton:pressed {
                 background-color: palette(midlight);
-            }}
-        """)
+            }
+            """
+        )
         self.new_script_button.clicked.connect(self._on_create_script_clicked)
         self.new_script_button.setVisible(True)
         title_layout.addWidget(self.new_script_button)

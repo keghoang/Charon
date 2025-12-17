@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
 from .charon_logger import system_debug, system_warning
-from .node_factory import reset_charon_node_state
+from .node_factory import reset_charon_node_state, sanitize_name
 
 STATUS_PAYLOAD_META = "charon/status_payload"
 AUTO_IMPORT_META = "charon/auto_import"
@@ -204,11 +204,63 @@ def _iter_charon_nodes(nuke_module) -> Iterable[Any]:
     candidates: List[Any] = []
     for node in nuke_module.allNodes():
         try:
-            if node.Class() == NODE_CLASS and node.name().startswith(NODE_PREFIX):
-                candidates.append(node)
+            if node.Class() != NODE_CLASS:
+                continue
+            if not _has_charon_signature(node):
+                continue
+            if not node.name().startswith(NODE_PREFIX):
+                _ensure_charon_name(node)
+            candidates.append(node)
         except Exception:
             continue
     return sorted(candidates, key=_node_sort_key)
+
+
+def _has_charon_signature(node) -> bool:
+    try:
+        knob = node.knob("charon_node_id")
+    except Exception:
+        return False
+    return knob is not None
+
+
+def _ensure_charon_name(node) -> str:
+    """Ensure Charon nodes keep the expected prefix even if renamed."""
+    original_name = _coerce_str(getattr(node, "name", lambda: "")(), "")
+    if original_name.startswith(NODE_PREFIX):
+        return original_name
+
+    # Prefer the user's custom suffix if they renamed the node
+    name_suffix = original_name
+    if NODE_PREFIX in name_suffix:
+        name_suffix = name_suffix.split(NODE_PREFIX, 1)[-1]
+
+    candidates = [
+        name_suffix,
+        _coerce_str(_read_knob_value(node, "charon_workflow_name"), ""),
+        _coerce_str(_read_knob_value(node, "charon_node_id"), ""),
+        "Charon",
+    ]
+
+    safe_suffix = ""
+    for candidate in candidates:
+        sanitized = sanitize_name(candidate) if candidate else ""
+        if sanitized:
+            safe_suffix = sanitized
+            break
+
+    new_name = f"{NODE_PREFIX}{safe_suffix}" if safe_suffix else NODE_PREFIX.rstrip("_")
+    if new_name == original_name:
+        return new_name
+
+    try:
+        node.setName(new_name)
+        system_debug(f"Restored CharonOp prefix for node {original_name!r} -> {new_name!r}")
+        return new_name
+    except Exception as exc:
+        system_warning(f"Failed to restore CharonOp prefix for {original_name!r}: {exc}")
+        return original_name
+
 
 
 def _build_scene_node_info(node) -> Optional[SceneNodeInfo]:
