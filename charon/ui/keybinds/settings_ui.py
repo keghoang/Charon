@@ -1,4 +1,4 @@
-"""
+﻿"""
 Keybind Settings UI
 
 Provides a dialog for managing both local and global keybinds,
@@ -480,7 +480,6 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             'run_script': 'Run Script',
             'refresh': 'Refresh',
             'open_folder': 'Open Folder',
-            'open_readme': 'Open Readme',
             'settings': 'Open Settings',
             'tiny_mode': 'Tiny Mode'
         }
@@ -698,9 +697,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                 'quick_search': 'Quick Search',
                 'run_script': 'Run Script',
                 'refresh': 'Refresh',
-                'open_folder': 'Open Folder',
-                'open_readme': 'Open Readme',
-                'settings': 'Open Settings',
+                'open_folder': 'Open Folder',\r\n                'settings': 'Open Settings',
                 'tiny_mode': 'Tiny Mode'
             }
             
@@ -823,9 +820,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                     'quick_search': 'Quick Search',
                     'run_script': 'Run Script',
                     'refresh': 'Refresh',
-                    'open_folder': 'Open Folder',
-                    'open_readme': 'Open Readme',
-                    'settings': 'Open Settings',
+                    'open_folder': 'Open Folder',\r\n                    'settings': 'Open Settings',
                     'tiny_mode': 'Tiny Mode'
                 }
                 
@@ -942,7 +937,7 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
             message += "\n\nThe following global keybinds will be removed:"
             for script_path, key in conflicting_globals:
                 script_name = os.path.basename(script_path)
-                message += f"\n• {script_name} ({key})"
+                message += f"\nâ€¢ {script_name} ({key})"
         
         reply = QtWidgets.QMessageBox.question(
             self, "Reset Keybinds",
@@ -1022,3 +1017,4 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
         self._load_keybinds()
     
     
+
