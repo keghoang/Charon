@@ -21,6 +21,7 @@ from ..validation_resolver import (
     resolve_missing_custom_nodes,
     resolve_missing_models,
 )
+from ..dependency_check import ensure_manager_security_level
 from ..workflow_overrides import replace_workflow_model_paths, save_workflow_override
 from ..workflow_local_store import write_validation_resolve_status
 
@@ -1196,6 +1197,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         QtCore.QTimer.singleShot(0, self._process_next_auto_resolve_item)
 
     def _auto_resolve_all(self) -> None:
+        ensure_manager_security_level("weak")
         if not self._auto_resolve_button:
             return
         if self._auto_resolve_running:
