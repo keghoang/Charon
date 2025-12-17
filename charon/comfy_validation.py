@@ -699,18 +699,8 @@ def store_validation_result(result: ValidationResult) -> None:
 
 def _write_validation_debug_payload(result: ValidationResult) -> None:
     """Persist the full validation payload for troubleshooting."""
-    try:
-        base_dir = get_charon_temp_dir()
-        debug_dir = os.path.join(base_dir, "debug")
-        os.makedirs(debug_dir, exist_ok=True)
-        timestamp = int(time.time())
-        slug = result.cache_key[:12] or "no_path"
-        path = os.path.join(debug_dir, f"validation_payload_{timestamp}_{slug}.json")
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(result.to_dict(), handle, indent=2)
-        system_debug(f"Wrote validation payload to {path}")
-    except Exception as exc:  # pragma: no cover - defensive logging
-        system_warning(f"Failed to write validation payload: {exc}")
+    # Disabled to avoid spamming debug directory.
+    return
 
 
 def is_banner_dismissed() -> bool:
@@ -1182,13 +1172,17 @@ def _validate_models_browser(
     capture_info = browser_payload.get("model_capture") if isinstance(browser_payload, dict) else {}
     capture_invoked = bool(capture_info.get("invoked")) if isinstance(capture_info, dict) else False
     missing_models = browser_payload.get("missing_models") if isinstance(browser_payload, dict) else None
-    if missing_models is None and not capture_invoked:
-        return _validate_models(env_info, workflow_bundle)
-
     raw_model_paths = browser_payload.get("model_paths") if isinstance(browser_payload, dict) else {}
-    normalized_paths = _normalize_model_paths(raw_model_paths if isinstance(raw_model_paths, dict) else {}, models_root, comfy_dir)
+    normalized_paths = _normalize_model_paths(
+        raw_model_paths if isinstance(raw_model_paths, dict) else {}, models_root, comfy_dir
+    )
     data["model_paths"] = normalized_paths
     data["model_capture"] = capture_info if isinstance(capture_info, dict) else {}
+
+    # Fallback: if the browser did not report any missing models, defer to the backend resolver
+    # so non-template workflows (no embedded model metadata) are still validated.
+    if missing_models is None or (isinstance(missing_models, list) and len(missing_models) == 0):
+        return _validate_models(env_info, workflow_bundle)
 
     if not isinstance(missing_models, list):
         missing_models = []
@@ -1540,6 +1534,9 @@ def _validate_models(
 
     data["found"] = found_paths
     data["resolved_entries"] = cached_resolved_entries
+    if missing:
+        # Mirror missing entries into the payload so downstream cache writers can persist them.
+        data["missing_models"] = missing
     final_reference_log = [
         {
             'index': i,

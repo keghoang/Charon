@@ -860,7 +860,7 @@ class ScriptPanel(QtWidgets.QWidget):
             if isinstance(workflow_info, dict):
                 remote_folder = workflow_info.get("folder") or ""
         if remote_folder:
-            write_validation_raw(remote_folder, payload)
+            write_validation_raw(remote_folder, payload, overwrite=True)
             write_validation_resolve_status(remote_folder, payload, overwrite=True)
         state = "validated" if ok else "needs_resolve"
         self.script_model.set_validation_state(script_path, state, payload)
