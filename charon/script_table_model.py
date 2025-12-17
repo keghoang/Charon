@@ -159,10 +159,11 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         tolerance = max(0.1, req_gb * 0.01)  # absorb rounding/measurement jitter
         passes = (available_gb + tolerance) >= req_gb
         color = "#37b24d" if passes else "#ff6b6b"
-        marker = "✔" if passes else "✖"
+        marker = "" if passes else "✖"
+        text = f"{display_text} {marker}".strip()
         tooltip = f"Requires >= {display_text}. Detected max VRAM: {available_gb:.1f} GB."
         return {
-            "text": f"{display_text} {marker}",
+            "text": text,
             "color": color,
             "tooltip": tooltip,
         }
