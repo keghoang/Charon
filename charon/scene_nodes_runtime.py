@@ -13,6 +13,7 @@ WORKFLOW_NAME_META = "charon/workflow_name"
 WORKFLOW_PATH_META = "charon/workflow_path"
 NODE_CLASS = "Group"
 NODE_PREFIX = "CharonOp_"
+_SCENE_NODE_SNAPSHOT_CACHE: Dict[str, tuple[str, str, float]] = {}
 
 __all__ = [
     "SceneNodeInfo",
@@ -295,10 +296,15 @@ def _build_scene_node_info(node) -> Optional[SceneNodeInfo]:
         auto_import=auto_import,
     )
 
-    system_debug(
-        f"Scene node snapshot: {info.name} status={info.status!r} "
-        f"state={info.state} progress={info.progress:.02f}"
-    )
+    identifier = _resolve_node_identifier(node) or info.name
+    signature = (info.status, info.state, round(info.progress, 2))
+    last = _SCENE_NODE_SNAPSHOT_CACHE.get(identifier)
+    if last != signature:
+        _SCENE_NODE_SNAPSHOT_CACHE[identifier] = signature
+        system_debug(
+            f"Scene node snapshot: {info.name} status={info.status!r} "
+            f"state={info.state} progress={info.progress:.02f}"
+        )
     return info
 
 
