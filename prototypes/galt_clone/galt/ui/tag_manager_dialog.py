@@ -3,9 +3,8 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, WindowContextHelpButtonHint, WindowCloseButtonHint
 from typing import List, Set
 import os
-import json
 
-from ..metadata_manager import get_galt_config, update_galt_config, get_metadata_path, cleanUpMetadata, get_folder_tags
+from ..metadata_manager import get_galt_config, update_galt_config, invalidate_metadata_path, get_folder_tags
 from ..galt_logger import system_info, system_error, system_debug
 
 
@@ -26,18 +25,16 @@ class TagManagerDialog(QtWidgets.QDialog):
         system_debug(f"  script_path: {script_path}")
         system_debug(f"  folder_path: {folder_path}")
         
-        # Load metadata - if it exists but is old format, cleanUpMetadata will fix it
+        # Load metadata; initialize a Charon file if none exists
         self.script_metadata = get_galt_config(script_path)
-        
-        # If no metadata exists, call cleanUpMetadata to create proper metadata
         if self.script_metadata is None:
-            self.script_metadata = cleanUpMetadata(script_path)
-        
-        # For old metadata files, ensure they have all required fields
-        # This handles cases where get_galt_config returns raw old metadata
-        if self.script_metadata and 'tags' not in self.script_metadata:
-            # Force cleanup to add missing fields
-            self.script_metadata = cleanUpMetadata(script_path)
+            if write_charon_metadata(script_path) is not None:
+                invalidate_metadata_path(script_path)
+                self.script_metadata = get_galt_config(script_path)
+            else:
+                self.script_metadata = {"charon_meta": {}, "tags": []}
+        if 'tags' not in (self.script_metadata or {}):
+            self.script_metadata['tags'] = []
         
         # Get current script tags
         self.script_tags = set(self.script_metadata.get('tags', []))
@@ -497,3 +494,6 @@ class TagManagerDialog(QtWidgets.QDialog):
                 self.renamed_tags
             )
         super().closeEvent(event)
+
+
+
