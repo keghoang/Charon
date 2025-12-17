@@ -64,25 +64,34 @@ class ResourceWidget(QWidget):
         self.monitor = ResourceMonitor(self)
         self.monitor.stats_updated.connect(self.update_stats)
         
-        layout = QHBoxLayout(self)
+        # Use Vertical layout to stack rows
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.setAlignment(Qt.AlignRight) # Align content to right
+        layout.setSpacing(2)
+        layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
-        # CPU
+        # Row 1: CPU and RAM
+        row1_container = QWidget()
+        row1_layout = QHBoxLayout(row1_container)
+        row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(8)
+        row1_layout.setAlignment(Qt.AlignRight)
+        
         self.cpu_bar = CompactResourceBar("CPU")
-        layout.addWidget(self.cpu_bar)
+        row1_layout.addWidget(self.cpu_bar)
         
-        # RAM
         self.ram_bar = CompactResourceBar("RAM")
-        layout.addWidget(self.ram_bar)
+        row1_layout.addWidget(self.ram_bar)
         
-        # GPU/VRAM (Dynamic)
+        layout.addWidget(row1_container)
+        
+        # Row 2: GPU and VRAM (Dynamic)
         self.gpu_widgets = {} # index -> (core_bar, vram_bar)
         self.gpu_container = QWidget()
         self.gpu_layout = QHBoxLayout(self.gpu_container)
         self.gpu_layout.setContentsMargins(0, 0, 0, 0)
         self.gpu_layout.setSpacing(8)
+        self.gpu_layout.setAlignment(Qt.AlignRight)
         layout.addWidget(self.gpu_container)
         
         self.monitor.start()

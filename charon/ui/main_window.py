@@ -691,7 +691,7 @@ class CharonWindow(QtWidgets.QWidget):
         gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
-        footer_layout.addWidget(self.gpu_label, 1, 0, Qt.AlignLeft | Qt.AlignTop)
+        footer_layout.addWidget(self.gpu_label, 1, 0, Qt.AlignLeft | Qt.AlignBottom)
 
         # Spacer Column (Row 0-1, Col 1)
         footer_layout.setColumnStretch(1, 1)
