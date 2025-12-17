@@ -693,6 +693,24 @@ class CharonWindow(QtWidgets.QWidget):
         input_geo = nuke.createNode("Input")
         input_geo.setName("geo")
         
+        # Texture Setup (White Base + Grey Wireframe)
+        tex_const = nuke.createNode("Constant")
+        tex_const.setName("BaseGray")
+        tex_const['color'].setValue([1, 1, 1, 1])
+        tex_const.setXYpos(input_geo.xpos() + 150, input_geo.ypos())
+        
+        tex_wire = nuke.createNode("Wireframe")
+        tex_wire.setInput(0, tex_const)
+        tex_wire['operation'].setValue("over")
+        tex_wire['line_width'].setValue(0.12)
+        tex_wire['line_color'].setValue([0.36, 0.36, 0.36, 1])
+        tex_wire.setXYpos(tex_const.xpos(), tex_const.ypos() + 100)
+        
+        apply_mat = nuke.createNode("ApplyMaterial")
+        apply_mat.setInput(0, input_geo)
+        apply_mat.setInput(1, tex_wire)
+        apply_mat.setXYpos(input_geo.xpos(), input_geo.ypos() + 200)
+        
         # Internal Target
         int_target = nuke.createNode("Axis3")
         int_target.setName("Target")
@@ -738,7 +756,7 @@ class CharonWindow(QtWidgets.QWidget):
             
             # Render Setup
             scanline = nuke.createNode("ScanlineRender")
-            scanline.setInput(1, input_geo)
+            scanline.setInput(1, apply_mat)
             scanline.setInput(2, cam)
             scanline.setXYpos(x_pos, 400)
             
