@@ -24,6 +24,7 @@ from .paths import (
     resolve_comfy_environment,
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
+from .workflow_overrides import apply_validation_model_overrides
 from .comfy_client import ComfyUIClient
 from . import config, preferences
 from .node_factory import reset_charon_node_state
@@ -2293,6 +2294,31 @@ def process_charonop_node():
                         })
                         if workflow_hash and converted_prompt_path:
                             store_cached_prompt(converted_prompt_path, workflow_hash)
+
+                model_replacements: List[Tuple[str, str]] = []
+                replacements_applied = False
+                if workflow_folder and isinstance(prompt_data, dict):
+                    try:
+                        replacements_applied, model_replacements = apply_validation_model_overrides(
+                            prompt_data, workflow_folder
+                        )
+                    except Exception as exc:
+                        log_debug(f"Failed to apply cached model replacements: {exc}", "WARNING")
+                    else:
+                        if model_replacements:
+                            verb = "Applied" if replacements_applied else "Loaded"
+                            log_debug(
+                                f"{verb} {len(model_replacements)} model path adjustment(s) from validation cache."
+                            )
+                        if replacements_applied and converted_prompt_path:
+                            try:
+                                with open(converted_prompt_path, 'w', encoding='utf-8') as handle:
+                                    json.dump(prompt_data, handle, indent=2)
+                            except Exception as exc:  # pragma: no cover - defensive
+                                log_debug(
+                                    f"Failed to refresh cached converted workflow after applying model replacements: {exc}",
+                                    "WARNING",
+                                )
 
                 if (
                     isinstance(ui_workflow_source, dict)
