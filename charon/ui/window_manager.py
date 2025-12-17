@@ -189,9 +189,10 @@ class WindowManager:
                 attr = getattr(Qt, attr_parts[1], None)
                 if attr:
                     window.setAttribute(attr, True)
-        
+
         # Set window title
-        window.setWindowTitle(f"Charon - {host}")
+        title = getattr(window, "WINDOW_TITLE_BASE", f"Charon - {host}")
+        window.setWindowTitle(title)
         
         system_debug(f"Applied window config for {host}: {host_config['description']}")
     
