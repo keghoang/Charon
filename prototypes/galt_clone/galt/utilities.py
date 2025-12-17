@@ -619,15 +619,13 @@ def reload_galt_modules():
 # ===== NEW COMPATIBILITY AND STYLING UTILITIES =====
 
 def is_compatible_with_host(metadata, host):
-    """Centralized compatibility checking for scripts and folders"""
-    if not metadata:
-        return True
-    from galt.metadata_manager import get_software_for_host
-    sw = get_software_for_host(metadata, host)
-    # Scripts with "none" software are incompatible with all hosts
-    # Only compatible if software matches host, or host is "none" (show all)
-    return (sw.lower() == host.lower() or 
-            host.lower() == "none")
+    """Centralized compatibility checking for scripts and folders.
+
+    Charon only runs inside Nuke, so we now treat every workflow as compatible
+    regardless of the legacy ``software`` tag. This keeps older metadata usable
+    without forcing artists to edit stale fields.
+    """
+    return True
 
 
 def apply_incompatible_opacity(color):
@@ -653,10 +651,8 @@ def create_script_sort_key(script_item, host):
     Create sort key for a script item.
     
     Priority order:
-    1. Compatible bookmarked scripts
-    2. Compatible non-bookmarked scripts  
-    3. "None" software scripts (bookmarked first)
-    4. Incompatible scripts (bookmarked first)
+    1. Workflows with metadata (bookmarked first)
+    2. Workflows without metadata or tagged with "none" (bookmarked first)
     
     Within each category, sort alphabetically by name.
     """
@@ -668,19 +664,14 @@ def create_script_sort_key(script_item, host):
         # No metadata - treat as "none" software
         return (2, 0 if is_bookmarked else 1, name)
     
-    # Get software compatibility
+    # Preserve the legacy "none" grouping so folders lacking metadata still sort last
     from .metadata_manager import get_software_for_host
-    software = get_software_for_host(metadata, host).lower()
-    
-    if software == host.lower():
-        # Compatible
-        return (1, 0 if is_bookmarked else 1, name)
-    elif software == "none":
-        # None software
+    software = (get_software_for_host(metadata, host) or "").lower()
+    if software == "none":
         return (2, 0 if is_bookmarked else 1, name)
-    else:
-        # Incompatible
-        return (3, 0 if is_bookmarked else 1, software, name)
+    
+    # All other workflows are treated as compatible now that we only target Nuke
+    return (1, 0 if is_bookmarked else 1, name)
 
 
 def create_folder_sort_key(folder_name, host, base_path=None):
@@ -689,8 +680,8 @@ def create_folder_sort_key(folder_name, host, base_path=None):
     
     Priority order:
     1. Special folders (Bookmarks)
-    2. Compatible folders
-    3. Incompatible folders
+    2. Folders containing workflows
+    3. Empty or unreadable folders
     
     Within each category, sort alphabetically.
     """
