@@ -1,4 +1,4 @@
-from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHint, WindowCloseButtonHint, StrongFocus,
+﻿from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHint, WindowCloseButtonHint, StrongFocus,
                          Key_Escape, Key_Control, Key_Shift, Key_Alt, ShiftModifier,
                          Key_Exclam, Key_At, Key_NumberSign, Key_Dollar, Key_Percent,
                          Key_AsciiCircum, Key_Ampersand, Key_Asterisk, Key_ParenLeft,
@@ -705,15 +705,16 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         workflow_label.setEnabled(False)
         layout.addWidget(workflow_label)
 
-        layout.addWidget(QtWidgets.QLabel("Description:"))
+        layout.addWidget(QtWidgets.QLabel("Step 1 – Description"))
         self.description_edit = QtWidgets.QTextEdit()
+        self.description_edit.setFixedHeight(self.description_edit.fontMetrics().lineSpacing() * 3 + 12)
         self.description_edit.setPlaceholderText("Describe what this workflow does...")
         self.description_edit.setPlainText(self._metadata.get("description", ""))
         layout.addWidget(self.description_edit)
 
         self._build_input_mapping_section(layout)
 
-        layout.addWidget(QtWidgets.QLabel("Dependencies (Git URLs):"))
+        layout.addWidget(QtWidgets.QLabel("Step 3 – Dependencies (Optional)"))
         deps_container = QtWidgets.QWidget()
         deps_layout = QtWidgets.QVBoxLayout(deps_container)
         deps_layout.setContentsMargins(0, 0, 0, 0)
@@ -749,7 +750,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         for dep in self._metadata.get("dependencies", []) or []:
             self._add_dependency_row(dep)
 
-        layout.addWidget(QtWidgets.QLabel("Tags (comma separated):"))
+        layout.addWidget(QtWidgets.QLabel("Step 4 – Tags (comma separated)"))
         self.tags_edit = QtWidgets.QLineEdit(", ".join(self._metadata.get("tags", [])))
         self.tags_edit.setPlaceholderText("e.g. comfy, FLUX, Nano-Banana")
         layout.addWidget(self.tags_edit)
@@ -762,7 +763,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _build_input_mapping_section(self, layout: QtWidgets.QVBoxLayout) -> None:
         """Create and populate the workflow parameter preview list."""
-        self.input_mapping_group = QtWidgets.QGroupBox("Select Parameters to Expose")
+        self.input_mapping_group = QtWidgets.QGroupBox("Step 2 – Select Parameters to Include")
         self.input_mapping_group.setVisible(False)
         group_layout = QtWidgets.QVBoxLayout(self.input_mapping_group)
         group_layout.setContentsMargins(8, 8, 8, 8)
@@ -793,7 +794,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setVisible(False)
         self.input_mapping_message.setVisible(True)
 
-        base_title = "Select Parameters to Expose"
+        base_title = "Step 2 – Select Parameters to Include"
         self.input_mapping_group.setTitle(base_title)
 
         cached = _get_cached_parameters(self._workflow_path)
@@ -867,6 +868,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         if error:
             self.input_mapping_message.setText(str(error))
             system_debug(f"Metadata dialog parameter discovery error: {error}")
+            self._refresh_parameter_highlights()
             return
 
         try:
@@ -879,6 +881,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 "No prompt widgets were detected in this workflow yet."
             )
             system_debug("Metadata dialog discovered 0 prompt candidates.")
+            self._refresh_parameter_highlights()
             return
 
         system_debug(
@@ -890,7 +893,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _render_parameter_candidates(self, candidates) -> None:
         self._stop_scan_animation()
-        base_title = "Select Parameters to Expose"
+        base_title = "Step 2 – Select Parameters to Include"
 
         total_attributes = sum(len(node.attributes) for node in candidates)
         if total_attributes:
@@ -935,6 +938,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             if node_should_expand:
                 nodes_to_expand.append(node_item)
 
+        self._refresh_parameter_highlights()
         self.input_mapping_tree.collapseAll()
         for item in nodes_to_expand:
             item.setExpanded(True)
@@ -972,6 +976,40 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         system_debug(
             f"[Charon] Parameter toggled: node={node_id} key={key} state={'ON' if state else 'OFF'}"
         )
+        self._refresh_parameter_highlights()
+
+    def _refresh_parameter_highlights(self) -> None:
+        """Apply background highlighting for selected parameters and their parents."""
+        if not hasattr(self, "input_mapping_tree"):
+            return
+
+        tree = self.input_mapping_tree
+        highlight_child = QtGui.QBrush(QtGui.QColor("#6ee7b7"))
+        highlight_parent = QtGui.QBrush(QtGui.QColor("#047857"))
+        child_text = QtGui.QBrush(QtGui.QColor("#083344"))
+        parent_text = QtGui.QBrush(QtGui.QColor("#ffffff"))
+        clear_brush = QtGui.QBrush()
+
+        for index in range(tree.topLevelItemCount()):
+            node_item = tree.topLevelItem(index)
+            has_checked = False
+
+            for child_index in range(node_item.childCount()):
+                child_item = node_item.child(child_index)
+                if child_item.checkState(0) == QtCore.Qt.CheckState.Checked:
+                    child_item.setBackground(0, highlight_child)
+                    child_item.setForeground(0, child_text)
+                    has_checked = True
+                else:
+                    child_item.setBackground(0, clear_brush)
+                    child_item.setForeground(0, clear_brush)
+
+            if has_checked:
+                node_item.setBackground(0, highlight_parent)
+                node_item.setForeground(0, parent_text)
+            else:
+                node_item.setBackground(0, clear_brush)
+                node_item.setForeground(0, clear_brush)
 
     def _collect_selected_parameters(self) -> List[Dict[str, Any]]:
         """Return parameter specs for all checked entries."""
@@ -1088,16 +1126,16 @@ class HotkeyDialog(QtWidgets.QDialog):
         if modifiers & ShiftModifier:
             # Map of shifted symbols to their number keys
             shift_number_map = {
-                Key_Exclam: Key_1,      # ! → 1
-                Key_At: Key_2,          # @ → 2
-                Key_NumberSign: Key_3,  # # → 3
-                Key_Dollar: Key_4,      # $ → 4
-                Key_Percent: Key_5,     # % → 5
-                Key_AsciiCircum: Key_6, # ^ → 6
-                Key_Ampersand: Key_7,   # & → 7
-                Key_Asterisk: Key_8,    # * → 8
-                Key_ParenLeft: Key_9,   # ( → 9
-                Key_ParenRight: Key_0,  # ) → 0
+                Key_Exclam: Key_1,      # ! â†’ 1
+                Key_At: Key_2,          # @ â†’ 2
+                Key_NumberSign: Key_3,  # # â†’ 3
+                Key_Dollar: Key_4,      # $ â†’ 4
+                Key_Percent: Key_5,     # % â†’ 5
+                Key_AsciiCircum: Key_6, # ^ â†’ 6
+                Key_Ampersand: Key_7,   # & â†’ 7
+                Key_Asterisk: Key_8,    # * â†’ 8
+                Key_ParenLeft: Key_9,   # ( â†’ 9
+                Key_ParenRight: Key_0,  # ) â†’ 0
             }
             
             # If it's a shifted number symbol, convert back to the number
@@ -1118,6 +1156,11 @@ class HotkeyDialog(QtWidgets.QDialog):
         if key_str:
             self.hotkey = key_str
             self.accept()
+
+
+
+
+
 
 
 
