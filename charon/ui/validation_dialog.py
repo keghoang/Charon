@@ -2749,6 +2749,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             )
             return False
 
+        if result.resolved:
+            row_info["resolve_method"] = result.resolved[0]
+        elif result.notes:
+            row_info["resolve_method"] = result.notes[0]
+        else:
+            row_info["resolve_method"] = row_info.get("resolve_method") or "Installed via Playwright"
         self._mark_custom_node_resolved(row_info, None, prompt_restart=False)
         self._update_resolve_status_payload(
             "custom_nodes",
@@ -3204,8 +3210,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         note = None
         if result.resolved:
             note = result.resolved[0]
+            row_info["resolve_method"] = note
         elif result.skipped:
             note = result.skipped[0]
+            row_info["resolve_method"] = note or row_info.get("resolve_method") or "Installed"
+        else:
+            row_info["resolve_method"] = row_info.get("resolve_method") or "Installed"
 
         self._mark_custom_node_resolved(row_info, note, prompt_restart=False)
         self._update_resolve_status_payload(
