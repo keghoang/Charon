@@ -3859,12 +3859,34 @@ def process_charonop_node():
                                         aces_enabled = preferences.get_preference("aces_mode_enabled", False)
                                         
                                         if aces_enabled:
-                                            # Create the InverseViewTransform1 group node
-                                            ivt_node = nuke.nodePaste(INVERSE_VIEW_TRANSFORM_GROUP)
-                                            ivt_node.setName(f"InverseViewTransform_{read_node.name()}")
-                                            ivt_node.setInput(0, read_node)
-                                            ivt_node.setXpos(read_node.xpos())
-                                            ivt_node.setYpos(read_node.ypos() + 70)
+                                            ivt_temp = os.path.join(temp_root, f"ivt_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
+                                            try:
+                                                with open(ivt_temp, "w") as f:
+                                                    f.write(INVERSE_VIEW_TRANSFORM_GROUP)
+                                                
+                                                ivt_name = f"InverseViewTransform_{read_node.name()}"
+                                                ivt_node = nuke.toNode(ivt_name)
+                                                
+                                                if not ivt_node:
+                                                    nuke.nodePaste(ivt_temp)
+                                                    ivt_node = nuke.selectedNode()
+                                                    try:
+                                                        ivt_node.setName(ivt_name)
+                                                    except:
+                                                        pass
+                                                
+                                                if ivt_node:
+                                                    ivt_node.setInput(0, read_node)
+                                                    ivt_node.setXpos(read_node.xpos())
+                                                    ivt_node.setYpos(read_node.ypos() + 70)
+                                                    
+                                            except Exception as paste_error:
+                                                log_debug(f"Failed to paste InverseViewTransform: {paste_error}", "WARNING")
+                                            finally:
+                                                if os.path.exists(ivt_temp):
+                                                    try:
+                                                        os.remove(ivt_temp)
+                                                    except: pass
                                         # --- NEW CODE END ---
 
                                     grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
