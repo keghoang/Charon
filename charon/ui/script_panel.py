@@ -168,24 +168,33 @@ class ScriptPanel(QtWidgets.QWidget):
                 border: 1px solid palette(mid);
                 border-radius: 4px;
                 background-color: palette(button);
-                color: #ffffff;
+                color: #3c5e78;
                 font-weight: normal;
-                text-shadow: none;
-                box-shadow: none;
             }
             QPushButton:hover {
                 background-color: palette(button).lighter(115);
-                color: #ffffff;
+                color: #3c5e78;
             }
             QPushButton:pressed {
                 background-color: palette(midlight);
-                color: #ffffff;
+                color: #3c5e78;
             }
             """
         )
         palette = self.new_script_button.palette()
-        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor("#ffffff"))
+        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor("#3c5e78"))
         self.new_script_button.setPalette(palette)
+        wf_font = QtGui.QFont(self.new_script_button.font())
+        try:
+            wf_font.setStyleStrategy(
+                QtGui.QFont.StyleStrategy.PreferAntialias
+                | QtGui.QFont.StyleStrategy.NoSubpixelAntialias
+                | QtGui.QFont.StyleStrategy.ForceIntegerMetrics
+            )
+        except Exception:
+            wf_font.setStyleStrategy(QtGui.QFont.StyleStrategy.PreferAntialias)
+        wf_font.setWeight(QtGui.QFont.Weight.DemiBold)
+        self.new_script_button.setFont(wf_font)
         self._set_new_workflow_icon()
         self.new_script_button.clicked.connect(self._on_create_script_clicked)
         self.new_script_button.setVisible(True)
@@ -1510,7 +1519,7 @@ class ScriptPanel(QtWidgets.QWidget):
         container.setVisible(show)
 
     def _set_new_workflow_icon(self) -> None:
-        """Attach a white plus icon that's 50% larger than the base text height."""
+        """Attach a DPI-aware plus icon that matches the text color."""
         button = getattr(self, "new_script_button", None)
         if button is None:
             return
@@ -1520,19 +1529,30 @@ class ScriptPanel(QtWidgets.QWidget):
         canvas = max(plus_size + 6, base_size + 6)
         canvas_w = canvas + 4  # modest extra space between text and icon
         canvas_h = canvas
-        pixmap = QtGui.QPixmap(canvas_w, canvas_h)
+        app = QtWidgets.QApplication.instance()
+        device_ratio = 1.0
+        if app is not None:
+            try:
+                screen = app.primaryScreen()
+                if screen is not None:
+                    device_ratio = float(screen.devicePixelRatio())
+            except Exception:
+                device_ratio = 1.0
+        pixmap = QtGui.QPixmap(int(canvas_w * device_ratio), int(canvas_h * device_ratio))
+        pixmap.setDevicePixelRatio(device_ratio)
         pixmap.fill(QtCore.Qt.GlobalColor.transparent)
 
         painter = QtGui.QPainter(pixmap)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        pen = QtGui.QPen(QtGui.QColor("#12253C"))
-        pen.setWidth(max(1, plus_size // 6))
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+        pen = QtGui.QPen(QtGui.QColor("#3c5e78"))
+        pen.setWidth(max(2, int((plus_size * device_ratio) // 4)))
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.FlatCap)
         painter.setPen(pen)
-        center_x = canvas_w // 2
-        center_y = canvas_h // 2
-        offset = plus_size // 2
-        painter.drawLine(center_x - offset, center_y + 1, center_x + offset, center_y + 1)
-        painter.drawLine(center_x, center_y - offset + 1, center_x, center_y + offset + 1)
+        center_x = pixmap.width() // 2
+        center_y = pixmap.height() // 2
+        offset = int((plus_size * device_ratio) // 2)
+        painter.drawLine(center_x - offset, center_y, center_x + offset, center_y)
+        painter.drawLine(center_x, center_y - offset, center_x, center_y + offset)
         painter.end()
 
         icon = QtGui.QIcon()

@@ -153,13 +153,14 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             return {
                 "text": f"{display_text} ?",
                 "color": "#f08c00",
-                "tooltip": f"Requires ≥ {display_text}. Unable to detect GPU VRAM.",
+                "tooltip": f"Requires >= {display_text}. Unable to detect GPU VRAM.",
             }
 
-        passes = available_gb >= req_gb
+        tolerance = max(0.1, req_gb * 0.01)  # absorb rounding/measurement jitter
+        passes = (available_gb + tolerance) >= req_gb
         color = "#37b24d" if passes else "#ff6b6b"
         marker = "✔" if passes else "✖"
-        tooltip = f"Requires ≥ {display_text}. Detected max VRAM: {available_gb:.1f} GB."
+        tooltip = f"Requires >= {display_text}. Detected max VRAM: {available_gb:.1f} GB."
         return {
             "text": f"{display_text} {marker}",
             "color": color,
