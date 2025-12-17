@@ -93,10 +93,12 @@ class ScriptPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super(ScriptPanel, self).__init__(parent)
         self.host = None  # We'll set this separately
+        self._3d_mode_enabled = False
         self.current_script = None
         self._loading = False
         self._selection_timer = QtCore.QTimer()
         self._selection_timer.setSingleShot(True)
+
         self._selection_timer.timeout.connect(self._process_selection_change)
         self._pending_selection = None
         self._is_mouse_pressed = False
@@ -300,6 +302,11 @@ class ScriptPanel(QtWidgets.QWidget):
         self.folder_loader = workflow_model.FolderLoader(self)
         self.folder_loader.scripts_loaded.connect(self.on_scripts_loaded)
         self.folder_loader.finished.connect(self._on_folder_load_finished)
+
+    def set_3d_mode(self, enabled: bool):
+        """Toggle between regular and 3D Texturing workflows."""
+        self._3d_mode_enabled = enabled
+        self._apply_tag_filter()
 
     def _reset_folder_loader(self):
         """Replace the loader so a stuck thread can't block new selections."""
@@ -1282,18 +1289,30 @@ class ScriptPanel(QtWidgets.QWidget):
     
     def _apply_tag_filter(self):
         """Apply tag filtering to the current scripts."""
-        if not self._active_tags:
-            # No tags selected, show all scripts
-            filtered_scripts = self._all_scripts
-        else:
-            # Filter scripts that have ANY of the active tags (OR logic)
-            filtered_scripts = []
-            for script in self._all_scripts:
+        filtered_scripts = []
+        for script in self._all_scripts:
+            # 1. Filter by 3D Texturing mode
+            is_3d = False
+            if hasattr(script, 'metadata') and script.metadata:
+                is_3d = script.metadata.get('is_3d_texturing', False)
+            
+            if self._3d_mode_enabled:
+                if not is_3d:
+                    continue
+            else:
+                if is_3d:
+                    continue
+
+            # 2. Filter by Tags (if any)
+            if self._active_tags:
                 if hasattr(script, 'metadata') and script.metadata:
                     script_tags = script.metadata.get('tags', [])
-                    # Check if script has any of the active tags
-                    if any(tag in script_tags for tag in self._active_tags):
-                        filtered_scripts.append(script)
+                    if not any(tag in script_tags for tag in self._active_tags):
+                        continue
+                else:
+                    continue
+            
+            filtered_scripts.append(script)
         
         # Update the model with filtered scripts (sorting is done inside updateItems)
         self.script_model.updateItems(filtered_scripts)

@@ -2459,6 +2459,22 @@ def _looks_like_model_file(value: str) -> bool:
 def _category_for_node(node_type: str, file_name: str) -> str:
     token = node_type.lower()
     name_lower = file_name.lower()
+
+    if "style" in token:
+        return "style_models"
+    if "upscale" in token:
+        return "upscale_models"
+    if "clip_vision" in token or "clip_vision" in name_lower:
+        return "clip_vision"
+    if "gligen" in token:
+        return "gligen"
+    if "hypernetwork" in token:
+        return "hypernetworks"
+    if "photomaker" in token:
+        return "photomaker"
+    if "classifier" in token:
+        return "classifiers"
+
     if "unet" in token or "unet" in name_lower:
         return "diffusion_models"
     if "lora" in token or "lora" in name_lower:

@@ -464,6 +464,10 @@ class CharonWindow(QtWidgets.QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+
+    def _on_3d_mode_toggled(self, checked):
+        if hasattr(self, 'script_panel'):
+            self.script_panel.set_3d_mode(checked)
     def _setup_normal_ui(self, parent):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
@@ -492,17 +496,56 @@ class CharonWindow(QtWidgets.QWidget):
         content_layout.addSpacing(10)
         content_layout.addWidget(self.actions_container)
         
-        # Project Label (Moved from footer)
+        # Info row (Project Label + GPU Label + 3D Mode)
+        info_container = QtWidgets.QWidget()
+        info_layout = QtWidgets.QHBoxLayout(info_container)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Left side: Labels stacked vertically
+        labels_container = QtWidgets.QWidget()
+        labels_layout = QtWidgets.QVBoxLayout(labels_container)
+        labels_layout.setContentsMargins(0, 0, 0, 0)
+        labels_layout.setSpacing(2)
+        
         self.project_label = QtWidgets.QLabel(self.normal_widget)
         self.project_label.setObjectName("charonProjectLabel")
         self.project_label.setStyleSheet("color: #7f848e; font-size: 11px;")
-        content_layout.addWidget(self.project_label)
+        labels_layout.addWidget(self.project_label)
         
-        # GPU Label (Moved from footer, placed below Project Label)
         self.gpu_label = QtWidgets.QLabel(self.normal_widget)
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setStyleSheet("color: #7f848e; font-size: 11px;")
-        content_layout.addWidget(self.gpu_label)
+        labels_layout.addWidget(self.gpu_label)
+        
+        info_layout.addWidget(labels_container)
+        
+        info_layout.addStretch()
+        
+        # Right side: 3D Mode Toggle
+        self.mode_3d_button = QtWidgets.QPushButton("3D Mode", info_container)
+        self.mode_3d_button.setCheckable(True)
+        self.mode_3d_button.setFixedHeight(24)
+        self.mode_3d_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_3d_button.setStyleSheet("""
+            QPushButton {
+                padding: 0px 12px;
+                border: 1px solid #2c323c;
+                border-radius: 4px;
+                background-color: #37383D;
+                color: #e8eaef;
+            }
+            QPushButton:hover { background-color: #404248; }
+            QPushButton:checked {
+                background-color: #339af0;
+                color: white;
+                border: 1px solid #1c7ed6;
+            }
+        """)
+        self.mode_3d_button.setToolTip("Toggle 3D Texturing workflows")
+        self.mode_3d_button.toggled.connect(self._on_3d_mode_toggled)
+        info_layout.addWidget(self.mode_3d_button)
+        
+        content_layout.addWidget(info_container)
         
         content_layout.addSpacing(10)
         
@@ -656,7 +699,7 @@ class CharonWindow(QtWidgets.QWidget):
                 f"background: {COLOR_MAIN_BG}; width: {folder_workflow_gap}px; "
                 "margin: 0px; padding: 0px; border: none;"
             )
-        
+
         # Connect to splitter movement to detect when panels are collapsed
         self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
         self.workflows_splitter.splitterMoved.connect(self._on_workflows_splitter_moved)

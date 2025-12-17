@@ -694,6 +694,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self._build_vram_selector(layout)
         self._build_input_mapping_section(layout)
 
+        # 3D Texturing Workflow Checkbox
+        self.is_3d_texturing_cb = QtWidgets.QCheckBox("3D Texturing Workflow")
+        self.is_3d_texturing_cb.setToolTip("Mark this workflow as a 3D Texturing workflow (appears in 3D Texturing tab).")
+        self.is_3d_texturing_cb.setChecked(bool(self._metadata.get("is_3d_texturing", False)))
+        layout.addWidget(self.is_3d_texturing_cb)
+
         layout.addWidget(QtWidgets.QLabel("4. Tags (comma separated)"))
         self.tags_edit = QtWidgets.QLineEdit(", ".join(self._metadata.get("tags", [])))
         self.tags_edit.setPlaceholderText("e.g. comfy, FLUX, Nano-Banana")
@@ -1076,15 +1082,18 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         tags = [tag.strip() for tag in tags_raw.split(",") if tag.strip()] if tags_raw else []
         parameters = self._collect_selected_parameters()
         min_vram = _normalize_min_vram(self.vram_combo.currentData())
+        is_3d_texturing = self.is_3d_texturing_cb.isChecked()
 
         self._metadata["parameters"] = parameters
         self._metadata["min_vram_gb"] = min_vram
+        self._metadata["is_3d_texturing"] = is_3d_texturing
 
         metadata = {
             "description": self.description_edit.toPlainText().strip(),
             "min_vram_gb": min_vram,
             "tags": tags,
             "parameters": parameters,
+            "is_3d_texturing": is_3d_texturing,
         }
         dependencies = self._metadata.get("dependencies")
         if dependencies is not None:

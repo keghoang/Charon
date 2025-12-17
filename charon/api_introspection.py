@@ -171,54 +171,83 @@ def map_node_widgets(
         total_specs = len(specs)
         total_vals = len(widget_values)
 
-        while spec_idx < total_specs and val_idx < total_vals:
-            spec = specs[spec_idx]
+        while val_idx < total_vals:
             val = widget_values[val_idx]
+            
+            # If we still have specs to match
+            if spec_idx < total_specs:
+                spec = specs[spec_idx]
 
-            # Check for inserted control widget (frontend-only)
-            # If value is a control token (e.g. "randomize") BUT spec expects something else (e.g. INT),
-            # we infer this is an extra control widget.
-            if (
-                str(val) in _CONTROL_WIDGET_SENTINELS
-                and spec.name != "control_after_generate"
-                and _is_type_mismatch(spec, val)
-            ):
-                # Create synthetic spec for this control value
-                control_spec = NodeWidgetSpec(
-                    node_type=str(node_type),
-                    name="control_after_generate",
-                    value_type="string",
-                    section="inferred",
-                    index=-1,
-                    default="fixed",
-                    choices=("fixed", "increment", "decrement", "randomize"),
-                    config={},
-                )
+                # Check for inserted control widget (frontend-only)
+                # If value is a control token (e.g. "randomize") BUT spec expects something else (e.g. INT),
+                # we infer this is an extra control widget.
+                if (
+                    str(val) in _CONTROL_WIDGET_SENTINELS
+                    and spec.name != "control_after_generate"
+                    and _is_type_mismatch(spec, val)
+                ):
+                    # Create synthetic spec for this control value
+                    control_spec = NodeWidgetSpec(
+                        node_type=str(node_type),
+                        name="control_after_generate",
+                        value_type="string",
+                        section="inferred",
+                        index=-1,
+                        default="fixed",
+                        choices=("fixed", "increment", "decrement", "randomize"),
+                        config={},
+                    )
+                    bindings.append(
+                        NodeWidgetBinding(
+                            node_id=str(node_id),
+                            spec=control_spec,
+                            source="widgets_values",
+                            value=val,
+                            source_index=val_idx,
+                        )
+                    )
+                    # Consume value, retry spec
+                    val_idx += 1
+                    continue
+
+                # Normal mapping
                 bindings.append(
                     NodeWidgetBinding(
                         node_id=str(node_id),
-                        spec=control_spec,
+                        spec=spec,
                         source="widgets_values",
                         value=val,
                         source_index=val_idx,
                     )
                 )
-                # Consume value, retry spec
+                spec_idx += 1
                 val_idx += 1
-                continue
-
-            # Normal mapping
-            bindings.append(
-                NodeWidgetBinding(
-                    node_id=str(node_id),
-                    spec=spec,
-                    source="widgets_values",
-                    value=val,
-                    source_index=val_idx,
-                )
-            )
-            spec_idx += 1
-            val_idx += 1
+            
+            # If we ran out of specs but have values left (Trailing Control Widget)
+            else:
+                if str(val) in _CONTROL_WIDGET_SENTINELS:
+                     # Create synthetic spec for this control value
+                    control_spec = NodeWidgetSpec(
+                        node_type=str(node_type),
+                        name="control_after_generate",
+                        value_type="string",
+                        section="inferred",
+                        index=-1,
+                        default="fixed",
+                        choices=("fixed", "increment", "decrement", "randomize"),
+                        config={},
+                    )
+                    bindings.append(
+                        NodeWidgetBinding(
+                            node_id=str(node_id),
+                            spec=control_spec,
+                            source="widgets_values",
+                            value=val,
+                            source_index=val_idx,
+                        )
+                    )
+                # Consume the extra value (whether control or garbage)
+                val_idx += 1
 
     # 2. Handle inputs (API format or hybrids)
     # In API format, widgets are named in 'inputs'.
