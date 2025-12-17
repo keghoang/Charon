@@ -2408,47 +2408,7 @@ def process_charonop_node():
         except Exception as step2_err:
             log_debug(f"Step 2 check failed: {step2_err}", "WARNING")
 
-        if is_step2:
-            def step2_runner():
-                try:
-                    initialize_status('Starting 3D Texturing - Step 2')
-                    _charon_window, comfy_client, comfy_path = _resolve_comfy_environment()
-                    if not comfy_client:
-                        raise RuntimeError("ComfyUI client unavailable")
-                    
-                    connected_inputs = {}
-                    total_inputs = node.inputs()
-                    for index in range(total_inputs):
-                        input_node = node.input(index)
-                        if input_node is not None:
-                            connected_inputs[index] = input_node
-                            
-                    temp_root_val = node.knob('charon_temp_dir').value()
-                    
-                    prompt_data = workflow_data
-                    if not is_api_prompt(workflow_data):
-                        initialize_status('Converting Step 2 Workflow')
-                        prompt_data = runtime_convert_workflow(workflow_data, comfy_path)
-                        
-                    _run_3d_texturing_step2_logic(
-                        node, 
-                        prompt_data, 
-                        comfy_client, 
-                        lambda p, s, **k: update_progress(p, s, extra=k.get('extra')), 
-                        temp_root_val,
-                        connected_inputs
-                    )
-                    
-                    update_progress(1.0, "Step 2 Completed")
-                    
-                except Exception as exc:
-                    log_debug(f"Step 2 failed: {exc}", "ERROR")
-                    update_progress(-1.0, f"Error: {exc}", error=str(exc))
 
-            bg_thread = threading.Thread(target=step2_runner)
-            bg_thread.daemon = True
-            bg_thread.start()
-            return
 
         input_mapping = json.loads(input_mapping_str)
         parameter_specs = _load_parameter_specs(node)
@@ -3051,6 +3011,50 @@ def process_charonop_node():
                                 assign_to_node(target_id, filename)
                                 break
 
+                step2_views = []
+                target_coverage_node_id = None
+                
+                if is_step2:
+                    try:
+                        import nuke
+                        rig_group = nuke.toNode("Charon_Coverage_Rig")
+                        if rig_group:
+                            contact_sheet = None
+                            with rig_group:
+                                contact_sheet = nuke.toNode("ContactSheet1")
+                                if not contact_sheet:
+                                    for n in nuke.allNodes("ContactSheet"):
+                                        contact_sheet = n
+                                        break
+                            if contact_sheet:
+                                for i in range(contact_sheet.inputs()):
+                                    inp = contact_sheet.input(i)
+                                    if inp:
+                                        step2_views.append({'index': i, 'node': inp, 'group': rig_group})
+                        
+                        if step2_views:
+                            batch_count = len(step2_views)
+                            log_debug(f"Step 2: Found {batch_count} camera views. Overriding batch count.")
+                            
+                            set_targets_local = build_set_targets(workflow_copy)
+                            target_info = set_targets_local.get('charoninput_coverage_rig')
+                            
+                            if not target_info:
+                                load_images = []
+                                for nid, ndata in workflow_copy.items():
+                                    if ndata.get('class_type') == 'LoadImage':
+                                        load_images.append(nid)
+                                if len(load_images) >= 2:
+                                    target_coverage_node_id = load_images[1]
+                            else:
+                                target_coverage_node_id = target_info[0]
+                                
+                            if not target_coverage_node_id:
+                                log_debug("Step 2: Could not identify Coverage Rig input node.", "WARNING")
+                                
+                    except Exception as exc:
+                        log_debug(f"Step 2 setup failed: {exc}", "WARNING")
+
                 base_prompt = copy.deepcopy(workflow_copy)
                 seed_records = _capture_seed_inputs(base_prompt)
                 batch_outputs: List[Dict[str, Any]] = []
@@ -3265,6 +3269,29 @@ def process_charonop_node():
                 for batch_index in range(batch_count):
                     seed_offset = batch_index * 9973
                     prompt_payload = copy.deepcopy(base_prompt)
+                    
+                    if is_step2 and batch_index < len(step2_views) and target_coverage_node_id:
+                        view_info = step2_views[batch_index]
+                        view_node = view_info['node']
+                        rig_group_ref = view_info['group']
+                        
+                        view_filename = f'step2_view_{batch_index}_{str(uuid.uuid4())[:8]}.png'
+                        view_path = os.path.join(temp_dir, view_filename).replace('\\', '/')
+                        
+                        try:
+                            with rig_group_ref:
+                                _render_nuke_node(view_node, view_path)
+                            
+                            view_upload = comfy_client.upload_image(view_path)
+                            if view_upload:
+                                t_node = prompt_payload.get(str(target_coverage_node_id))
+                                if t_node:
+                                    t_inputs = t_node.setdefault('inputs', {})
+                                    t_inputs['image'] = view_upload
+                                    log_debug(f"Step 2: Injected view {batch_index} into node {target_coverage_node_id}")
+                        except Exception as render_err:
+                            log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
+
                     if seed_records:
                         _apply_seed_offset(prompt_payload, seed_records, seed_offset)
 
@@ -3478,6 +3505,15 @@ def process_charonop_node():
 
                 if not batch_outputs:
                     raise Exception('No outputs were generated by ComfyUI')
+
+                if is_step2 and batch_outputs:
+                    image_paths = [e.get('download_path') for e in batch_outputs if e.get('download_path')]
+                    if image_paths:
+                        try:
+                            import nuke
+                            nuke.executeInMainThread(lambda: _create_step2_contact_sheet(node, image_paths))
+                        except Exception as cs_err:
+                            log_debug(f"Step 2 ContactSheet failed: {cs_err}", "WARNING")
 
                 node_x, node_y = _safe_node_coords()
                 result_data = {
