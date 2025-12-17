@@ -45,6 +45,9 @@ def create_charon_group_node(
     workflow_path=None,
     parameters=None,
     recreate_script=None,
+    source_workflow_path=None,
+    validated=False,
+    local_state=None,
 ):
     inputs = list(inputs or [])
     node = nuke.createNode("Group", inpanel=False)
@@ -141,6 +144,28 @@ def create_charon_group_node(
     path_knob = nuke.String_Knob("workflow_path", "Workflow Path", path_value)
     _hide_knob(path_knob, nuke)
     node.addKnob(path_knob)
+
+    source_path_value = source_workflow_path or path_value
+    source_path_knob = nuke.String_Knob(
+        "charon_source_workflow_path",
+        "Source Workflow Path",
+        source_path_value or "",
+    )
+    _hide_knob(source_path_knob, nuke)
+    node.addKnob(source_path_knob)
+
+    validated_knob = nuke.Int_Knob("charon_validated", "Validated", 1 if validated else 0)
+    validated_knob.setFlag(nuke.NO_ANIMATION)
+    _hide_knob(validated_knob, nuke)
+    node.addKnob(validated_knob)
+
+    try:
+        local_state_payload = json.dumps(local_state or {})
+    except Exception:
+        local_state_payload = "{}"
+    local_state_knob = nuke.Text_Knob("charon_local_state", "Local Workflow State", local_state_payload)
+    _hide_knob(local_state_knob, nuke)
+    node.addKnob(local_state_knob)
 
     node_id_value = _generate_charon_node_id()
     node_id_knob = nuke.String_Knob("charon_node_id", "Node ID", node_id_value)
@@ -373,6 +398,10 @@ def create_charon_group_node(
     try:
         node.setMetaData("charon/workflow_name", workflow_name)
         node.setMetaData("charon/workflow_path", workflow_path or "")
+        node.setMetaData("charon/source_workflow_path", source_path_value or "")
+        node.setMetaData("charon/is_validated", "1" if validated else "0")
+        if local_state_payload:
+            node.setMetaData("charon/local_state", local_state_payload)
         node.setMetaData("charon/node_id", node_id_value)
         node.setMetaData("charon/read_node_id", "")
     except Exception:
@@ -584,6 +613,15 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
         except Exception:
             pass
 
+    def _coerce_flag(value) -> bool:
+        if value in (None, "", False):
+            return False
+        try:
+            text = str(value).strip().lower()
+        except Exception:
+            return False
+        return text in {"1", "true", "yes", "on"}
+
     node_id_value = (node_id or "").strip().lower()[:12]
     if not node_id_value:
         node_id_value = _generate_charon_node_id()
@@ -611,6 +649,38 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
         if meta_path:
             workflow_path = str(meta_path)
 
+    source_workflow_path = _read_str_knob("charon_source_workflow_path") or ""
+    if not source_workflow_path:
+        try:
+            meta_source = node.metadata("charon/source_workflow_path")
+        except Exception:
+            meta_source = ""
+        if meta_source:
+            source_workflow_path = str(meta_source)
+    if not source_workflow_path:
+        source_workflow_path = workflow_path
+
+    raw_validated = _read_str_knob("charon_validated")
+    is_validated = _coerce_flag(raw_validated)
+    if raw_validated == "":
+        try:
+            meta_validated = node.metadata("charon/is_validated")
+        except Exception:
+            meta_validated = ""
+        if meta_validated not in (None, ""):
+            is_validated = _coerce_flag(meta_validated)
+
+    local_state_payload = _read_str_knob("charon_local_state")
+    if not local_state_payload:
+        try:
+            meta_state = node.metadata("charon/local_state")
+        except Exception:
+            meta_state = ""
+        if isinstance(meta_state, str) and meta_state.strip():
+            local_state_payload = meta_state
+    if not local_state_payload:
+        local_state_payload = "{}"
+
     auto_import_enabled = True
     status_payload = _build_default_status_payload(
         workflow_name=workflow_name,
@@ -632,6 +702,9 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
     _set_knob_value("charon_node_id", node_id_value)
     _set_knob_value("charon_node_id_info", node_id_value)
     _set_knob_value("charon_read_id_info", "Not linked")
+    _set_knob_value("charon_source_workflow_path", source_workflow_path or workflow_path)
+    _set_knob_value("charon_validated", 1 if is_validated else 0)
+    _set_knob_value("charon_local_state", local_state_payload)
 
     ready_tile = status_to_tile_color("Ready")
     ready_gl = status_to_gl_color("Ready") or (0.0, 0.0, 0.0)
@@ -662,6 +735,9 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
     try:
         node.setMetaData("charon/workflow_name", workflow_name)
         node.setMetaData("charon/workflow_path", workflow_path or "")
+        node.setMetaData("charon/source_workflow_path", source_workflow_path or workflow_path or "")
+        node.setMetaData("charon/is_validated", "1" if is_validated else "0")
+        node.setMetaData("charon/local_state", local_state_payload or "")
         node.setMetaData("charon/node_id", node_id_value)
         node.setMetaData("charon/read_node_id", "")
         node.setMetaData("charon/read_node", "")

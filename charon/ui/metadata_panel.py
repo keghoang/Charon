@@ -14,6 +14,7 @@ from ..charon_logger import system_debug
 from .dialogs import CharonMetadataDialog
 from .custom_widgets import create_tag_badge
 from datetime import datetime, timezone, timedelta
+from ..workflow_local_store import get_validated_workflow_path, load_workflow_state
 
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -457,7 +458,13 @@ class MetadataPanel(QtWidgets.QWidget):
         charon_meta.setdefault("workflow_file", conf.get("workflow_file") or "workflow.json")
         charon_meta.setdefault("parameters", conf.get("parameters") or [])
         workflow_file = charon_meta.get("workflow_file") or conf.get("workflow_file") or "workflow.json"
-        workflow_path = os.path.join(self.script_folder, workflow_file)
+        state = load_workflow_state(self.script_folder)
+        use_local_override = bool(state.get("validated"))
+        local_override_path = get_validated_workflow_path(self.script_folder, ensure_dir=True)
+        if use_local_override and os.path.exists(local_override_path):
+            workflow_path = local_override_path
+        else:
+            workflow_path = os.path.join(self.script_folder, workflow_file)
         dialog = CharonMetadataDialog(charon_meta, workflow_path=workflow_path, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             return

@@ -22,6 +22,7 @@ class ScriptTableView(QtWidgets.QTableView):
     script_run = QtCore.Signal(str)
     script_validate = QtCore.Signal(str)
     script_show_validation_payload = QtCore.Signal(str)
+    script_show_raw_validation_payload = QtCore.Signal(str)
     script_revalidate = QtCore.Signal(str)
     mousePressed = QtCore.Signal()
     mouseReleased = QtCore.Signal()
@@ -284,7 +285,7 @@ class ScriptTableView(QtWidgets.QTableView):
             if advanced_mode:
                 raw_action = menu.addAction("Show Raw Validation Payload")
                 raw_action.triggered.connect(
-                    lambda: self.script_show_validation_payload.emit(script_path)
+                    lambda: self.script_show_raw_validation_payload.emit(script_path)
                 )
             menu.addSeparator()
         else:

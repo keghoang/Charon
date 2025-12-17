@@ -661,13 +661,18 @@ def _validate_models(
     resolver_errors = resolver_result.get("errors") or []
 
     resolver_missing_entries = resolver_result.get("missing") or []
+    cleaned_missing_entries: List[Dict[str, Any]] = []
     missing_by_index = {}
     for entry in resolver_missing_entries:
         if not isinstance(entry, dict):
             continue
+        entry = dict(entry)
+        entry.pop("resolved_path", None)
         idx = entry.get("index")
         if isinstance(idx, int):
             missing_by_index[idx] = entry
+        cleaned_missing_entries.append(entry)
+    resolver_missing_entries = cleaned_missing_entries
 
     workflow_folder = None
     if isinstance(workflow_bundle, dict):
@@ -711,7 +716,6 @@ def _validate_models(
                 if reference_name:
                     missing_entry.setdefault("name", reference_name)
                 missing_entry.setdefault("reason", "mismatched_path")
-                missing_entry["resolved_path"] = path
                 missing_by_index[idx] = missing_entry
         resolver_missing_entries = [
             missing_by_index[idx] for idx in sorted(missing_by_index.keys())

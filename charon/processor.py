@@ -1710,9 +1710,21 @@ def process_charonop_node():
         workflow_folder = ''
         candidate_paths = [workflow_path]
         try:
+            source_candidate = node.knob('charon_source_workflow_path').value()
+        except Exception:
+            source_candidate = ''
+        if source_candidate and source_candidate not in candidate_paths:
+            candidate_paths.append(source_candidate)
+        try:
             meta_path = node.metadata('charon/workflow_path')
             if meta_path and meta_path not in candidate_paths:
                 candidate_paths.append(meta_path)
+        except Exception:
+            pass
+        try:
+            meta_source_path = node.metadata('charon/source_workflow_path')
+            if meta_source_path and meta_source_path not in candidate_paths:
+                candidate_paths.append(meta_source_path)
         except Exception:
             pass
 
