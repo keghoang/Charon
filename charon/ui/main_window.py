@@ -481,7 +481,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
-        content_layout.setContentsMargins(base_margin, 4, base_margin, 6)
+        content_layout.setContentsMargins(base_margin, 4, base_margin, 2)
         content_layout.setSpacing(6)
 
         # Primary actions row (New Workflow, Refresh, Settings) beneath header
@@ -673,9 +673,6 @@ class CharonWindow(QtWidgets.QWidget):
 
         # Add content layout to main layout
         main_layout.addLayout(content_layout)
-
-        # Add spacing to separate content from footer controls
-        main_layout.addSpacing(config.UI_ELEMENT_SPACING)
 
         # Bottom footer with ComfyUI controls aligned to the right
         footer_container = QtWidgets.QWidget(parent)
