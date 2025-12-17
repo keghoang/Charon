@@ -1061,7 +1061,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         menu.exec_(self.input_mapping_tree.viewport().mapToGlobal(position))
 
     def _prompt_change_default(self, data):
-        current_val = data.get("node_default")
+        current_val = data.get("value")
         val_type = data.get("value_type", "string")
         
         new_val = None
