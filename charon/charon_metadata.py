@@ -39,6 +39,7 @@ CHARON_DEFAULTS: Dict[str, Any] = {
     "tags": [],
     "parameters": [],
     "is_3d_texturing": False,
+    "is_3d_texturing_step2": False,
 }
 
 
@@ -124,6 +125,7 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         "tags": list(raw_meta.get("tags") or []),
         "parameters": normalized_parameters,
         "is_3d_texturing": bool(raw_meta.get("is_3d_texturing", False)),
+        "is_3d_texturing_step2": bool(raw_meta.get("is_3d_texturing_step2", False)),
     }
 
     metadata: Dict[str, Any] = {
@@ -133,6 +135,7 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         "tags": stored_meta["tags"],
         "min_vram_gb": stored_meta["min_vram_gb"],
         "is_3d_texturing": stored_meta["is_3d_texturing"],
+        "is_3d_texturing_step2": stored_meta["is_3d_texturing_step2"],
         "dependencies": normalized_dependencies,
         "parameters": normalized_parameters,
         "charon_meta": stored_meta,

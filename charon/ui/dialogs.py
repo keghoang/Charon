@@ -694,11 +694,26 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self._build_vram_selector(layout)
         self._build_input_mapping_section(layout)
 
+        # 3D Texturing checkboxes layout
+        texturing_layout = QtWidgets.QHBoxLayout()
+        
         # 3D Texturing Workflow Checkbox
         self.is_3d_texturing_cb = QtWidgets.QCheckBox("3D Texturing Workflow")
         self.is_3d_texturing_cb.setToolTip("Mark this workflow as a 3D Texturing workflow (appears in 3D Texturing tab).")
         self.is_3d_texturing_cb.setChecked(bool(self._metadata.get("is_3d_texturing", False)))
-        layout.addWidget(self.is_3d_texturing_cb)
+        texturing_layout.addWidget(self.is_3d_texturing_cb)
+
+        # 3D Texturing - Step 2 Checkbox
+        self.is_3d_texturing_step2_cb = QtWidgets.QCheckBox("3D Texturing - Step 2")
+        self.is_3d_texturing_step2_cb.setToolTip("Enable Step 2 workflow for multi-angle texturing with Qwen Edit.")
+        self.is_3d_texturing_step2_cb.setChecked(bool(self._metadata.get("is_3d_texturing_step2", False)))
+        texturing_layout.addWidget(self.is_3d_texturing_step2_cb)
+        
+        layout.addLayout(texturing_layout)
+        
+        # Connect signal to show/hide Step 2 checkbox based on 3D Texturing state
+        self.is_3d_texturing_cb.toggled.connect(self._update_step2_visibility)
+        self._update_step2_visibility(self.is_3d_texturing_cb.isChecked())
 
         layout.addWidget(QtWidgets.QLabel("4. Tags (comma separated)"))
         self.tags_edit = QtWidgets.QLineEdit(", ".join(self._metadata.get("tags", [])))
@@ -1029,6 +1044,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 node_item.setBackground(0, clear_brush)
                 node_item.setForeground(0, clear_brush)
 
+    def _update_step2_visibility(self, is_3d_texturing: bool) -> None:
+        """Show or hide the Step 2 checkbox based on 3D Texturing workflow state."""
+        self.is_3d_texturing_step2_cb.setVisible(is_3d_texturing)
+        if not is_3d_texturing:
+            self.is_3d_texturing_step2_cb.setChecked(False)
+    
     def _collect_selected_parameters(self) -> List[Dict[str, Any]]:
         """Return parameter specs for all checked entries."""
         system_debug(
@@ -1083,10 +1104,12 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         parameters = self._collect_selected_parameters()
         min_vram = _normalize_min_vram(self.vram_combo.currentData())
         is_3d_texturing = self.is_3d_texturing_cb.isChecked()
+        is_3d_texturing_step2 = self.is_3d_texturing_step2_cb.isChecked()
 
         self._metadata["parameters"] = parameters
         self._metadata["min_vram_gb"] = min_vram
         self._metadata["is_3d_texturing"] = is_3d_texturing
+        self._metadata["is_3d_texturing_step2"] = is_3d_texturing_step2
 
         metadata = {
             "description": self.description_edit.toPlainText().strip(),
@@ -1094,6 +1117,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
             "tags": tags,
             "parameters": parameters,
             "is_3d_texturing": is_3d_texturing,
+            "is_3d_texturing_step2": is_3d_texturing_step2,
         }
         dependencies = self._metadata.get("dependencies")
         if dependencies is not None:
