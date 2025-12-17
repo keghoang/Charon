@@ -343,7 +343,9 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
     def _prune_validation_states(self) -> None:
         valid_paths = {self._normalize_path(script.path) for script in self.scripts}
         self.validation_states = {
-            path: entry for path, entry in self.validation_states.items() if path in valid_paths
+            path: entry
+            for path, entry in self.validation_states.items()
+            if path in valid_paths or entry.get("state") == "validating"
         }
         
     def updateItems(self, scripts, sort=True):

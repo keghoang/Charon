@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .paths import resolve_comfy_environment
@@ -295,6 +296,107 @@ def resolve_missing_custom_nodes(
     return result
 
 
+def locate_manager_cli(comfy_dir: Optional[str]) -> Optional[Tuple[str, str]]:
+    if not comfy_dir:
+        return None
+    custom_nodes_dir = os.path.join(comfy_dir, "custom_nodes")
+    candidates: List[str] = []
+    for folder in ("comfyui-manager", "ComfyUI-Manager"):
+        candidates.append(os.path.join(custom_nodes_dir, folder, "cm-cli.py"))
+
+    if os.path.isdir(custom_nodes_dir):
+        try:
+            for entry in os.listdir(custom_nodes_dir):
+                lower = entry.lower()
+                if "manager" in lower:
+                    candidates.append(os.path.join(custom_nodes_dir, entry, "cm-cli.py"))
+        except OSError:
+            pass
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate, os.path.dirname(candidate)
+    return None
+
+
+def install_custom_nodes_via_manager(
+    comfy_path: str,
+    repos: Sequence[str],
+    *,
+    channel: Optional[str] = None,
+    mode: Optional[str] = "local",
+) -> ResolutionResult:
+    result = ResolutionResult()
+    if not repos:
+        result.skipped.append("No repository URLs were provided.")
+        return result
+
+    try:
+        env_info = resolve_comfy_environment(comfy_path)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        result.failed.append(f"Failed to resolve Comfy environment: {exc}")
+        return result
+
+    python_exe = _safe_str(env_info.get("python_exe"))
+    comfy_dir = _safe_str(env_info.get("comfy_dir"))
+    if not python_exe or not os.path.exists(python_exe):
+        result.failed.append("Embedded Python runtime not found; cannot run ComfyUI Manager.")
+        return result
+    if not comfy_dir or not os.path.isdir(comfy_dir):
+        result.failed.append("ComfyUI directory missing; cannot run ComfyUI Manager.")
+        return result
+
+    located = locate_manager_cli(comfy_dir)
+    if not located:
+        result.failed.append("ComfyUI Manager is not installed under custom_nodes.")
+        return result
+    manager_cli, _manager_root = located
+
+    unique_repos: List[str] = []
+    seen: set[str] = set()
+    for repo in repos:
+        normalized = _normalize_repo_url(repo)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_repos.append(repo)
+
+    if not unique_repos:
+        result.skipped.append("No unique repository URLs to install.")
+        return result
+
+    command = [python_exe, manager_cli, "install", *unique_repos]
+    if channel:
+        command.extend(["--channel", channel])
+    if mode:
+        command.extend(["--mode", mode])
+
+    env = os.environ.copy()
+    env.setdefault("COMFYUI_PATH", comfy_dir)
+    env.setdefault("COMFYUI_FOLDERS_BASE_PATH", comfy_dir)
+
+    system_debug(f"[Validation] Running ComfyUI Manager install: {command}")
+    completed = subprocess.run(
+        command,
+        cwd=comfy_dir,
+        capture_output=True,
+        timeout=120,
+        text=True,
+        env=env,
+    )
+
+    display_targets = ", ".join(_repo_display_name(repo) for repo in unique_repos)
+    if completed.returncode == 0:
+        result.resolved.append(f"Installed via ComfyUI Manager: {display_targets}.")
+        log_output = completed.stdout.strip()
+        if log_output:
+            result.notes.append(log_output)
+    else:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "ComfyUI Manager install command failed."
+        result.failed.append(detail)
+    return result
+
+
 def _safe_str(value: Any) -> str:
     return str(value).strip() if isinstance(value, str) else ""
 
@@ -396,6 +498,25 @@ def _iter_matching_files(root: str, file_name: str) -> Iterator[str]:
         for entry in files:
             if entry.lower() == lowered:
                 yield os.path.abspath(os.path.join(candidate_root, entry))
+
+
+def _normalize_repo_url(value: str) -> str:
+    return value.strip().rstrip("/").lower() if isinstance(value, str) else ""
+
+
+def _repo_display_name(repo: str) -> str:
+    repo = _safe_str(repo)
+    if not repo:
+        return "Custom node"
+    parsed = urlparse(repo)
+    path = (parsed.path or "").rstrip("/")
+    if path:
+        name = path.split("/")[-1]
+    else:
+        name = os.path.basename(repo.rstrip("/"))
+    if name.endswith(".git"):
+        name = name[:-4]
+    return name or repo
 
 
 def _iter_designated_roots(

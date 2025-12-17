@@ -15,6 +15,7 @@ from ..validation_resolver import (
     find_local_model_matches,
     find_shared_model_matches,
     format_model_reference_for_workflow,
+    install_custom_nodes_via_manager,
     resolve_missing_custom_nodes,
     resolve_missing_models,
 )
@@ -109,6 +110,7 @@ class _FileCopyWorker(QtCore.QObject):
 
 
 class ValidationResolveDialog(QtWidgets.QDialog):
+    comfy_restart_requested = QtCore.Signal()
     """Display validation results with auto-resolve helpers."""
 
     SUPPORTED_KEYS = {"models", "custom_nodes"}
@@ -679,6 +681,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         required = data.get("required") or []
         missing_entries = data.get("missing") or []
         dependencies = self._load_dependencies()
+        repo_lookup = data.get("node_repos") or {}
+        package_overrides = data.get("node_packages") or {}
 
         self._ensure_custom_node_package_map()
 
@@ -725,7 +729,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         row_mapping: Dict[int, Dict[str, Any]] = {}
         for row, (node_type, package_name) in enumerate(filtered_required):
-            package_display = package_name
+            node_key = node_type.lower()
+            repo_url = repo_lookup.get(node_key) or ""
+            repo_display = package_overrides.get(node_key) or self._repo_display_name(repo_url)
+            package_display = package_name or repo_display or "Unknown package"
             status_value = "Available"
             dependency = None
 
@@ -740,7 +747,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             package_item = QtWidgets.QTableWidgetItem(package_display)
             package_item.setToolTip(package_display)
 
-            node_key = node_type.lower()
             if node_key in missing_set:
                 status_value = "Missing"
                 status_item.setText(status_value.title())
@@ -779,6 +785,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 row_mapping[row] = {
                     "node_name": node_type,
                     "package_name": package_name,
+                     "manager_repo": repo_url,
+                     "manager_repo_display": repo_display or package_display,
                     "status_item": status_item,
                     "package_item": package_item,
                     "button": button,
@@ -822,6 +830,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         data = issue.get("data") or {}
         missing = data.get("missing") or []
+        unknown_nodes = data.get("unknown_nodes") or []
         status_label = widget_info.get("status_label")
         summary_label = widget_info.get("summary_label")
 
@@ -831,6 +840,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 status_label.setText("\u2717 Failed")
                 status_label.setStyleSheet("font-weight: bold; color: #B22222;")
             summary_text = f"Missing {len(missing)} custom node type(s)."
+        elif unknown_nodes:
+            issue["ok"] = True
+            if isinstance(status_label, QtWidgets.QLabel):
+                status_label.setText("\u26A0 Warning")
+                status_label.setStyleSheet("font-weight: bold; color: #DAA520;")
+            summary_text = f"{len(unknown_nodes)} unknown custom node class(es) detected."
         else:
             issue["ok"] = True
             if isinstance(status_label, QtWidgets.QLabel):
@@ -961,6 +976,26 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if not value:
             return ""
         return value.replace("\\", "/").lower()
+
+    @staticmethod
+    def _repo_display_name(repo: str) -> str:
+        if not repo:
+            return ""
+        parsed = urlparse(repo)
+        path = (parsed.path or "").rstrip("/")
+        if path:
+            name = path.split("/")[-1]
+        else:
+            name = os.path.basename(repo.rstrip("/"))
+        if name.endswith(".git"):
+            name = name[:-4]
+        return name or repo
+
+    @staticmethod
+    def _normalize_repo_identifier(value: str) -> str:
+        if not value:
+            return ""
+        return value.strip().rstrip("/").lower()
 
     def _apply_status_style(self, item: QtWidgets.QTableWidgetItem, status: str) -> None:
         status = (status or "").lower()
@@ -1443,6 +1478,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     package = str(props.get("cnr_id") or "").strip()
                     if node_type and package and node_type not in mapping:
                         mapping[node_type] = package
+        issue = self._issue_lookup.get("custom_nodes") or {}
+        issue_data = issue.get("data") or {}
+        extra_packages = issue_data.get("node_packages") or {}
+        for key, value in extra_packages.items():
+            normalized = (key or "").strip().lower()
+            if normalized and normalized not in mapping and value:
+                mapping[normalized] = value
         self._custom_node_package_map = mapping
 
     def _package_for_node_type(self, node_type: str) -> str:
@@ -1740,7 +1782,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     def _resolve_custom_node_entry(self, row: int, row_info: Dict[str, Any]) -> bool:
         node_name = str(row_info.get("node_name") or "").strip()
         package_name = str(row_info.get("package_name") or "").strip()
+        manager_repo = str(row_info.get("manager_repo") or "").strip()
         dependency = row_info.get("dependency")
+
+        if manager_repo:
+            return self._install_custom_node_via_manager(row_info, manager_repo)
 
         if dependency and isinstance(dependency, dict):
             normalized_dep = self._normalize_dependency_entry(dependency)
@@ -1778,6 +1824,68 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return True
         return False
 
+    def _install_custom_node_via_manager(self, row_info: Dict[str, Any], repo_url: str) -> bool:
+        if not self._comfy_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Install Custom Node",
+                "ComfyUI path is not configured. Open the Charon panel and set the launch path.",
+            )
+            return False
+
+        display_name = (
+            row_info.get("manager_repo_display")
+            or row_info.get("package_name")
+            or row_info.get("node_name")
+            or repo_url
+        )
+        prompt = (
+            f"Install <b>{display_name}</b> via ComfyUI Manager?<br>"
+            f"<span style='color:#228B22;'>{repo_url}</span>"
+        )
+        dialog = QtWidgets.QMessageBox(self)
+        dialog.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        dialog.setWindowTitle("Install Custom Node")
+        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        dialog.setText(prompt)
+        dialog.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        dialog.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
+        if dialog.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
+            return False
+
+        result = install_custom_nodes_via_manager(self._comfy_path, [repo_url])
+        if result.failed and not result.resolved and not result.skipped:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Installation Failed",
+                result.failed[0] if result.failed else "ComfyUI Manager could not install the custom node.",
+            )
+            return False
+
+        note_lines: List[str] = []
+        if result.resolved:
+            note_lines.extend(result.resolved)
+        elif result.skipped:
+            note_lines.extend(result.skipped)
+        elif result.notes:
+            note_lines.extend(result.notes)
+        note_lines.append("Restart ComfyUI to load the new node.")
+        note = "\n".join(note_lines)
+
+        self._mark_custom_node_resolved(row_info, note)
+        QtWidgets.QMessageBox.information(
+            self,
+            "Installation Complete",
+            (
+                f"{display_name} has been installed via ComfyUI Manager.\n"
+                "Restart ComfyUI to load the new node before running this workflow."
+            ),
+        )
+        self._prompt_restart_after_install(display_name)
+        return True
+
     def _mark_custom_node_resolved(self, row_info: Dict[str, Any], note: Optional[str] = None) -> None:
         status_item = row_info.get("status_item")
         if isinstance(status_item, QtWidgets.QTableWidgetItem):
@@ -1809,7 +1917,24 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if issue:
             data = issue.get("data") or {}
             missing = data.get("missing") or []
-            data["missing"] = [entry for entry in missing if entry != node_name]
+            normalized_missing = {
+                self._normalize_identifier(entry): entry
+                for entry in missing
+                if isinstance(entry, str)
+            }
+            normalized_missing.pop(self._normalize_identifier(node_name), None)
+            data["missing"] = list(normalized_missing.values())
+            repo = row_info.get("manager_repo")
+            if repo:
+                repo_key = self._normalize_repo_identifier(repo)
+                current_missing = data.get("missing_repos") or []
+                data["missing_repos"] = [
+                    entry for entry in current_missing if self._normalize_repo_identifier(entry) != repo_key
+                ]
+                current_disabled = data.get("disabled_repos") or []
+                data["disabled_repos"] = [
+                    entry for entry in current_disabled if self._normalize_repo_identifier(entry) != repo_key
+                ]
 
         if note:
             self._append_issue_note("custom_nodes", note)
@@ -2000,4 +2125,22 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "Restart ComfyUI to load the new node."
             ),
         )
+        self._prompt_restart_after_install(dep_display)
         return True
+
+    def _prompt_restart_after_install(self, package_display: str) -> None:
+        message = (
+            f"Please restart ComfyUI to finish installing <b>{package_display}</b>.\n"
+            "Restart now?"
+        )
+        dialog = QtWidgets.QMessageBox(self)
+        dialog.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        dialog.setWindowTitle("Restart ComfyUI?")
+        dialog.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        dialog.setText(message)
+        proceed_button = dialog.addButton("Proceed", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        later_button = dialog.addButton("Restart Later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(proceed_button)
+        dialog.exec()
+        if dialog.clickedButton() is proceed_button:
+            self.comfy_restart_requested.emit()

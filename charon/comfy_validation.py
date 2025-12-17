@@ -9,11 +9,13 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from . import preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
 from .paths import resolve_comfy_environment
+from .validation_resolver import locate_manager_cli
 from .validation_cache import load_validation_log
 
 
@@ -58,107 +60,6 @@ IGNORED_NODE_TYPES = {
     "setnode",
     "getnode",
 }
-VALIDATOR_SCRIPT = """import json
-import os
-import sys
-import traceback
-
-input_path = sys.argv[1]
-output_path = sys.argv[2]
-comfy_dir = sys.argv[3]
-
-result = {
-    "ok": False,
-    "missing": [],
-    "errors": [],
-    "traceback": "",
-}
-
-try:
-    sys.path.insert(0, comfy_dir)
-
-    # Ensure Comfy's utils module resolves correctly
-    if "utils" in sys.modules:
-        del sys.modules["utils"]
-
-    import importlib.util
-
-    utils_dir = os.path.join(comfy_dir, "utils")
-    utils_init = os.path.join(utils_dir, "__init__.py")
-    if os.path.exists(utils_init):
-        utils_spec = importlib.util.spec_from_file_location(
-            "utils", utils_init, submodule_search_locations=[utils_dir]
-        )
-        utils_module = importlib.util.module_from_spec(utils_spec)
-        utils_spec.loader.exec_module(utils_module)
-        sys.modules["utils"] = utils_module
-
-    import comfy.options
-
-    comfy.options.enable_args_parsing(False)
-
-    from comfy.cli_args import args  # noqa: F401
-    import folder_paths  # noqa: F401
-    import nodes
-    import server
-
-    class _StubRoute:
-        def __getattr__(self, _name):
-            def decorator(*_args, **_kwargs):
-                def passthrough(func):
-                    return func
-
-                return passthrough
-
-            return decorator
-
-    class _StubRouter:
-        def add_static(self, *args, **kwargs):
-            return None
-
-    class _StubApp:
-        def __init__(self):
-            self.router = _StubRouter()
-
-        def add_routes(self, *args, **kwargs):
-            return None
-
-    class _StubPromptServer:
-        def __init__(self):
-            self.routes = _StubRoute()
-            self.app = _StubApp()
-            self.supports = []
-
-        def send_sync(self, *args, **kwargs):
-            return None
-
-        def __getattr__(self, _name):
-            def _noop(*_args, **_kwargs):
-                return None
-
-            return _noop
-
-    if not hasattr(getattr(server, "PromptServer", object), "instance"):
-        server.PromptServer.instance = _StubPromptServer()
-
-    nodes.init_extra_nodes(init_custom_nodes=True, init_api_nodes=False)
-
-    with open(input_path, "r", encoding="utf-8") as handle:
-        required = json.load(handle)
-
-    available = set(nodes.NODE_CLASS_MAPPINGS.keys())
-    missing = [name for name in required if name not in available]
-    result["missing"] = missing
-    result["ok"] = not missing
-except Exception as exc:  # pragma: no cover - defensive path
-    result["errors"].append(f"{exc.__class__.__name__}: {exc}")
-    result["traceback"] = traceback.format_exc()
-
-with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump(result, handle, indent=2)
-"""
-
-
 MODEL_RESOLVER_SCRIPT = """import json
 import os
 import sys
@@ -1137,81 +1038,166 @@ def _validate_custom_nodes(
             summary="No custom nodes referenced by the selected workflow.",
         )
 
-    temp_dir = tempfile.mkdtemp(prefix="charon_comfy_validate_")
+    located_cli = locate_manager_cli(comfy_dir)
+    if not located_cli:
+        return ValidationIssue(
+            key="custom_nodes",
+            label="Custom nodes loaded",
+            ok=False,
+            summary="ComfyUI Manager is not installed.",
+            details=["Install comfyui-manager to enable dependency inspection."],
+        )
+    manager_cli, manager_root = located_cli
+
+    workflow = workflow_bundle.get("workflow") if isinstance(workflow_bundle, dict) else None
+    if not isinstance(workflow, dict):
+        return ValidationIssue(
+            key="custom_nodes",
+            label="Custom nodes loaded",
+            ok=True,
+            summary="Workflow structure missing; skipping custom node validation.",
+        )
+
+    temp_dir = tempfile.mkdtemp(prefix="charon_manager_validate_")
     try:
-        input_path = os.path.join(temp_dir, "nodes.json")
-        output_path = os.path.join(temp_dir, "result.json")
-        script_path = os.path.join(temp_dir, "validator.py")
+        workflow_path = os.path.join(temp_dir, "workflow.json")
+        output_path = os.path.join(temp_dir, "dependencies.json")
 
-        with open(input_path, "w", encoding="utf-8") as handle:
-            json.dump(required, handle)
-        with open(script_path, "w", encoding="utf-8") as handle:
-            handle.write(VALIDATOR_SCRIPT)
+        with open(workflow_path, "w", encoding="utf-8") as handle:
+            json.dump(workflow, handle)
 
-        command = [python_exe, script_path, input_path, output_path, comfy_dir]
-        system_debug(f"Running custom node validation: {command}")
+        command = [
+            python_exe,
+            manager_cli,
+            "deps-in-workflow",
+            "--workflow",
+            workflow_path,
+            "--output",
+            output_path,
+            "--mode",
+            "cache",
+        ]
+        env = os.environ.copy()
+        env.setdefault("COMFYUI_PATH", comfy_dir)
+        env.setdefault("COMFYUI_FOLDERS_BASE_PATH", comfy_dir)
+        system_debug(f"Running ComfyUI Manager dependency scan: {command}")
         completed = subprocess.run(
             command,
             cwd=comfy_dir,
             capture_output=True,
-            timeout=60,
+            timeout=180,
             text=True,
+            env=env,
         )
 
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
-            system_warning(f"Custom node validator returned code {completed.returncode}: {detail}")
+            system_warning(
+                f"ComfyUI Manager dependency scan returned code {completed.returncode}: {detail}"
+            )
             return ValidationIssue(
                 key="custom_nodes",
                 label="Custom nodes loaded",
                 ok=False,
-                summary="Custom node check failed to run.",
+                summary="ComfyUI Manager failed to inspect dependencies.",
                 details=[detail or "Check the console for details."],
             )
 
         if not os.path.exists(output_path):
-            system_warning("Custom node validator did not produce a result file.")
+            system_warning("ComfyUI Manager dependency scan did not produce a result file.")
             return ValidationIssue(
                 key="custom_nodes",
                 label="Custom nodes loaded",
                 ok=False,
-                summary="Custom node checker did not produce a result.",
+                summary="ComfyUI Manager did not produce dependency results.",
                 details=["Inspect the console output for errors."],
             )
 
         with open(output_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
 
-        missing = payload.get("missing") or []
-        errors = payload.get("errors") or []
+        dependencies = payload.get("custom_nodes") or {}
+        unknown_nodes = sorted(payload.get("unknown_nodes") or [])
+        missing = []
+        disabled = []
+        for repo, meta in dependencies.items():
+            state = (meta or {}).get("state", "").lower()
+            if state == "not-installed":
+                missing.append(repo)
+            elif state == "disabled":
+                disabled.append(repo)
+
+        extension_map = _load_manager_extension_map(manager_root)
+        node_repo_map = _build_node_repo_map(required, extension_map)
+        package_overrides = {
+            key: entry.get("display")
+            for key, entry in node_repo_map.items()
+            if entry.get("display")
+        }
+        node_repo_lookup = {
+            key: entry.get("repo")
+            for key, entry in node_repo_map.items()
+            if entry.get("repo")
+        }
+        missing_repo_keys = {_normalize_repo_url(repo) for repo in missing}
+        disabled_repo_keys = {_normalize_repo_url(repo) for repo in disabled}
+        missing_node_types = _derive_missing_node_types(
+            required,
+            node_repo_map,
+            missing_repo_keys,
+            disabled_repo_keys,
+            unknown_nodes,
+            IGNORED_NODE_TYPES,
+        )
+
         data = {
-            "missing": missing,
-            "errors": errors,
+            "dependencies": dependencies,
+            "unknown_nodes": unknown_nodes,
             "required": required,
+            "missing": missing_node_types,
+            "missing_repos": missing,
+            "disabled_repos": disabled,
+            "node_packages": package_overrides,
+            "node_repos": node_repo_lookup,
         }
 
-        if errors:
-            detail = payload.get("traceback") or errors[0]
-            system_warning(f"Custom node validation errors: {detail}")
-            return ValidationIssue(
-                key="custom_nodes",
-                label="Custom nodes loaded",
-                ok=False,
-                summary="Unable to load custom nodes. See traceback for details.",
-                details=errors,
-                data=data,
-            )
-
+        detail_lines: List[str] = []
         if missing:
-            detail_lines = [
-                f"{name} (missing from ComfyUI/custom_nodes)"
-                for name in missing
-            ]
+            detail_lines.append("Missing custom node repositories:")
+            for repo in missing:
+                detail_lines.append(f"  - {_display_name_for_repo(repo)} ({repo})")
+        if disabled:
+            detail_lines.append("Disabled custom node repositories:")
+            for repo in disabled:
+                detail_lines.append(f"  - {_display_name_for_repo(repo)} ({repo})")
+        if missing:
+            detail_lines.append("  Use ComfyUI Manager (cm-cli install <repo>) to install missing repositories.")
+        if disabled:
+            detail_lines.append("  Enable disabled custom nodes inside ComfyUI Manager.")
+        if unknown_nodes:
+            detail_lines.append("Unknown node classes:")
+            detail_lines.extend(f"  - {name}" for name in unknown_nodes)
+        if missing_node_types:
+            detail_lines.append("Missing node classes:")
+            detail_lines.extend(f"  - {name}" for name in missing_node_types)
+
+        if missing or disabled or unknown_nodes:
+            has_missing_repos = bool(missing_node_types or missing or disabled)
+            summary_text = (
+                f"Missing {len(missing_node_types)} custom node type(s)."
+                if missing_node_types
+                else (
+                    "ComfyUI Manager detected missing custom node repositories."
+                    if (missing or disabled)
+                    else f"{len(unknown_nodes)} unknown custom node class(es) detected."
+                )
+            )
+            issue_ok = not has_missing_repos
             return ValidationIssue(
                 key="custom_nodes",
                 label="Custom nodes loaded",
-                ok=False,
-                summary=f"{len(missing)} custom node type(s) not found.",
+                ok=issue_ok,
+                summary=summary_text,
                 details=detail_lines,
                 data=data,
             )
@@ -1220,7 +1206,7 @@ def _validate_custom_nodes(
             key="custom_nodes",
             label="Custom nodes loaded",
             ok=True,
-            summary="All referenced custom nodes loaded successfully.",
+            summary="ComfyUI Manager reports all custom nodes available.",
             details=[],
             data=data,
         )
@@ -1229,20 +1215,124 @@ def _validate_custom_nodes(
             key="custom_nodes",
             label="Custom nodes loaded",
             ok=False,
-            summary="Custom node validation timed out.",
+            summary="ComfyUI Manager dependency scan timed out.",
             details=["Ensure the embedded python environment can launch within 60 seconds."],
         )
     except Exception as exc:  # pragma: no cover - defensive path
-        system_error(f"Custom node validation failed: {exc}")
+        system_error(f"ComfyUI Manager dependency scan failed: {exc}")
         return ValidationIssue(
             key="custom_nodes",
             label="Custom nodes loaded",
             ok=False,
-            summary="Custom node check crashed.",
+            summary="ComfyUI Manager dependency scan crashed.",
             details=[str(exc)],
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _load_manager_extension_map(manager_root: str) -> Dict[str, Any]:
+    if not manager_root:
+        return {}
+    candidate = os.path.join(manager_root, "node_db", "new", "extension-node-map.json")
+    if not os.path.exists(candidate):
+        return {}
+    try:
+        with open(candidate, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        system_warning(f"Failed to read ComfyUI Manager extension map: {exc}")
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_node_repo_map(
+    required: Iterable[str],
+    extension_map: Dict[str, Any],
+) -> Dict[str, Dict[str, str]]:
+    repo_lookup: Dict[str, str] = {}
+    for repo_url, payload in (extension_map or {}).items():
+        nodes: Iterable[Any] = []
+        if isinstance(payload, list) and payload:
+            nodes = payload[0] or []
+        elif isinstance(payload, dict):
+            nodes = payload.get("nodes") or []
+        for node_name in nodes:
+            key = str(node_name or "").strip().lower()
+            if not key or key in repo_lookup:
+                continue
+            repo_lookup[key] = str(repo_url or "").strip()
+
+    node_map: Dict[str, Dict[str, str]] = {}
+    for node_name in required:
+        normalized = str(node_name or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        repo_url = repo_lookup.get(key)
+        if repo_url:
+            node_map[key] = {
+                "repo": repo_url,
+                "display": _display_name_for_repo(repo_url),
+            }
+    return node_map
+
+
+def _derive_missing_node_types(
+    required: Iterable[str],
+    node_repo_map: Dict[str, Dict[str, str]],
+    missing_repo_keys: Iterable[str],
+    disabled_repo_keys: Iterable[str],
+    unknown_nodes: Iterable[str],
+    ignored_nodes: Optional[Iterable[str]] = None,
+) -> List[str]:
+    missing_nodes: List[str] = []
+    seen: set[str] = set()
+    missing_repos = {repo for repo in missing_repo_keys if repo}
+    disabled_repos = {repo for repo in disabled_repo_keys if repo}
+    ignored = {str(item).strip().lower() for item in ignored_nodes or []}
+
+    for node_name in required:
+        normalized = str(node_name or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        repo_entry = node_repo_map.get(key) or {}
+        repo_url = repo_entry.get("repo") or ""
+        repo_key = _normalize_repo_url(repo_url)
+        if repo_key and (repo_key in missing_repos or repo_key in disabled_repos):
+            if normalized not in seen:
+                missing_nodes.append(normalized)
+                seen.add(normalized)
+
+    for node_name in unknown_nodes or []:
+        normalized = str(node_name or "").strip()
+        key = normalized.lower()
+        if normalized and key not in ignored and normalized not in seen:
+            missing_nodes.append(normalized)
+            seen.add(normalized)
+    return missing_nodes
+
+
+def _display_name_for_repo(repo: str) -> str:
+    repo = (repo or "").strip()
+    if not repo:
+        return "Custom node"
+    parsed = urlparse(repo)
+    path = (parsed.path or "").rstrip("/")
+    if path:
+        name = path.split("/")[-1]
+    else:
+        name = os.path.basename(repo.rstrip("/"))
+    if name.endswith(".git"):
+        name = name[:-4]
+    return name or repo
+
+
+def _normalize_repo_url(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().rstrip("/").lower()
 
 
 def _collect_model_references(
