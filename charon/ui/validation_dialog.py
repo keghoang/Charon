@@ -916,6 +916,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             row_info["issue_row"] = issue_row
             row_info["button"] = issue_row.btn_resolve
             row_info["success_text"] = f"{display_name} resolved"
+            if row_info.get("resolved"):
+                issue_row.mark_as_successful(
+                    row_info.get("success_text"),
+                    detail=row_info.get("resolve_method") or None,
+                )
             self._issue_rows.setdefault("models", []).append(issue_row)
             self._issues_layout.addWidget(issue_row)
         return True
@@ -1247,8 +1252,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if folder_path and not reference.get("folder_path"):
                 reference["folder_path"] = folder_path
             table.setItem(row, 0, QtWidgets.QTableWidgetItem(display_name))
-            status_item = QtWidgets.QTableWidgetItem("Missing")
-            self._apply_status_style(status_item, "Missing")
+            resolve_status = str(reference.get("resolve_status") or "").strip().lower()
+            resolve_method = str(reference.get("resolve_method") or "").strip()
+            resolved_flag = resolve_status in {"success", "resolved", "copied"}
+            status_text = "Resolved" if resolved_flag else "Missing"
+            status_item = QtWidgets.QTableWidgetItem(status_text)
+            self._apply_status_style(status_item, status_text)
             table.setItem(row, 1, status_item)
             location_text = display_source or name or "Not provided"
             location_item = QtWidgets.QTableWidgetItem(location_text)
@@ -1260,28 +1269,44 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if reference.get("directory_invalid"):
                 location_item.setForeground(QtGui.QBrush(QtGui.QColor("#DAA520")))
             else:
-                location_item.setForeground(QtGui.QBrush(QtGui.QColor("#B22222")))
+                location_item.setForeground(
+                    QtGui.QBrush(QtGui.QColor(SUCCESS_COLOR if resolved_flag else "#B22222"))
+                )
             table.setItem(row, 2, location_item)
-            button = QtWidgets.QPushButton("Resolve")
-            button.setFixedHeight(24)
-            button.setMaximumWidth(ACTION_BUTTON_WIDTH)
-            button.setStyleSheet(
-                "QPushButton {"
-                " background-color: #B22222;"
-                " color: white;"
-                " border: none;"
-                " border-radius: 4px;"
-                " padding: 2px 8px;"
-                " }"
-                "QPushButton:hover {"
-                " background-color: #9B1C1C;"
-                " }"
-                "QPushButton:disabled {"
-                " background-color: #888888;"
-                " color: #EEEEEE;"
-                " }"
-            )
-            button.clicked.connect(lambda _checked=False, r=row: self._handle_model_auto_resolve(r))
+            button: Optional[QtWidgets.QPushButton]
+            if resolved_flag:
+                button = QtWidgets.QPushButton("Resolved")
+                button.setEnabled(False)
+                button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #228B22;"
+                    " color: white;"
+                    " border: none;"
+                    " border-radius: 4px;"
+                    " padding: 2px 8px;"
+                    " }"
+                )
+            else:
+                button = QtWidgets.QPushButton("Resolve")
+                button.setFixedHeight(24)
+                button.setMaximumWidth(ACTION_BUTTON_WIDTH)
+                button.setStyleSheet(
+                    "QPushButton {"
+                    " background-color: #B22222;"
+                    " color: white;"
+                    " border: none;"
+                    " border-radius: 4px;"
+                    " padding: 2px 8px;"
+                    " }"
+                    "QPushButton:hover {"
+                    " background-color: #9B1C1C;"
+                    " }"
+                    "QPushButton:disabled {"
+                    " background-color: #888888;"
+                    " color: #EEEEEE;"
+                    " }"
+                )
+                button.clicked.connect(lambda _checked=False, r=row: self._handle_model_auto_resolve(r))
             table.setCellWidget(row, 3, button)
             row_mapping[row] = {
                 "reference": dict(reference),
@@ -1303,6 +1328,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "url": url_value,
                 "directory_invalid": bool(reference.get("directory_invalid")),
                 "model_paths": data.get("model_paths") or {},
+                "resolved": resolved_flag,
+                "resolve_method": resolve_method,
             }
             row += 1
 
@@ -1823,9 +1850,14 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     pass
                 button.update()
                 button.repaint()
+        method_detail = note or display_text
+        row_info["resolve_method"] = method_detail
         issue_row = row_info.get("issue_row")
         if isinstance(issue_row, IssueRow):
-            issue_row.mark_as_successful(row_info.get("success_text") or status_text)
+            issue_row.mark_as_successful(
+                row_info.get("success_text") or status_text,
+                detail=method_detail or None,
+            )
         row_info["resolved"] = True
         if isinstance(row_info, dict):
             if workflow_value:
@@ -1838,8 +1870,29 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if isinstance(reference, dict):
             effective_value = workflow_value or display_text
             reference["name"] = effective_value
+            reference["resolve_status"] = "success"
+            reference["resolve_method"] = method_detail
+            reference["resolve_failed"] = ""
         if note:
             self._append_issue_note("models", note)
+        # Update backing payload so reopen pulls resolved state from cache.
+        issues = self._payload.get("issues") if isinstance(self._payload, dict) else None
+        if isinstance(issues, list):
+            for issue in issues:
+                if not isinstance(issue, dict) or issue.get("key") != "models":
+                    continue
+                data = issue.get("data") or {}
+                if not isinstance(data, dict):
+                    continue
+                missing_list = data.get("missing")
+                idx = row_info.get("reference_index")
+                if isinstance(missing_list, list) and isinstance(idx, int) and 0 <= idx < len(missing_list):
+                    entry = missing_list[idx]
+                    if isinstance(entry, dict):
+                        entry["resolve_status"] = "success"
+                        entry["resolve_method"] = method_detail
+                        entry["resolve_failed"] = ""
+                break
         if self._workflow_folder:
             entry = {
                 "event": "model_resolved",
@@ -1850,8 +1903,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "reference": reference,
                 "reference_signature": row_info.get("reference_signature"),
                 "resolved_path": resolved_path or display_text,
+                "resolve_method": method_detail,
             }
             append_validation_resolve_entry(self._workflow_folder, entry)
+            try:
+                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+            except Exception:
+                pass
         self._refresh_models_issue_status()
         self._refresh_models_issue_status()
         issue_info = self._issue_lookup.get("models") or {}
@@ -2484,7 +2542,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 display_text = self._format_model_display_path(selected, models_root)
                 success, message = self._apply_model_override(original_name, workflow_value)
                 if success:
-                    note = ""
+                    note = f"Selected local model: {display_text}"
                     system_debug(
                         "[Validation] Local model resolved | "
                         f"selected='{selected}' workflow_value='{workflow_value}'"
@@ -2580,11 +2638,12 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     "[Validation] Detected model already present at expected path | "
                     f"path='{expected_path}'"
                 )
+                note = f"Found existing model at {destination_display}."
                 self._mark_model_resolved(
                     row,
                     "Resolved",
                     destination_display,
-                    "",
+                    note,
                     workflow_value,
                     resolved_path=expected_path,
                 )
