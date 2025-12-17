@@ -193,37 +193,31 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 state = self._get_validation_state_for_script(script)
                 entry = self._get_validation_entry_for_script(script)
                 phase = int(entry.get("phase", 0)) if isinstance(entry, dict) else 0
+                if state == "validated":
+                    return "✔ Ready"
+                if state == "needs_resolve":
+                    return "⚠ Missing Models or Nodes"
                 if state == "validating":
                     dots = "." * (phase % 4)
-                    return f"Validating{dots}"
-                if state == "validated":
-                    return self.PASSED_LABEL
-                if state == "needs_resolve":
-                    return "Resolve"
-                return "Validate"
+                    return f"⏳ Resolve in progress{dots}"
+                return "Inactive"
             elif col == self.COL_RUN:
-                # This column will have buttons, no text
-                return ""
-                
-        elif role == ForegroundRole:
-            # Only apply color to name column
-            if col == self.COL_NAME:
-                return self.get_foreground_brush(script)
-            if col == self.COL_VALIDATE:
                 state = self._get_validation_state_for_script(script)
                 if state == "validated":
-                    return QtGui.QBrush(QtGui.QColor(34, 139, 34))
+                    return "Grab"
                 if state == "needs_resolve":
-                    return QtGui.QBrush(QtGui.QColor(178, 34, 34))
+                    return "Fix Issue"
+                if state == "validating":
+                    return "Resolve..."
+                return "Activate"
+                
+        elif role == ForegroundRole:
+            if col == self.COL_NAME:
+                return self.get_foreground_brush(script)
                     
         elif role == TextAlignmentRole:
             if col == self.COL_HOTKEY:
                 return AlignCenter
-        elif role == FontRole:
-            if col == self.COL_VALIDATE and self._get_validation_state_for_script(script) == "validated":
-                bold = QtGui.QFont()
-                bold.setBold(True)
-                return bold
                 
         # Custom roles for accessing script data
         elif role == self.ScriptRole:
@@ -305,12 +299,11 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         self.validation_states[normalized] = entry
         row = self._row_for_path(normalized)
         if row is not None:
-            model_index = self.index(row, self.COL_VALIDATE)
-            self.dataChanged.emit(
-                model_index,
-                model_index,
-                [DisplayRole, self.ValidationStateRole, self.ValidationEnabledRole, self.ValidationPayloadRole],
-            )
+            status_index = self.index(row, self.COL_VALIDATE)
+            action_index = self.index(row, self.COL_RUN)
+            roles = [DisplayRole, self.ValidationStateRole, self.ValidationEnabledRole, self.ValidationPayloadRole]
+            self.dataChanged.emit(status_index, status_index, roles)
+            self.dataChanged.emit(action_index, action_index, [DisplayRole, self.ValidationEnabledRole])
 
     def get_validation_state(self, script_path: str) -> str:
         normalized = self._normalize_path(script_path)
@@ -333,8 +326,10 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 if row is not None:
                     updated_rows.append(row)
         for row in updated_rows:
-            index = self.index(row, self.COL_VALIDATE)
-            self.dataChanged.emit(index, index, [DisplayRole])
+            status_index = self.index(row, self.COL_VALIDATE)
+            action_index = self.index(row, self.COL_RUN)
+            self.dataChanged.emit(status_index, status_index, [DisplayRole])
+            self.dataChanged.emit(action_index, action_index, [DisplayRole])
         return bool(updated_rows)
 
     def has_active_validation(self) -> bool:
