@@ -1188,6 +1188,11 @@ def _render_nuke_node(node_to_render, path):
         nuke.execute(w, nuke.frame(), nuke.frame())
     finally:
         nuke.delete(w)
+        if transformed_node != node_to_render:
+            try:
+                nuke.delete(transformed_node)
+            except Exception:
+                pass
 
 def _assign_to_workflow(workflow, node_id, filename):
     node = workflow.get(str(node_id))
@@ -2678,6 +2683,11 @@ def process_charonop_node():
                         nuke.delete(write_node)
                     except Exception:
                         pass
+                    if transformed_source_node != source_node:
+                        try:
+                            nuke.delete(transformed_source_node)
+                        except Exception:
+                            pass
                     if shuffle_node:
                         try:
                             nuke.delete(shuffle_node)
