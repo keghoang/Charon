@@ -1,4 +1,4 @@
-﻿import json
+import json
 import time
 import uuid
 from typing import Any, Dict, List
@@ -18,7 +18,6 @@ def _generate_charon_node_id() -> str:
 def _build_default_status_payload(
     workflow_name: str,
     workflow_path: str,
-    auto_import_enabled: bool,
     node_id: str,
 ) -> Dict[str, Any]:
     """Return the default status payload stored on freshly created nodes."""
@@ -29,7 +28,7 @@ def _build_default_status_payload(
         "updated_at": time.time(),
         "workflow_name": workflow_name,
         "workflow_path": workflow_path or "",
-        "auto_import": bool(auto_import_enabled),
+        "auto_import": True,
         "runs": [],
         "node_id": node_id,
         "read_node_id": "",
@@ -46,7 +45,6 @@ def create_charon_group_node(
     workflow_path=None,
     parameters=None,
     recreate_script=None,
-    auto_import_default=True,
 ):
     inputs = list(inputs or [])
     node = nuke.createNode("Group", inpanel=False)
@@ -232,6 +230,27 @@ def create_charon_group_node(
         pass
     node.addKnob(process_knob)
 
+    select_board_knob = nuke.PyScript_Knob("charon_focus_board", "Select in CharonBoard")
+    select_board_knob.setCommand(
+        "\n".join(
+            (
+                "import nuke",
+                "try:",
+                "    from charon.ui.window_manager import WindowManager",
+                "    current_node = nuke.thisNode()",
+                "    WindowManager.focus_charon_board_node(current_node.name())",
+                "except Exception:",
+                "    pass",
+            )
+        )
+    )
+    select_board_knob.setFlag(nuke.STARTLINE)
+    try:
+        select_board_knob.setTooltip("Highlight this node inside CharonBoard.")
+    except Exception:
+        pass
+    node.addKnob(select_board_knob)
+
     reuse_knob = nuke.Boolean_Knob(
         "charon_reuse_output",
         "Update future iteration in the same Read node",
@@ -275,7 +294,6 @@ def create_charon_group_node(
     status_payload = _build_default_status_payload(
         workflow_name=workflow_name,
         workflow_path=workflow_path or "",
-        auto_import_enabled=bool(auto_import_default),
         node_id=node_id_value,
     )
     try:
@@ -283,7 +301,7 @@ def create_charon_group_node(
     except Exception:
         pass
     try:
-        node.setMetaData("charon/auto_import", "1" if auto_import_default else "0")
+        node.setMetaData("charon/auto_import", "1")
     except Exception:
         pass
     try:
@@ -500,37 +518,6 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
         except Exception:
             pass
 
-    def _resolve_auto_import() -> bool:
-        try:
-            knob = node.knob("charon_auto_import")
-        except Exception:
-            knob = None
-        if knob is not None:
-            try:
-                raw_value = knob.value()
-            except Exception:
-                raw_value = None
-            if raw_value is not None:
-                if isinstance(raw_value, str):
-                    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
-                try:
-                    return bool(int(raw_value))
-                except Exception:
-                    return bool(raw_value)
-        try:
-            meta_val = node.metadata("charon/auto_import")
-        except Exception:
-            meta_val = None
-        if isinstance(meta_val, str):
-            lowered = meta_val.strip().lower()
-            if lowered in {"0", "false", "off", "no"}:
-                return False
-            if lowered in {"1", "true", "on", "yes"}:
-                return True
-        elif meta_val is not None:
-            return bool(meta_val)
-        return True
-
     node_id_value = (node_id or "").strip().lower()[:12]
     if not node_id_value:
         node_id_value = _generate_charon_node_id()
@@ -558,11 +545,10 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
         if meta_path:
             workflow_path = str(meta_path)
 
-    auto_import_enabled = _resolve_auto_import()
+    auto_import_enabled = True
     status_payload = _build_default_status_payload(
         workflow_name=workflow_name,
         workflow_path=workflow_path,
-        auto_import_enabled=auto_import_enabled,
         node_id=node_id_value,
     )
     serialized_payload = json.dumps(status_payload)
@@ -571,6 +557,7 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
     _set_knob_value("charon_status", "Ready")
     _set_knob_value("charon_progress", 0.0)
     _set_knob_value("charon_status_payload", serialized_payload)
+    _set_knob_value("charon_auto_import", 1)
     _set_knob_value("charon_prompt_id", "")
     _set_knob_value("charon_prompt_path", "")
     _set_knob_value("charon_last_output", "")
@@ -600,6 +587,10 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
     # Persist metadata mirrors
     try:
         node.setMetaData("charon/status_payload", serialized_payload)
+    except Exception:
+        pass
+    try:
+        node.setMetaData("charon/auto_import", "1")
     except Exception:
         pass
     try:

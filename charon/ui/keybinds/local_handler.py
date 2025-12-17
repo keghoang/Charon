@@ -18,7 +18,6 @@ class LocalKeybindHandler(QtCore.QObject):
     - Ctrl+Enter: Run script
     - Ctrl+R: Refresh
     - Ctrl+O: Open folder
-    - Spacebar: Open readme
     """
     
     # Signal emitted when a keybind is triggered

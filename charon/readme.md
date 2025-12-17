@@ -18,7 +18,6 @@ Charon helps you discover studio-ready workflows, drop them into Nuke, and drive
 - `Ctrl+R` Refresh repository index and metadata cache.
 - `Ctrl+Enter` Process the selected workflow immediately.
 - `F4` Toggle Quick Search anywhere in the panel.
-- `Space` Open the workflow readme for notes and troubleshooting.
 
 ## Helpful Tips
 - Use the Tag Bar to filter down to lighting, look-dev, or utility workflows.

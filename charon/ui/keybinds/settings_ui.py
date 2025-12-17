@@ -697,7 +697,8 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                 'quick_search': 'Quick Search',
                 'run_script': 'Run Script',
                 'refresh': 'Refresh',
-                'open_folder': 'Open Folder',\r\n                'settings': 'Open Settings',
+                'open_folder': 'Open Folder',
+                'settings': 'Open Settings',
                 'tiny_mode': 'Tiny Mode'
             }
             
@@ -820,7 +821,8 @@ class KeybindSettingsDialog(QtWidgets.QDialog):
                     'quick_search': 'Quick Search',
                     'run_script': 'Run Script',
                     'refresh': 'Refresh',
-                    'open_folder': 'Open Folder',\r\n                    'settings': 'Open Settings',
+                    'open_folder': 'Open Folder',
+                    'settings': 'Open Settings',
                     'tiny_mode': 'Tiny Mode'
                 }
                 

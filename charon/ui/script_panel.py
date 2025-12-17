@@ -78,7 +78,7 @@ class ScriptPanel(QtWidgets.QWidget):
         title_layout.addWidget(self.folders_indicator)
         
         # Add New Workflow button - size it to fit within header
-        self.new_script_button = QtWidgets.QPushButton("Add Workflow")
+        self.new_script_button = QtWidgets.QPushButton("New Workflow +")
         self.new_script_button.setToolTip("Create New Workflow")
         self.new_script_button.setCursor(Qt.CursorShape.PointingHandCursor)
         
@@ -242,7 +242,7 @@ class ScriptPanel(QtWidgets.QWidget):
         # Always allow creating workflows; they are saved into the user's folder.
         self.new_script_button.setVisible(True)
         
-        # Clear delegate caches when loading new folder (to pick up icon/readme changes)
+        # Clear delegate caches when loading new folder (to pick up icon changes)
         self.script_view.clear_delegate_caches()
         
         # Don't refresh metadata during normal loading - this was causing slowdown
@@ -796,16 +796,6 @@ class ScriptPanel(QtWidgets.QWidget):
             cache_manager.invalidate_folder(target_folder)
         except Exception:
             pass
-
-        # Optionally author a simple README if description was provided
-        description = updated_meta.get("description", "").strip()
-        readme_path = os.path.join(target_folder, "README.md")
-        if description and not os.path.exists(readme_path):
-            try:
-                with open(readme_path, "w", encoding="utf-8") as handle:
-                    handle.write(f"# {workflow_name}\n\n{description}\n")
-            except Exception:
-                pass  # Non-fatal
 
         if hasattr(self.metadata_panel, 'script_created'):
             self.metadata_panel.script_created.emit(target_folder)

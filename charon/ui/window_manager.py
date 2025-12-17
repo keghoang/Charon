@@ -311,7 +311,37 @@ class WindowManager:
 
         WindowManager._ACTIVE_WINDOW = None
         return None
-    
+
+    @staticmethod
+    def focus_charon_board_node(
+        node_name: str,
+        ensure_visible: bool = True,
+        refresh_if_missing: bool = True,
+    ) -> bool:
+        """
+        Ask the active Charon window to highlight a node in CharonBoard.
+        Returns True if the node was found and focused.
+        """
+        if not node_name:
+            return False
+
+        window = WindowManager._get_existing_window()
+        if not window:
+            return False
+
+        board = getattr(window, "charon_board_panel", None)
+        if not board or not hasattr(board, "focus_node_by_name"):
+            return False
+
+        if board.focus_node_by_name(node_name, ensure_visible=ensure_visible):
+            return True
+
+        if refresh_if_missing and hasattr(board, "refresh_nodes"):
+            board.refresh_nodes()
+            return board.focus_node_by_name(node_name, ensure_visible=ensure_visible)
+
+        return False
+
     @staticmethod
     def _register_active_window(window: CharonWindow) -> None:
         WindowManager._ACTIVE_WINDOW = window

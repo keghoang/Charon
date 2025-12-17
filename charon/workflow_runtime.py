@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import config
-from . import preferences
 from .charon_logger import system_debug, system_warning, system_error
 from .metadata_manager import load_workflow_data, get_charon_config
 from .utilities import get_current_user_slug
@@ -162,8 +161,7 @@ def spawn_charon_node(
     else:
         nuke = nuke_module
 
-    if auto_import is None:
-        auto_import = preferences.get_auto_import_default()
+    auto_import = True
 
     node, _ = create_charon_group_node(
         nuke=nuke,
@@ -175,11 +173,10 @@ def spawn_charon_node(
         recreate_script=recreate_script,
         workflow_path=workflow_path,
         parameters=parameter_specs,
-        auto_import_default=auto_import,
     )
 
     try:
-        node.knob("charon_auto_import").setValue(1 if auto_import else 0)
+        node.knob("charon_auto_import").setValue(1)
     except Exception:
         pass
 

@@ -221,7 +221,7 @@ def allocate_charon_output_path(
     _ensure_directory(base_output_dir)
 
     prefix = OUTPUT_PREFIX
-    version_pattern = re.compile(rf"{re.escape(prefix)}(\d{{4}})", re.IGNORECASE)
+    version_pattern = re.compile(rf"{re.escape(prefix)}(\d+)", re.IGNORECASE)
     highest_version = 0
     try:
         for entry in os.listdir(base_output_dir):

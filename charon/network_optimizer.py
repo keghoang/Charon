@@ -8,7 +8,7 @@ and minimizing individual file system calls.
 import os
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Tuple, Set, Optional
+from typing import Dict, Optional
 from .cache_manager import get_cache_manager
 from .charon_logger import system_debug, system_error
 from .metadata_manager import get_metadata_path
@@ -79,65 +79,6 @@ class NetworkBatchReader:
         except Exception as e:
             system_error(f"Error reading {path}: {e}")
             return None
-    
-    def batch_check_readmes(self, folder_path: str) -> Set[str]:
-        """
-        Check which scripts have readme files.
-        
-        Returns:
-            Set of script names that have readme files
-        """
-        scripts_with_readme = set()
-        
-        try:
-            # Check all potential readme locations in parallel
-            readme_checks = []
-            with os.scandir(folder_path) as entries:
-                for entry in entries:
-                    if entry.is_dir() and not entry.name.startswith('.'):
-                        readme_checks.append((
-                            entry.name,
-                            os.path.join(entry.path, "readme.md"),
-                            os.path.join(entry.path, "README.md")
-                        ))
-            
-            # Check in parallel
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                future_to_script = {
-                    executor.submit(self._check_readme_exists, lower, upper): name
-                    for name, lower, upper in readme_checks
-                }
-                
-                for future in as_completed(future_to_script):
-                    script_name = future_to_script[future]
-                    if future.result():
-                        scripts_with_readme.add(script_name)
-            
-            return scripts_with_readme
-            
-        except Exception as e:
-            system_error(f"Error batch checking readmes in {folder_path}: {e}")
-            return set()
-    
-    def _check_readme_exists(self, path1: str, path2: str) -> bool:
-        """Check if either readme path exists."""
-        try:
-            # Try opening instead of exists check
-            try:
-                with open(path1, 'r'):
-                    return True
-            except:
-                pass
-            
-            try:
-                with open(path2, 'r'):
-                    return True
-            except:
-                pass
-                
-            return False
-        except:
-            return False
     
     def batch_check_compatibility(self, folder_path: str, host: str) -> Dict[str, bool]:
         """

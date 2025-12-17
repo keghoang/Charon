@@ -236,7 +236,6 @@ class KeybindManager(QtCore.QObject):
                 'run_script': 'Run Script',
                 'refresh': 'Refresh',
                 'open_folder': 'Open Folder',
-                'open_readme': 'Open Readme'
             }
             
             current_name = action_names.get(local_action, local_action)
