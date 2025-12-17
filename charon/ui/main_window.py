@@ -498,6 +498,12 @@ class CharonWindow(QtWidgets.QWidget):
         self.project_label.setStyleSheet("color: #7f848e; font-size: 11px;")
         content_layout.addWidget(self.project_label)
         
+        # GPU Label (Moved from footer, placed below Project Label)
+        self.gpu_label = QtWidgets.QLabel(self.normal_widget)
+        self.gpu_label.setObjectName("charonGpuLabel")
+        self.gpu_label.setStyleSheet("color: #7f848e; font-size: 11px;")
+        content_layout.addWidget(self.gpu_label)
+        
         content_layout.addSpacing(10)
         
         # Main horizontal splitter: folder panel, center panel, and history panel
@@ -677,31 +683,15 @@ class CharonWindow(QtWidgets.QWidget):
         # Left margin reduced to 1 (was 4) to move tracker left by 3px
         footer_layout.setContentsMargins(1, 0, 4, 4)
         footer_layout.setSpacing(4)
-        footer_layout.setVerticalSpacing(5)
+        footer_layout.setVerticalSpacing(0) # Reduce vertical spacing since it's just one row effectively
 
-        # Row 0 Left: GPU Label
-        self.gpu_label = QtWidgets.QLabel(parent)
-        self.gpu_label.setObjectName("charonGpuLabel")
-        self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.gpu_label.setWordWrap(False)
-        # Indent 6px to move text right (1px margin + 6px indent = 7px visual start)
-        # Original was 4px start. 7px is +3px shift to the right.
-        self.gpu_label.setIndent(6)
-        # Use existing font since project_label is created earlier now
-        gpu_font = QtGui.QFont(self.project_label.font())
-        gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
-        self.gpu_label.setFont(gpu_font)
-        self.gpu_label.setStyleSheet("color: #cfd3dc;")
-        
-        footer_layout.addWidget(self.gpu_label, 0, 0, Qt.AlignLeft | Qt.AlignBottom)
-
-        # Row 1 Left: Resource Widget
+        # Row 0 Left: Resource Widget
         self.resource_widget = ResourceWidget(parent)
         # Add slight left margin to resource widget to align bars with text above
         self.resource_widget.setContentsMargins(0, 0, 0, 0)
-        footer_layout.addWidget(self.resource_widget, 1, 0, Qt.AlignLeft | Qt.AlignTop)
+        footer_layout.addWidget(self.resource_widget, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
-        # Row 1 Right: Comfy Connection
+        # Row 0 Right: Comfy Connection
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
         self.comfy_connection_widget.connection_status_changed.connect(
@@ -710,9 +700,9 @@ class CharonWindow(QtWidgets.QWidget):
         self.script_panel.update_comfy_connection_status(
             self.comfy_connection_widget.is_connected()
         )
-        footer_layout.addWidget(self.comfy_connection_widget, 1, 2, Qt.AlignRight | Qt.AlignVCenter)
+        footer_layout.addWidget(self.comfy_connection_widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
         
-        # Spacer Column (Row 0-1, Col 1)
+        # Spacer Column (Row 0, Col 1)
         footer_layout.setColumnStretch(1, 1)
         
         # Set the main footer layout reference to our grid layout
@@ -869,6 +859,10 @@ QPushButton#NewWorkflowButton:pressed {{
         # Also align the project label which is below the actions
         if hasattr(self, "project_label"):
             self.project_label.setContentsMargins(left_margin, 0, 0, 0)
+            
+        # Also align the gpu label which is below the project label
+        if hasattr(self, "gpu_label"):
+            self.gpu_label.setContentsMargins(left_margin, 0, 0, 0)
 
     def _apply_main_background(self):
         """Apply the primary background color across the window surfaces."""
@@ -1041,8 +1035,8 @@ QPushButton#NewWorkflowButton:pressed {{
         project_path = os.environ.get("BUCK_PROJECT_PATH", "").strip()
         if project_path:
             project_name = Path(project_path).name or project_path
-            # Prefix removed per user request
-            label.setText(f"{project_name}")
+            # Prefix added back per user request
+            label.setText(f"Project: {project_name}")
             label.setToolTip(project_path)
             return
 
@@ -1052,7 +1046,7 @@ QPushButton#NewWorkflowButton:pressed {{
         else:
             destination = os.path.join(get_charon_temp_dir(), "results")
         destination = os.path.normpath(destination)
-        label.setText(f"Unknown Project")
+        label.setText(f"Project: Unknown")
         label.setToolTip(f"Project not found, saving to {destination}")
 
     def _refresh_gpu_display(self):
@@ -1071,8 +1065,8 @@ QPushButton#NewWorkflowButton:pressed {{
                 system_debug(f"GPU detection fallback failed: {exc}")
                 self._gpu_summary = "Unknown GPU"
         summary = self._gpu_summary or "Unknown GPU"
-        # Prefix removed per user request
-        label.setText(summary)
+        # Prefix added back per user request
+        label.setText(f"GPU: {summary}")
         label.setToolTip(summary)
     
     def _on_keybind_triggered(self, action: str):
