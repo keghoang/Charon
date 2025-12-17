@@ -73,12 +73,6 @@ Group {
   xpos -468
   ypos 495
  }
- Unpremult {
-  name Unpremult1
-  xpos -468
-  ypos 567
-  disable {{"\[python not\\ len(\\\[n\\ for\\ n\\ in\\ nuke.channels(nuke.thisNode().input(0))\\ if\\ n.find(\\\".a\\\")\\ !=\\ -1\\])>0]"}}
- }
  OCIOColorSpace {
   in_colorspace compositing_linear
   out_colorspace default
@@ -98,12 +92,6 @@ Group {
   ypos 652
   addUserKnob {20 User}
   addUserKnob {26 viewer_note l "View Transform" T "Driven by Root > Color > Thumbnails setting"}
- }
- Premult {
-  name Premult1
-  xpos -468
-  ypos 711
-  disable {{"\[python not\\ len(\\\[n\\ for\\ n\\ in\\ nuke.channels(nuke.thisNode().input(0))\\ if\\ n.find(\\\".a\\\")\\ !=\\ -1\\])>0]"}}
  }
  Output {
   name Output1
@@ -3878,7 +3866,7 @@ def process_charonop_node():
                                                 if ivt_node:
                                                     ivt_node.setInput(0, read_node)
                                                     ivt_node.setXpos(read_node.xpos())
-                                                    ivt_node.setYpos(read_node.ypos() + 70)
+                                                    ivt_node.setYpos(read_node.ypos() + 100)
                                                     
                                             except Exception as paste_error:
                                                 log_debug(f"Failed to paste InverseViewTransform: {paste_error}", "WARNING")
