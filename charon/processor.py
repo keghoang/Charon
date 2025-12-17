@@ -1211,7 +1211,7 @@ def _create_step2_result_group(charon_node, image_paths):
     for n in nuke.selectedNodes():
         n.setSelected(False)
     
-    start_x = charon_node.xpos() + 200
+    start_x = charon_node.xpos()
     start_y = charon_node.ypos() + 200
     
     safe_name = "".join(c if c.isalnum() else "_" for c in charon_node.name())
@@ -3435,8 +3435,10 @@ def process_charonop_node():
                                 if angle_desc or override_prompt:
                                     # Try to get template from knob
                                     prompt_template = ""
+                                    target_spec = None
                                     for spec in parameter_specs_local:
                                         if spec.get('attribute') == 'prompt':
+                                            target_spec = spec
                                             knob_name = spec.get('knob')
                                             if knob_name:
                                                 try:
@@ -3452,13 +3454,17 @@ def process_charonop_node():
                                             final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
                                         log_debug(f"Step 2: Using prompt template: {final_prompt}")
                                         
-                                        for nid, ndata in prompt_payload.items():
-                                            inputs = ndata.get('inputs')
-                                            if isinstance(inputs, dict):
-                                                if 'prompt' in inputs:
-                                                    inputs['prompt'] = final_prompt
+                                        if target_spec:
+                                            binding = target_spec.get('binding')
+                                            if binding and binding.get('api_node') and binding.get('api_input'):
+                                                api_node_id = str(binding['api_node'])
+                                                api_input = binding['api_input']
+                                                target_node = prompt_payload.get(api_node_id)
+                                                if target_node:
+                                                    inputs = target_node.setdefault('inputs', {})
+                                                    inputs[api_input] = final_prompt
                                                     injected_via_template = True
-                                                    log_debug(f"Step 2: Injected prompt into node {nid} input 'prompt'")
+                                                    log_debug(f"Step 2: Injected prompt into node {api_node_id} input '{api_input}'")
                                     
                                     if not injected_via_template:
                                         log_debug(f"Step 2: Attempting to inject angle '{angle_desc}' via token replacement (fallback)...")
@@ -3475,14 +3481,6 @@ def process_charonop_node():
                                                         else:
                                                             inputs[key] = val.replace("*charon_angle*", angle_desc)
                                                         log_debug(f"Step 2: Injected prompt into node {nid} input {key} (fallback)")
-                                                    elif key in ('text', 'string'): 
-                                                        if prompt_template and "*charon_angle*" in prompt_template:
-                                                             if override_prompt:
-                                                                 final_prompt = override_prompt
-                                                             else:
-                                                                 final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
-                                                             inputs[key] = final_prompt
-                                                             log_debug(f"Step 2: Injected template into node {nid} input {key} (heuristic)")
 
                         except Exception as render_err:
                             log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
