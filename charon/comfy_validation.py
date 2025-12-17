@@ -243,6 +243,16 @@ try:
             if resolved_path:
                 resolved_category = category
 
+        if not resolved_path:
+            fallback_categories = ["checkpoints", "loras", "unet", "vae", "clip", "embeddings"]
+            safe_fallbacks = [c for c in fallback_categories if c != category]
+            for fallback in safe_fallbacks:
+                path = _try_resolve(fallback, name, attempted, attempted_dirs)
+                if path:
+                    resolved_path = path
+                    resolved_category = fallback
+                    break
+
         if resolved_path:
             payload["resolved"].append(
                 {
