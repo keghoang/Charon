@@ -216,8 +216,7 @@ def _clear_validation_cache(remote_folder: str) -> None:
     cache_root = get_validation_cache_root(remote_folder, ensure=False)
     resolve_log = cache_root / "validation_resolve_log.json"
     resolve_status = cache_root / RESOLVE_STATUS_FILENAME
-    raw_log = cache_root / "validation_result_raw.json"
-    for artifact in (resolve_log, resolve_status, raw_log):
+    for artifact in (resolve_log, resolve_status):
         try:
             if artifact.exists():
                 artifact.unlink()
@@ -522,16 +521,16 @@ def _build_resolve_status_payload(raw_payload: Dict[str, Any], remote_folder: st
                 models_root = data.get("models_root") or ""
                 if not isinstance(models_root, str):
                     models_root = ""
-                missing_models = data.get("missing") or []
+                missing_models = data.get("missing_models") or []
                 normalized_missing = []
                 for entry in missing_models:
                     if not isinstance(entry, dict):
                         continue
                     normalized_missing.append(_normalize_model_missing_entry(entry, models_root, include_resolve=True))
                 if normalized_missing:
-                    data["missing"] = normalized_missing
+                    data["missing_models"] = normalized_missing
                 else:
-                    data.pop("missing", None)
+                    data.pop("missing_models", None)
     return {"payload": payload}
 
 
@@ -652,7 +651,7 @@ def _normalize_validation_payload(
                 if cat.startswith("custom_nodes") and cat not in model_paths:
                     model_paths[cat] = raw_paths.get(cat) if isinstance(raw_paths.get(cat), list) else []
             missing_entries = []
-            for entry in data.get("missing") or []:
+            for entry in data.get("missing_models") or []:
                 if isinstance(entry, dict):
                     missing_entries.append(
                         _normalize_model_missing_entry(entry, models_root, include_resolve=include_resolve)
@@ -670,7 +669,7 @@ def _normalize_validation_payload(
                 "found": found if isinstance(found, list) else [],
             }
             if missing_entries:
-                norm_data["missing"] = missing_entries
+                norm_data["missing_models"] = missing_entries
             normalized_issues.append(
                 {
                     "key": "models",

@@ -1236,7 +1236,7 @@ def _validate_models_browser(
         missing_entries.append(entry)
 
     workflow_folder = workflow_bundle.get("folder") if isinstance(workflow_bundle, dict) else None
-    data["missing"] = missing_entries
+    data["missing_models"] = missing_entries
 
     if missing_entries:
         detail_lines = []

@@ -151,7 +151,7 @@ def resolve_missing_models(
     if not comfy_dir:
         comfy_dir = os.path.dirname(models_root)
 
-    missing_entries = _coerce_sequence(issue_data.get("missing"))
+    missing_entries = _coerce_sequence(issue_data.get("missing_models"))
     if not missing_entries:
         result.skipped.append("No missing models were reported.")
         return result

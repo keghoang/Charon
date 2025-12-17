@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import urllib.request
 from urllib.parse import urlparse
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -623,7 +624,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             if not isinstance(models_root, str):
                 models_root = ""
             normalized_missing: list[dict] = []
-            for entry in data.get("missing") or []:
+            for entry in data.get("missing_models") or []:
                 if not isinstance(entry, dict):
                     continue
                 normalized = dict(entry)
@@ -640,7 +641,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 if dirs:
                     normalized["attempted_directories"] = dirs
                 normalized_missing.append(normalized)
-            data["missing"] = normalized_missing
+            data["missing_models"] = normalized_missing
             unresolved_models = [
                 e for e in normalized_missing if str(e.get("resolve_status") or "").strip() != "success"
             ]
@@ -1089,7 +1090,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
     ) -> Dict[int, Dict[str, Any]]:
         models_root = data.get("models_root") or ""
         found = data.get("found") or []
-        missing = data.get("missing") or []
+        missing = data.get("missing_models") or []
         if not missing:
             resolver_data = data.get("resolver") or {}
             resolver_missing = resolver_data.get("missing") or []
@@ -1110,7 +1111,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 )
             if fallback_missing:
                 missing = fallback_missing
-                data["missing"] = missing
+                data["missing_models"] = missing
         resolved_entries = data.get("resolved_entries") or []
 
         resolved_lookup: Dict[str, Dict[str, str]] = {}
@@ -1495,7 +1496,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         if not issue or not widget_info:
             return
         data = issue.get("data") or {}
-        missing = data.get("missing") or []
+        missing = data.get("missing_models") or []
         status_label = widget_info.get("status_label")
         if missing:
             issue["ok"] = False
@@ -1815,7 +1816,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 data = issue.get("data") or {}
                 if not isinstance(data, dict):
                     continue
-                missing_list = data.get("missing")
+                missing_list = data.get("missing_models")
                 idx = row_info.get("reference_index")
                 if isinstance(missing_list, list) and isinstance(idx, int) and 0 <= idx < len(missing_list):
                     entry = missing_list[idx]
@@ -1833,7 +1834,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._refresh_models_issue_status()
         issue_info = self._issue_lookup.get("models") or {}
         issue_data = issue_info.get("data") if isinstance(issue_info, dict) else {}
-        missing_after = issue_data.get("missing") if isinstance(issue_data, dict) else None
+        missing_after = issue_data.get("missing_models") if isinstance(issue_data, dict) else None
         system_debug(
             "[Validation] Completed mark model resolved | "
             f"row={row} remaining_missing={len(missing_after) if isinstance(missing_after, list) else 'unknown'} "
@@ -2002,7 +2003,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         except Exception:
             system_debug("[Validation] Recorded resolved model.")
 
-        missing = data.get("missing")
+        missing = data.get("missing_models")
         if isinstance(missing, list):
             removed = False
             missing_entry = row_info.get("missing_entry")
@@ -2016,7 +2017,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
             if removed:
                 updated_missing = [entry for entry in missing if isinstance(entry, dict)]
-                data["missing"] = updated_missing
+                data["missing_models"] = updated_missing
                 system_debug(
                     "[Validation] Removed missing entry via object identity | "
                     f"row={row_index} remaining_missing={len(updated_missing)}"
@@ -2110,7 +2111,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     removed = fallback_removed
 
                 filtered_missing = [entry for entry in missing if isinstance(entry, dict)]
-                data["missing"] = filtered_missing
+                data["missing_models"] = filtered_missing
                 if removed:
                     system_debug(
                         "[Validation] Removed missing entry via signature/normalized match | "
@@ -2547,6 +2548,37 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     self._append_issue_note("models", "Copy canceled by user.")
                     self._notify_manual_download(file_name, models_root, expected_path)
                     notified_manual = True
+        url_value = str(row_info.get("url") or reference.get("url") or "").strip()
+        if url_value and not notified_manual and not local_matches and not shared_matches:
+            expected_path = expected_path or determine_expected_model_path(reference, models_root, comfy_dir)
+            if not expected_path:
+                expected_path = os.path.join(models_root or "", file_name)
+            if expected_path:
+                destination_display = self._format_model_display_path(expected_path, models_root)
+                try:
+                    os.makedirs(os.path.dirname(expected_path), exist_ok=True)
+                    temp_path = f"{expected_path}.download"
+                    urllib.request.urlretrieve(url_value, temp_path)
+                    os.replace(temp_path, expected_path)
+                    note = f"Downloaded {file_name} from URL to {destination_display}."
+                    workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+                    self._mark_model_resolved(
+                        row,
+                        "Resolved",
+                        destination_display,
+                        note,
+                        workflow_value,
+                        resolved_path=expected_path,
+                    )
+                    self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value)
+                    self._refresh_models_issue_status()
+                    return True
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Download Failed",
+                        f"Could not download model from URL.\n\nURL: {url_value}\nError: {exc}",
+                    )
         if not notified_manual:
             if expected_path and os.path.exists(expected_path):
                 workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
