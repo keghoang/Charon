@@ -478,9 +478,15 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.worker.moveToThread(self.worker_thread)
         self.worker.progress_changed.connect(self._apply_worker_progress)
         self.worker.finished.connect(self._handle_worker_finished)
-        self.worker.finished.connect(self.worker_thread.quit)
+        
+        # Safe thread cleanup pattern:
+        # 1. Worker finishes -> Schedules deletion (while thread is still running)
         self.worker.finished.connect(self.worker.deleteLater)
+        # 2. Worker destroyed -> Quits the thread loop
+        self.worker.destroyed.connect(self.worker_thread.quit)
+        # 3. Thread finishes -> Schedules thread deletion
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        
         self.worker_thread.finished.connect(lambda: setattr(self, "worker_thread", None))
         self.worker_thread.started.connect(self.worker.run)
         self.worker_thread.start()
@@ -532,10 +538,14 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
             preferences.set_preference(PREF_DEPENDENCIES_VERIFIED, True)
             
             # Force security level configuration before first run to avoid Manager issues
+            # Wrapped in BaseException to prevent ANY crash here from stopping the wizard
             try:
+                _debug_log("Attempting to enforce manager security level...")
                 ensure_manager_security_level("weak", comfy_path_override=self.comfy_path)
-            except Exception:
-                pass
+                _debug_log("Manager security level enforced.")
+            except BaseException as sec_exc:
+                system_error(f"Security level enforcement skipped due to error: {sec_exc}")
+                _debug_log(f"Security enforcement failed: {sec_exc}")
                 
             system_info("First-time setup completed; dependencies verified.")
         except Exception as exc:  # pragma: no cover - defensive path
