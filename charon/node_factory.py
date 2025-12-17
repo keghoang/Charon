@@ -183,6 +183,27 @@ def create_charon_group_node(
     batch_knob.setFlag(nuke.STARTLINE)
     node.addKnob(batch_knob)
 
+    use_crop_knob = nuke.Boolean_Knob("charon_use_crop", "Use Crop", False)
+    use_crop_knob.setFlag(nuke.NO_ANIMATION)
+    use_crop_knob.setFlag(nuke.STARTLINE)
+    try:
+        use_crop_knob.setTooltip("Enable cropping inputs to the bounding box before submission.")
+    except Exception:
+        pass
+    node.addKnob(use_crop_knob)
+
+    crop_bbox_knob = nuke.BBox_Knob("charon_crop_bbox", "Crop Box")
+    crop_bbox_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        crop_bbox_knob.setTooltip("Bounding box applied when Use Crop is enabled.")
+    except Exception:
+        pass
+    try:
+        crop_bbox_knob.setValue(_default_crop_box(nuke))
+    except Exception:
+        pass
+    node.addKnob(crop_bbox_knob)
+
     process_knob = nuke.PyScript_Knob("process", "Execute")
     process_knob.setCommand(process_script)
     process_knob.setFlag(nuke.STARTLINE)
@@ -302,27 +323,6 @@ def create_charon_group_node(
     except Exception:
         pass
     node.addKnob(reuse_knob)
-
-    use_crop_knob = nuke.Boolean_Knob("charon_use_crop", "Use Crop", False)
-    use_crop_knob.setFlag(nuke.NO_ANIMATION)
-    use_crop_knob.setFlag(nuke.STARTLINE)
-    try:
-        use_crop_knob.setTooltip("Enable cropping inputs to the bounding box before submission.")
-    except Exception:
-        pass
-    node.addKnob(use_crop_knob)
-
-    crop_bbox_knob = nuke.BBox_Knob("charon_crop_bbox", "Crop Box")
-    crop_bbox_knob.setFlag(nuke.NO_ANIMATION)
-    try:
-        crop_bbox_knob.setTooltip("Bounding box applied when Use Crop is enabled.")
-    except Exception:
-        pass
-    try:
-        crop_bbox_knob.setValue(_default_crop_box(nuke))
-    except Exception:
-        pass
-    node.addKnob(crop_bbox_knob)
 
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)
