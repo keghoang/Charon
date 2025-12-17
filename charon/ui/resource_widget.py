@@ -171,21 +171,34 @@ class ResourceWidget(QWidget):
     def _on_flush_finished(self, success):
         self.anim_timer.stop()
         if success:
-            # Wait 2.5s for VRAM to actually drop and update in monitor
-            QTimer.singleShot(2500, self._show_flush_result)
+            self._start_result_polling()
         else:
             self.flush_feedback.setText("Failed")
             self.flush_btn.setEnabled(True)
             QTimer.singleShot(4000, lambda: self.flush_feedback.setText(""))
 
-    def _show_flush_result(self):
-        diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
-        from ..charon_logger import system_debug
-        system_debug(f"Flush complete. Post-flush usage: {self.current_total_vram_gb:.2f} GB. Freed: {diff:.2f} GB")
+    def _start_result_polling(self):
+        # Start polling for result update
+        self.result_timer = QTimer(self)
+        self.result_timer.timeout.connect(self._update_result_display)
+        self.result_timer.start(200) # Check every 200ms
         
+        # Stop polling after 5 seconds
+        QTimer.singleShot(5000, self._finish_result_polling)
+
+    def _update_result_display(self):
+        diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
         self.flush_feedback.setText(f"Freed {diff:.2f}GB")
+
+    def _finish_result_polling(self):
+        if hasattr(self, 'result_timer'):
+            self.result_timer.stop()
+            self.result_timer.deleteLater()
+            del self.result_timer
+            
         self.flush_btn.setEnabled(True)
-        QTimer.singleShot(6000, lambda: self.flush_feedback.setText(""))
+        # Clear text after a delay
+        QTimer.singleShot(2000, lambda: self.flush_feedback.setText(""))
 
     def update_stats(self, stats):
         self.cpu_bar.set_value(stats['cpu_percent'])
