@@ -3396,6 +3396,7 @@ def process_charonop_node():
                                 elif batch_index == 5: angle_desc = "to view from bottom"
                                 
                                 if angle_desc:
+                                    log_debug(f"Step 2: Attempting to inject angle '{angle_desc}'...")
                                     for nid, ndata in prompt_payload.items():
                                         inputs = ndata.get('inputs')
                                         if isinstance(inputs, dict):
