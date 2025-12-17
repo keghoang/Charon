@@ -780,12 +780,19 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._auto_resolve_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._auto_resolve_button.clicked.connect(self._auto_resolve_all)
 
+        btn_recheck = QtWidgets.QPushButton("Re-check")
+        btn_recheck.setObjectName("FooterBtn")
+        btn_recheck.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn_recheck.setToolTip("Close this dialog and run validation again.")
+        btn_recheck.clicked.connect(self.accept)
+
         btn_close = QtWidgets.QPushButton("Close")
         btn_close.setObjectName("FooterBtn")
         btn_close.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(self.close)
 
         footer.addWidget(self._auto_resolve_button)
+        footer.addWidget(btn_recheck)
         footer.addWidget(btn_close)
         layout.addLayout(footer)
 

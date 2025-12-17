@@ -754,7 +754,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         self.actions_layout.addStretch()
 
-        refresh_icon, refresh_box = _make_symbol_icon("↻")
+        refresh_icon, refresh_box = _make_symbol_icon("â†»")
         self.header_refresh_button = QtWidgets.QPushButton("Refresh", self.actions_container)
         self.header_refresh_button.setIcon(refresh_icon)
         refresh_icon_px = max(12, int(button_height * 0.6))
@@ -766,7 +766,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.header_refresh_button.clicked.connect(self.on_refresh_clicked)
         self.actions_layout.addWidget(self.header_refresh_button)
 
-        settings_icon, settings_box = _make_symbol_icon("⏣")
+        settings_icon, settings_box = _make_symbol_icon("â£")
         self.header_settings_button = QtWidgets.QPushButton("Settings", self.actions_container)
         self.header_settings_button.setIcon(settings_icon)
         settings_icon_px = max(12, int(button_height * 0.6))
@@ -1603,7 +1603,7 @@ QPushButton#NewWorkflowButton:pressed {{
                 if has_bookmarks and not bookmarks_folder_visible:
                     # Need to add Bookmarks folder
                     from ..folder_table_model import FolderItem
-                    bookmarks_item = FolderItem("★ Bookmarks", "Bookmarks", is_special=True)
+                    bookmarks_item = FolderItem("â˜… Bookmarks", "Bookmarks", is_special=True)
                     bookmarks_item.original_name = "Bookmarks"
                     self.folder_panel.folder_model.add_folder(bookmarks_item)
                 elif not has_bookmarks and bookmarks_folder_visible:
@@ -2330,9 +2330,10 @@ Cache Stats:
         self._refresh_in_progress = True
         self._last_refresh_time = now
         self._set_refresh_enabled(False)
+
         # Store current focus widget to restore it later
         current_focus = QtWidgets.QApplication.focusWidget()
-
+        
         try:
             # Get current state
             current_folder = self.folder_panel.get_selected_folder()
@@ -2341,7 +2342,7 @@ Cache Stats:
             # Import cache manager
             from ..cache_manager import get_cache_manager
             cache_manager = get_cache_manager()
-
+            
             # Simplified approach: Either refresh current folder or everything
             if current_script or current_folder:
                 # Refresh current folder (whether script or folder is selected)

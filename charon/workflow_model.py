@@ -227,11 +227,25 @@ class FolderLoader(BaseScriptLoader):
         self._should_stop = False
         if not self.isRunning():
             self.start()
+
+    def stop_loading(self):
+        """Signal the thread to stop loading"""
+        self._should_stop = True
+        if self.isRunning():
+            try:
+                self.requestInterruption()
+                self.quit()
+            except Exception:
+                pass
+            # Non-blocking wait so UI thread stays responsive
+            self.wait(0)
     
     def run(self):
         """Load scripts in background thread with batch operations for network optimization"""
         if not self.folder_path or not os.path.exists(self.folder_path):
-            self.scripts_loaded.emit([])
+            # Only emit empty if we weren't stopped
+            if not self._should_stop:
+                self.scripts_loaded.emit([])
             return
         
         cache_manager = get_cache_manager()
@@ -272,8 +286,11 @@ class FolderLoader(BaseScriptLoader):
                     metadata_map = cached_metadata
                     system_debug(f"Using cached batch metadata for {self.folder_path}")
                 else:
-                    # Batch load all metadata at once
-                    metadata_map = batch_reader.batch_read_metadata(self.folder_path)
+                    # Batch load all metadata at once (cancellable)
+                    metadata_map = batch_reader.batch_read_metadata(
+                        self.folder_path,
+                        stop_callback=lambda: self._should_stop or self.isInterruptionRequested()
+                    )
                     # Cache it
                     cache_manager.cache_data(batch_metadata_key, metadata_map, ttl_seconds=600)
                 

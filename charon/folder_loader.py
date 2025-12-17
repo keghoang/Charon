@@ -42,7 +42,7 @@ class FolderListLoader(QtCore.QThread):
         self.check_compatibility = check_compatibility
         self._should_stop = False
         self.start()
-        
+
     def stop_loading(self):
         """Signal the thread to stop loading."""
         self._should_stop = True

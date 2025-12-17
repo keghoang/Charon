@@ -117,11 +117,15 @@ class FolderPanel(QtWidgets.QWidget):
         if current.isValid():
             folder = self.folder_model.get_folder_at_row(current.row())
             if folder and hasattr(folder, 'original_name'):
-                # Check if this is actually a different folder
-                if folder.original_name != self._last_emitted_folder:
-                    self._pending_selection = folder.original_name
+                # If already selected, don't trigger update
+                if folder.original_name == self._last_emitted_folder:
                     self._selection_timer.stop()
-                    self._selection_timer.start(config.UI_FOLDER_SELECTION_DELAY_MS)
+                    return
+                    
+                # Schedule new update
+                self._pending_selection = folder.original_name
+                self._selection_timer.stop()
+                self._selection_timer.start(config.UI_FOLDER_SELECTION_DELAY_MS)
 
     def on_folder_selected(self, index):
         """Handle folder selection."""
