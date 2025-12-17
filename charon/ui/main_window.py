@@ -669,7 +669,7 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout = QtWidgets.QGridLayout(footer_container)
         footer_layout.setContentsMargins(4, 0, 4, 4)
         footer_layout.setSpacing(4)
-        footer_layout.setVerticalSpacing(0)
+        footer_layout.setVerticalSpacing(5)
 
         # Left Column: Project Label (Created first for font reference)
         self.project_label = QtWidgets.QLabel(parent)
