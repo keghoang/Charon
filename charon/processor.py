@@ -1222,12 +1222,24 @@ def process_charonop_node():
         def _collect_target_reads():
             targets = []
             try:
+                norm_parent = _normalize_node_id(charon_node_id)
+                if not norm_parent:
+                    return targets
                 for candidate in iter_candidate_read_nodes():
                     try:
-                        parent_val = read_node_parent_id(candidate)
+                        parent_val = _normalize_node_id(read_node_parent_id(candidate))
                     except Exception:
                         parent_val = ""
-                    if parent_val == charon_node_id:
+                    raw_parent = ""
+                    try:
+                        raw_parent = _normalize_node_id(candidate.metadata('charon/parent_id'))
+                    except Exception:
+                        raw_parent = ""
+                    try:
+                        knob_parent = _normalize_node_id(candidate.knob('charon_parent_id').value())
+                    except Exception:
+                        knob_parent = ""
+                    if parent_val == norm_parent or raw_parent == norm_parent or knob_parent == norm_parent:
                         targets.append(candidate)
             except Exception:
                 pass
@@ -1244,11 +1256,19 @@ def process_charonop_node():
                 if target is None:
                     return
                 try:
+                    target.setMetaData('charon/status', state or "")
+                except Exception:
+                    pass
+                try:
                     color_knob = target["tile_color"]
                 except Exception:
                     color_knob = None
                 if color_knob is not None:
                     try:
+                        try:
+                            color_knob.clearAnimated()
+                        except Exception:
+                            pass
                         color_knob.setValue(tile_color)
                     except Exception:
                         pass
@@ -1259,12 +1279,13 @@ def process_charonop_node():
                         gl_knob = None
                     if gl_knob is not None:
                         try:
-                            gl_knob.setValue(gl_color)
-                        except Exception:
                             try:
-                                gl_knob.setValue(list(gl_color))
+                                gl_knob.clearAnimated()
                             except Exception:
                                 pass
+                            gl_knob.setValue(list(gl_color))
+                        except Exception:
+                            pass
                 try:
                     ensure_read_node_info(target, read_node_unique_id(target), state)
                 except Exception:
@@ -1309,6 +1330,17 @@ def process_charonop_node():
                     targets.append(candidate)
 
             try:
+                target_names = []
+                for t in targets:
+                    try:
+                        target_names.append(f"{t.name()}[{read_node_parent_id(t)}]")
+                    except Exception:
+                        target_names.append("unknown")
+                log_debug(f"Apply status {state} to reads: {', '.join(target_names) or 'none'}")
+            except Exception:
+                pass
+
+            try:
                 recreate_knob = node.knob('charon_recreate_read')
             except Exception:
                 recreate_knob = None
@@ -1348,10 +1380,34 @@ def process_charonop_node():
         def assign_read_label(read_node, label_text=None):
             if read_node is None:
                 return
+            output_label = ""
+            try:
+                output_label = (read_node.metadata('charon/output_label') or "").strip()
+            except Exception:
+                output_label = ""
+            if not output_label:
+                try:
+                    knob_val = read_node.knob('charon_output_label')
+                    if knob_val:
+                        output_label = str(knob_val.value() or "").strip()
+                except Exception:
+                    output_label = ""
+            file_display = ""
+            try:
+                file_display = os.path.basename(str(read_node['file'].value() or "").strip())
+            except Exception:
+                file_display = ""
             if label_text is None:
+                parts = []
+                if output_label:
+                    parts.append(f"Output: {output_label}")
+                if file_display:
+                    parts.append(f"File: {file_display}")
                 parent_text = read_node_parent_id(read_node) or 'N/A'
                 read_id_text = read_node_unique_id(read_node) or 'N/A'
-                label_text = f"Charon Parent: {parent_text}\nRead ID: {read_id_text}"
+                parts.append(f"Charon Parent: {parent_text}")
+                parts.append(f"Read ID: {read_id_text}")
+                label_text = "\n".join(parts)
         try:
             label_knob = read_node['label']
         except Exception:
@@ -2727,6 +2783,39 @@ def process_charonop_node():
                                         return None
 
                                     parent_norm = _normalize_node_id(charon_node_id)
+                                    placeholder_norm = ""
+                                    try:
+                                        placeholder_norm = (get_placeholder_image_path() or "").replace("\\", "/").lower()
+                                    except Exception:
+                                        placeholder_norm = ""
+                                    if placeholder_norm:
+                                        try:
+                                            candidates = list(iter_candidate_read_nodes())
+                                        except Exception:
+                                            candidates = []
+                                        for candidate in candidates:
+                                            if candidate is None:
+                                                continue
+                                            try:
+                                                parent_val = _normalize_node_id(read_node_parent_id(candidate))
+                                            except Exception:
+                                                parent_val = ""
+                                            if parent_val != parent_norm:
+                                                continue
+                                            try:
+                                                file_val = (candidate["file"].value() or "").strip()
+                                            except Exception:
+                                                file_val = ""
+                                            if file_val.replace("\\", "/").lower() == placeholder_norm:
+                                                try:
+                                                    unlink_read_node(candidate)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    nuke.delete(candidate)
+                                                    log_debug("Removed placeholder CharonRead node before importing outputs.")
+                                                except Exception:
+                                                    pass
 
                                     image_entries = [e for e in entries if _is_image_entry(e)]
                                     mesh_entries = [e for e in entries if _is_mesh_entry(e)]
@@ -2785,9 +2874,10 @@ def process_charonop_node():
                                             except Exception as create_error:
                                                 log_debug(f'Failed to create CharonRead2D node: {create_error}', 'ERROR')
                                                 continue
-                                            read_base = _sanitize_name(label, "Output2D")
+                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            label_base = _sanitize_name(label, "Output2D")
                                             try:
-                                                read_node.setName(f"CharonRead2D_{read_base}")
+                                                read_node.setName(f"CharonRead2D_{read_base}_{label_base}")
                                             except Exception:
                                                 try:
                                                     read_node.setName("CharonRead2D")
@@ -2824,6 +2914,11 @@ def process_charonop_node():
                                             read_node['file'].setValue(group_paths[default_index])
                                         except Exception as assign_error:
                                             log_debug(f'Could not assign output path to CharonRead2D ({label}): {assign_error}', 'ERROR')
+                                        try:
+                                            label_knob = read_node['label']
+                                            label_knob.setValue(f"Output Node: {label}\\nFile: {os.path.basename(group_paths[default_index])}")
+                                        except Exception:
+                                            pass
 
                                         if outputs_knob is not None:
                                             try:
@@ -2852,6 +2947,10 @@ def process_charonop_node():
 
                                         _ensure_output_label_metadata(read_node, label)
                                         mark_read_node(read_node)
+                                        try:
+                                            apply_status_color(current_node_state, read_node)
+                                        except Exception:
+                                            pass
 
                                     grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in mesh_entries:
@@ -2961,8 +3060,9 @@ def process_charonop_node():
                                             pass
 
                                         try:
-                                            read_base = _sanitize_name(label, "Output3D")
-                                            read_node.setName(f"CharonRead3D_{read_base}")
+                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            label_base = _sanitize_name(label, "Output3D")
+                                            read_node.setName(f"CharonRead3D_{read_base}_{label_base}")
                                         except Exception:
                                             try:
                                                 read_node.setName("CharonRead3D")
