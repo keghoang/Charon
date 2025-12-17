@@ -3434,6 +3434,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         )
         models_root = row_info.get("models_root") or ""
         comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
+        file_name = os.path.basename(original_name) or os.path.basename(str(reference.get("name") or ""))
         expected_path: Optional[str] = None
         notified_manual = False
 
@@ -3474,14 +3475,59 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 f"row={row} selected='{selected}' reason='{warning_message}'"
             )
 
-        # 2) Global repo (no prompt; pick first)
-        file_name = os.path.basename(original_name) or os.path.basename(str(reference.get("name") or ""))
+        # 2) Direct URL (no prompt)
+        url_value = str(row_info.get("url") or reference.get("url") or "").strip()
+        if url_value and not notified_manual:
+            expected_path = expected_path or determine_expected_model_path(reference, models_root, comfy_dir)
+            if not expected_path:
+                expected_path = os.path.join(models_root or "", file_name)
+            if expected_path:
+                system_debug(
+                    "[Validation] Auto-resolve: attempting direct URL download | "
+                    f"row={row} url='{url_value}' dest='{expected_path}'"
+                )
+                destination_display = self._format_model_display_path(expected_path, models_root)
+                note = f"Downloaded {file_name} from URL to {destination_display}."
+                workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+                download_result, download_message = self._download_model_from_url(
+                    url_value,
+                    expected_path,
+                    row=row,
+                    row_info=row_info,
+                    workflow_value=workflow_value,
+                    destination_display=destination_display,
+                    note=note,
+                    file_name=file_name,
+                )
+                if download_result is None:
+                    notified_manual = True
+                    return None
+                if download_result:
+                    workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
+                    row_info["resolve_method"] = row_info.get("resolve_method") or note
+                    self._mark_model_resolved(
+                        row,
+                        "Resolved",
+                        destination_display,
+                        note,
+                        workflow_value,
+                        resolved_path=expected_path,
+                    )
+                    self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value, note)
+                    self._refresh_models_issue_status()
+                    return True
+                if download_message:
+                    self._set_issue_row_subtitle(row_info, download_message)
+        elif not url_value:
+            system_debug("[Validation] Auto-resolve: no URL provided for missing model")
+
+        # 3) Global repo (no prompt; pick first)
         shared_matches = find_shared_model_matches(file_name)
         system_debug(
             "[Validation] Auto-resolve: shared repo lookup complete | "
             f"row={row} matches={len(shared_matches) if shared_matches else 0}"
         )
-        if shared_matches:
+        if shared_matches and not notified_manual:
             selected = shared_matches[0]
             system_debug(
                 "[Validation] Auto-resolve: shared repo selection made | "
@@ -3537,52 +3583,6 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 return True
             if copy_message:
                 self._set_issue_row_subtitle(row_info, copy_message)
-
-        # 3) Direct URL (no prompt)
-        url_value = str(row_info.get("url") or reference.get("url") or "").strip()
-        if url_value and not notified_manual:
-            expected_path = expected_path or determine_expected_model_path(reference, models_root, comfy_dir)
-            if not expected_path:
-                expected_path = os.path.join(models_root or "", file_name)
-            if expected_path:
-                system_debug(
-                    "[Validation] Auto-resolve: attempting direct URL download | "
-                    f"row={row} url='{url_value}' dest='{expected_path}'"
-                )
-                destination_display = self._format_model_display_path(expected_path, models_root)
-                note = f"Downloaded {file_name} from URL to {destination_display}."
-                workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
-                download_result, download_message = self._download_model_from_url(
-                    url_value,
-                    expected_path,
-                    row=row,
-                    row_info=row_info,
-                    workflow_value=workflow_value,
-                    destination_display=destination_display,
-                    note=note,
-                    file_name=file_name,
-                )
-                if download_result is None:
-                    notified_manual = True
-                    return None
-                if download_result:
-                    workflow_value = self._compute_workflow_value(reference, expected_path, models_root, comfy_dir)
-                    row_info["resolve_method"] = row_info.get("resolve_method") or note
-                    self._mark_model_resolved(
-                        row,
-                        "Resolved",
-                        destination_display,
-                        note,
-                        workflow_value,
-                        resolved_path=expected_path,
-                    )
-                    self._record_resolved_model(expected_path, "Resolved", row_info, workflow_value, note)
-                    self._refresh_models_issue_status()
-                    return True
-                if download_message:
-                    self._set_issue_row_subtitle(row_info, download_message)
-        elif not url_value:
-            system_debug("[Validation] Auto-resolve: no URL provided for missing model")
 
         # 4) Already present at expected path
         if not notified_manual and expected_path and os.path.exists(expected_path):
