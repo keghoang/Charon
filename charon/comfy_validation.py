@@ -17,7 +17,6 @@ from .charon_logger import system_debug, system_error, system_info, system_warni
 from .comfy_client import ComfyUIClient
 from .paths import get_charon_temp_dir, resolve_comfy_environment
 from .validation_resolver import locate_manager_cli
-from .validation_cache import load_validation_log
 
 
 DEFAULT_PING_URL = "http://127.0.0.1:8188"
@@ -1237,31 +1236,6 @@ def _validate_models_browser(
         missing_entries.append(entry)
 
     workflow_folder = workflow_bundle.get("folder") if isinstance(workflow_bundle, dict) else None
-    cached_resolved_entries: List[Dict[str, Any]] = []
-    if workflow_folder:
-        try:
-            cached_payload = load_validation_log(workflow_folder)
-            if isinstance(cached_payload, dict):
-                models_cache = cached_payload.get("models")
-                if isinstance(models_cache, dict):
-                    cached_entries = models_cache.get("resolved_entries") or []
-                    if isinstance(cached_entries, list):
-                        cached_resolved_entries = [
-                            entry for entry in cached_entries if isinstance(entry, dict)
-                        ]
-        except Exception:
-            cached_resolved_entries = []
-
-    if cached_resolved_entries:
-        data["resolved_entries"] = list(cached_resolved_entries)
-        found = data.get("found") or []
-        for entry in cached_resolved_entries:
-            path_value = entry.get("path")
-            if isinstance(path_value, str) and path_value and path_value not in found:
-                found.append(path_value)
-        data["found"] = found
-        missing_entries = _filter_missing_with_resolved_cache(missing_entries, cached_resolved_entries)
-
     data["missing"] = missing_entries
 
     if missing_entries:
@@ -1370,19 +1344,6 @@ def _validate_models(
         workflow_folder = workflow_bundle.get("folder")
 
     cached_resolved_entries: List[Dict[str, Any]] = []
-    if workflow_folder:
-        try:
-            cached_payload = load_validation_log(workflow_folder)
-            if isinstance(cached_payload, dict):
-                models_cache = cached_payload.get("models")
-                if isinstance(models_cache, dict):
-                    cached_entries = models_cache.get("resolved_entries") or []
-                    if isinstance(cached_entries, list):
-                        cached_resolved_entries = [
-                            entry for entry in cached_entries if isinstance(entry, dict)
-                        ]
-        except Exception:
-            cached_resolved_entries = []
 
     invalid_resolutions: List[Dict[str, Any]] = []
     if resolved_by_comfy:
