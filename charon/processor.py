@@ -352,10 +352,18 @@ def _ensure_parameter_bindings(
                 f"Parameter binding resolved: node={computed['api_node']} input={computed['api_input']}"
             )
         else:
-            log_debug(
-                f"Failed to resolve parameter binding for node {spec_copy.get('node_id')} attribute {spec_copy.get('attribute')}",
-                "WARNING",
-            )
+            attribute_name = spec_copy.get('attribute')
+            if attribute_name == "control_after_generate":
+                # This is expected for client-side control widgets not in the API schema
+                log_debug(
+                    f"Skipping binding for client-side control widget {attribute_name}",
+                    "INFO",
+                )
+            else:
+                log_debug(
+                    f"Failed to resolve parameter binding for node {spec_copy.get('node_id')} attribute {attribute_name}",
+                    "WARNING",
+                )
         updated_specs.append(spec_copy)
 
     if changed:
