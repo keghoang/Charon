@@ -2049,14 +2049,21 @@ QPushButton#NewWorkflowButton:pressed {{
             QtCore.Qt.QueuedConnection,
         )
 
+    def on_refresh_clicked(self):
+        """Handle public refresh request."""
+        self._refresh_everything()
+
     def _folder_has_visible_items(self, folder_path):
-        """Check if a folder contains any files or subfolders (excluding hidden)."""
+        """Check if a folder contains any visible subfolders or JSON files."""
         try:
             with os.scandir(folder_path) as entries:
                 for entry in entries:
                     if entry.name.startswith("."):
                         continue
-                    return True
+                    if entry.is_dir():
+                        return True
+                    if entry.is_file() and entry.name.lower().endswith(".json"):
+                        return True
         except FileNotFoundError:
             return False
         except Exception as exc:
