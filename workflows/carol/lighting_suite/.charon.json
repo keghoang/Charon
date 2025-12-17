@@ -1,0 +1,22 @@
+{
+  "workflow_file": "workflow.json",
+  "description": "Applies a studio lighting preset to a USD layout and renders a preview.",
+  "dependencies": [
+    {
+      "name": "charon-core",
+      "repo": "https://github.com/example/charon-core",
+      "ref": "main"
+    },
+    {
+      "name": "usd-preset-pack",
+      "repo": "https://github.com/example/usd-preset-pack",
+      "ref": "main"
+    }
+  ],
+  "last_changed": "2025-10-15T05:56:10Z",
+  "tags": [
+    "comfy",
+    "lighting",
+    "FLUX"
+  ]
+}

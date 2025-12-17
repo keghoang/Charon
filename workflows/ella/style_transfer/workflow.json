@@ -1,0 +1,45 @@
+{
+  "workflow_name": "Style Transfer",
+  "nodes": {
+    "1": {
+      "class_type": "LoadWorkflowPreset",
+      "inputs": {
+        "path": "presets/style_transfer.json"
+      }
+    },
+    "2": {
+      "class_type": "CharonAnnotate",
+      "inputs": {
+        "preset": [
+          "1",
+          "PRESET"
+        ],
+        "label": "comfy"
+      }
+    },
+    "3": {
+      "class_type": "SaveWorkflowSummary",
+      "inputs": {
+        "preset": [
+          "2",
+          "PRESET"
+        ],
+        "filename": "exports/style_transfer_summary.json"
+      }
+    }
+  },
+  "links": [
+    [
+      "1",
+      "PRESET",
+      "2",
+      "preset"
+    ],
+    [
+      "2",
+      "PRESET",
+      "3",
+      "preset"
+    ]
+  ]
+}
