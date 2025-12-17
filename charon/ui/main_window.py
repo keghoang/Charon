@@ -1884,7 +1884,11 @@ QPushButton#NewWorkflowButton:pressed {{
                 layout.addWidget(widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
             else:
                 layout.addWidget(widget)
-        widget.setParent(self.normal_widget)
+            
+            # Ensure correct parenting to the layout's container
+            if layout.parentWidget():
+                widget.setParent(layout.parentWidget())
+
         widget.setVisible(True)
         self._comfy_widget_in_tiny_mode = False
     
