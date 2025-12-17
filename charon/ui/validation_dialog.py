@@ -405,6 +405,24 @@ class _CustomNodesResolveWorker(QtCore.QObject):
             self.failed.emit(str(exc))
 
 
+class _CustomNodeInstallWorker(QtCore.QObject):
+    finished = QtCore.Signal(object)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, comfy_path: str, repo_url: str) -> None:
+        super().__init__()
+        self._comfy_path = comfy_path
+        self._repo_url = repo_url
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            result = install_custom_nodes_via_playwright(self._comfy_path, [self._repo_url])
+            self.finished.emit(result)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            self.failed.emit(str(exc))
+
+
 class ValidationResolveDialog(QtWidgets.QDialog):
     comfy_restart_requested = QtCore.Signal()
     """Display validation results with auto-resolve helpers."""
@@ -444,6 +462,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._custom_nodes_thread: Optional[QtCore.QThread] = None
         self._custom_nodes_worker: Optional[_CustomNodesResolveWorker] = None
         self._custom_nodes_callback: Optional[Callable[[], None]] = None
+        self._custom_node_row_worker: Optional[_CustomNodeInstallWorker] = None
+        self._custom_node_row_context: Optional[Dict[str, Any]] = None
         restart_flag = False
         if isinstance(self._payload, dict):
             restart_flag = bool(
@@ -1125,9 +1145,103 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         thread = self._custom_nodes_thread
         self._custom_nodes_thread = None
         self._custom_nodes_worker = None
+        self._custom_nodes_callback = None
+        self._custom_node_row_worker = None
+        self._custom_node_row_context = None
         if thread:
             thread.quit()
             thread.wait(2000)
+
+    def _start_custom_node_install_worker(
+        self,
+        row_info: Dict[str, Any],
+        repo_url: str,
+        row_index: int,
+        issue_row: Optional[IssueRow],
+        button: Optional[QtWidgets.QPushButton],
+    ) -> bool:
+        """Install a custom node via Manager on a worker thread; avoids freezing host apps like Nuke."""
+        if self._custom_nodes_thread:
+            return False
+        worker = _CustomNodeInstallWorker(self._comfy_path, repo_url)
+        thread = QtCore.QThread(self)
+        self._custom_node_row_worker = worker
+        self._custom_nodes_thread = thread
+        self._custom_node_row_context = {
+            "row_info": row_info,
+            "row_index": row_index,
+            "issue_row": issue_row,
+            "button": button,
+            "repo_url": repo_url,
+        }
+        worker.moveToThread(thread)
+        worker.finished.connect(lambda result: self._on_custom_node_install_finished(result))
+        worker.failed.connect(lambda message: self._on_custom_node_install_failed(message))
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        return True
+
+    def _on_custom_node_install_finished(self, result: ResolutionResult) -> None:
+        context = self._custom_node_row_context or {}
+        row_info = context.get("row_info") or {}
+        issue_row: Optional[IssueRow] = context.get("issue_row")  # type: ignore[assignment]
+        button: Optional[QtWidgets.QPushButton] = context.get("button")  # type: ignore[assignment]
+        repo_url = context.get("repo_url") or ""
+        self._cleanup_custom_nodes_worker()
+
+        resolved = bool(result.resolved)
+        note = "; ".join(result.resolved or result.failed or result.notes or [])
+        if note:
+            self._append_issue_note("custom_nodes", note)
+        if not resolved and result.failed:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Install Failed",
+                "\n".join(result.failed),
+            )
+            if isinstance(issue_row, IssueRow):
+                issue_row.reset_to_idle()
+            if button:
+                button.setEnabled(True)
+            self._update_overall_state()
+            return
+
+        if resolved:
+            row_info["resolve_method"] = result.resolved[0]
+        elif result.notes:
+            row_info["resolve_method"] = result.notes[0]
+        else:
+            row_info["resolve_method"] = row_info.get("resolve_method") or "Installed via Playwright"
+
+        self._mark_custom_node_resolved(row_info, None, prompt_restart=False)
+        self._update_resolve_status_payload(
+            "custom_nodes",
+            result,
+            target_repo=repo_url,
+            target_pack=row_info.get("package_name"),
+        )
+        display_name = (
+            row_info.get("manager_repo_display")
+            or row_info.get("package_name")
+            or row_info.get("node_name")
+            or repo_url
+        )
+        self._show_restart_cta(display_name, require_all_custom_nodes_resolved=True)
+        self._update_overall_state()
+
+    def _on_custom_node_install_failed(self, message: str) -> None:
+        context = self._custom_node_row_context or {}
+        issue_row: Optional[IssueRow] = context.get("issue_row")  # type: ignore[assignment]
+        button: Optional[QtWidgets.QPushButton] = context.get("button")  # type: ignore[assignment]
+        self._cleanup_custom_nodes_worker()
+        QtWidgets.QMessageBox.warning(self, "Install Failed", message)
+        if isinstance(issue_row, IssueRow):
+            issue_row.reset_to_idle()
+        if button:
+            button.setEnabled(True)
+        self._update_overall_state()
 
 
     def _filter_missing_with_resolved(
@@ -2574,6 +2688,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             issue_row.start_install_animation()
         if button and button is not getattr(issue_row, "btn_resolve", None):
             button.setEnabled(False)
+
+        # Run manager installs off the UI thread to keep host apps responsive.
+        repo_url = str(row_info.get("manager_repo") or "").strip()
+        if repo_url and self._start_custom_node_install_worker(row_info, repo_url, row, issue_row, button):
+            return
         try:
             if self._resolve_custom_node_entry(row, row_info):
                 # Mark all rows from the same package as resolved to avoid duplicate installs.
