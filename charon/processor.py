@@ -3491,6 +3491,16 @@ def process_charonop_node():
                         _apply_seed_offset(prompt_payload, seed_records, seed_offset)
 
                     batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
+                    
+                    debug_file = os.path.join(temp_root, 'debug', f'prompt_step2_batch_{batch_index}.json').replace('\\', '/')
+                    try:
+                        os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+                        with open(debug_file, 'w', encoding='utf-8') as df:
+                            json.dump(prompt_payload, df, indent=2)
+                        log_debug(f"Debug: Wrote prompt payload to {debug_file}")
+                    except Exception as de:
+                        log_debug(f"Debug: Failed to write payload file: {de}", "WARNING")
+                    
                     update_progress(
                         _progress_for(batch_index, 0.0),
                         f'Submitting {batch_label.lower()}',
