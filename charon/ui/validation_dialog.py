@@ -2684,6 +2684,20 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             return
         issue_row = row_info.get("issue_row")
         button: Optional[QtWidgets.QPushButton] = row_info.get("button")
+
+        # Prevent overlapping installs; notify and bail early to avoid falling back to synchronous work.
+        if self._custom_nodes_thread and self._custom_nodes_thread.isRunning():
+            QtWidgets.QMessageBox.information(
+                self,
+                "Install In Progress",
+                "Another custom node install is already running. Please wait for it to finish.",
+            )
+            if isinstance(issue_row, IssueRow):
+                issue_row.reset_to_idle()
+            if button:
+                button.setEnabled(True)
+            return
+
         if isinstance(issue_row, IssueRow):
             issue_row.start_install_animation()
         if button and button is not getattr(issue_row, "btn_resolve", None):
