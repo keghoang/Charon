@@ -1,25 +1,18 @@
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 import time
-import urllib.request
-import urllib.error
-from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from ..qt_compat import QtWidgets, QtGui, QtCore
-from ..charon_logger import system_error, system_info, system_warning
+from ..charon_logger import system_error, system_info
 from .. import preferences
 from ..comfy_client import ComfyUIClient
 from ..comfy_restart import send_shutdown_signal
-from ..dependency_check import (
-    PREF_DEPENDENCIES_VERIFIED,
-    _module_available,
-    _playwright_available,
-)
-from ..paths import get_default_comfy_launch_path, resolve_comfy_environment, get_charon_temp_dir
+from ..dependency_check import PREF_DEPENDENCIES_VERIFIED
+from pathlib import Path
+from ..paths import get_default_comfy_launch_path, get_charon_temp_dir
+from ..setup_manager import SetupManager
 
 COLORS = {
     "bg_main": "#212529",
@@ -112,100 +105,6 @@ STYLESHEET = f"""
 """
 
 
-def _run_command_silent(cmd: List[str], timeout: int = 600) -> Tuple[bool, str]:
-    try:
-        subprocess.run(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-            timeout=timeout,
-        )
-        return True, ""
-    except subprocess.CalledProcessError as exc:
-        return False, f"Command failed: {' '.join(cmd)} ({exc.returncode})"
-    except Exception as exc:
-        return False, str(exc)
-
-
-def _append_requirements_tasks(
-    tasks: List[Tuple[str, List[str]]],
-    python_exe: Optional[str],
-    node_dir: str,
-    label: str,
-) -> None:
-    """
-    After cloning/copying a custom node, enqueue its requirements/install script (if present).
-    """
-    if not python_exe:
-        return
-    path = Path(node_dir)
-    req_path = path / "requirements.txt"
-    tasks.append(
-        (
-            f"Installing {label} dependencies...",
-            [python_exe, "-m", "pip", "install", "-r", str(req_path)],
-        )
-    )
-    install_script = path / "install.py"
-    tasks.append(
-        (
-            f"Running {label} install.py...",
-            [python_exe, str(install_script)],
-        )
-    )
-
-
-def _has_kjnodes(custom_nodes_dir: str) -> bool:
-    """Detect an existing ComfyUI-KJNodes install by folder name."""
-    try:
-        for entry in os.listdir(custom_nodes_dir):
-            path = os.path.join(custom_nodes_dir, entry)
-            if os.path.isdir(path) and entry.lower() == "comfyui-kjnodes":
-                return True
-    except OSError:
-        return False
-    return False
-
-
-def _has_manager(custom_nodes_dir: str) -> bool:
-    """Detect an existing ComfyUI-Manager install by folder name."""
-    try:
-        for entry in os.listdir(custom_nodes_dir):
-            path = os.path.join(custom_nodes_dir, entry)
-            if os.path.isdir(path) and entry.lower() == "comfyui-manager":
-                return True
-    except OSError:
-        return False
-    return False
-
-
-def _download_and_extract_zip(repo_url: str, dest_dir: str, branch: str = "main") -> Tuple[bool, str]:
-    """
-    Fallback installer when git is unavailable: download a zip archive and unpack it into dest_dir.
-    """
-    try:
-        url = f"{repo_url.rstrip('/')}/archive/refs/heads/{branch}.zip"
-        download_root = Path(get_charon_temp_dir()) / "downloads"
-        ts = int(time.time())
-        download_root.mkdir(parents=True, exist_ok=True)
-        zip_path = download_root / f"{Path(dest_dir).name}_{ts}.zip"
-        extract_root = download_root / f"{Path(dest_dir).name}_{ts}"
-        with urllib.request.urlopen(url) as resp:
-            zip_path.write_bytes(resp.read())
-        extract_root.mkdir(parents=True, exist_ok=True)
-        shutil.unpack_archive(str(zip_path), str(extract_root))
-        candidates = [p for p in extract_root.iterdir() if p.is_dir()]
-        if not candidates:
-            return False, "Downloaded archive missing expected folder."
-        src_dir = candidates[0]
-        shutil.rmtree(dest_dir, ignore_errors=True)
-        shutil.copytree(src_dir, dest_dir)
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
-
-
 def _debug_log(message: str) -> None:
     """Append a debug message for setup wizard to the Charon debug folder."""
     try:
@@ -221,18 +120,6 @@ def _debug_log(message: str) -> None:
         pass
 
 
-def _has_comfyui_charon(custom_nodes_dir: str) -> bool:
-    """Detect an existing ComfyUI-Charon install by folder name."""
-    try:
-        for entry in os.listdir(custom_nodes_dir):
-            path = os.path.join(custom_nodes_dir, entry)
-            if os.path.isdir(path) and entry.lower() == "comfyui-charon":
-                return True
-    except OSError:
-        return False
-    return False
-
-
 class FirstTimeSetupWorker(QtCore.QObject):
     progress_changed = QtCore.Signal(int, str)
     finished = QtCore.Signal(bool, list, str)
@@ -240,286 +127,18 @@ class FirstTimeSetupWorker(QtCore.QObject):
     def __init__(self, comfy_path: str):
         super().__init__()
         self.comfy_path = comfy_path
+        self.manager = SetupManager(comfy_path)
 
     @QtCore.Slot()
     def run(self) -> None:
-        messages: List[str] = []
-        error_message = ""
-
         try:
-            _debug_log(f"[start] comfy_path={self.comfy_path}")
-            self.progress_changed.emit(5, "Preparing environment...")
-            env = resolve_comfy_environment(self.comfy_path)
-            python_exe = env.get("python_exe")
-            comfy_dir = env.get("comfy_dir")
-            _debug_log(f"[env] python_exe={python_exe} comfy_dir={comfy_dir}")
-            if not python_exe or not os.path.exists(python_exe):
-                msg = "ComfyUI embedded Python not found. Please select the correct run_nvidia_gpu.bat."
-                self.finished.emit(False, [], msg)
-                return
-            git_path = shutil.which("git")
-            if not git_path:
-                _debug_log("git executable not found; will use zip fallbacks for node installs.")
-
-            custom_nodes_dir = os.path.join(comfy_dir or "", "custom_nodes")
-            manager_dir = os.path.join(custom_nodes_dir, "ComfyUI-Manager")
-            kjnodes_dir = os.path.join(custom_nodes_dir, "ComfyUI-KJNodes")
-            charon_dir = os.path.join(custom_nodes_dir, "ComfyUI-Charon")
-            charon_src = Path(__file__).resolve().parents[2] / "custom_nodes" / "comfyUI" / "ComfyUI-Charon"
-            missing_manager = False
-            missing_kjnodes = False
-            missing_charon = False
-            if comfy_dir:
-                os.makedirs(custom_nodes_dir, exist_ok=True)
-                missing_manager = not _has_manager(custom_nodes_dir)
-                missing_kjnodes = not _has_kjnodes(custom_nodes_dir)
-                missing_charon = not _has_comfyui_charon(custom_nodes_dir)
-
-            needs_playwright = not _playwright_available(python_exe)
-            needs_trimesh = not _module_available(python_exe, "trimesh")
-            if not needs_playwright:
-                messages.append("Playwright already installed (ComfyUI embedded env)")
-            if not needs_trimesh:
-                messages.append("trimesh already installed (ComfyUI embedded env)")
-
-            statuses = {
-                "playwright": "missing" if needs_playwright else "found",
-                "trimesh": "missing" if needs_trimesh else "found",
-                "manager": "missing" if missing_manager else "found",
-                "kjnodes": "missing" if missing_kjnodes else "found",
-                "charon": "missing" if missing_charon else "found",
-            }
-
-            def _status_lines() -> List[str]:
-                return [
-                    f"Check Playwright: {statuses['playwright']}",
-                    f"Check trimesh: {statuses['trimesh']}",
-                    f"Check ComfyUI-Manager: {statuses['manager']}",
-                    f"Check KJNodes: {statuses['kjnodes']}",
-                    f"Check ComfyUI-Charon: {statuses['charon']}",
-                ]
-
-            def _emit_status(progress: int, action: str) -> None:
-                lines = _status_lines()
-                status_block = "\n".join(lines)
-                message = action or ""
-                if status_block:
-                    if message:
-                        message = f"{message}\n{status_block}"
-                    else:
-                        message = status_block
-                _debug_log(f"[progress {progress}] {message}")
+            def callback(progress: int, message: str):
                 self.progress_changed.emit(progress, message)
-
-            _emit_status(10, "Checking dependencies...")
-
-            tasks: List[Tuple[str, List[str]]] = []
-
-            # Order: Playwright -> trimesh -> ComfyUI-Manager -> KJNodes
-            if needs_playwright:
-                tasks.append(
-                    (
-                        "Installing Playwright...",
-                        [python_exe, "-m", "pip", "install", "playwright"],
-                    )
-                )
-                tasks.append(
-                    (
-                        "Installing Playwright Chromium...",
-                        [python_exe, "-m", "playwright", "install", "chromium"],
-                    )
-                )
-            if needs_trimesh:
-                tasks.append(
-                    (
-                        "Installing trimesh...",
-                        [python_exe, "-m", "pip", "install", "trimesh"],
-                    )
-                )
-            if missing_manager:
-                statuses["manager"] = "installing"
-                if git_path:
-                    tasks.append(
-                        (
-                            "Cloning ComfyUI-Manager...",
-                            [
-                                git_path,
-                                "clone",
-                                "https://github.com/Comfy-Org/ComfyUI-Manager",
-                                manager_dir,
-                            ],
-                        )
-                    )
-                else:
-                    _emit_status(27, "Downloading ComfyUI-Manager (zip)...")
-                    ok, err = _download_and_extract_zip(
-                        "https://github.com/Comfy-Org/ComfyUI-Manager", manager_dir, branch="main"
-                    )
-                    _debug_log(f"[download] manager ok={ok} err={err}")
-                    if not ok:
-                        messages.append(f"ComfyUI-Manager download failed ({err})")
-                        statuses["manager"] = "failed"
-                        self.finished.emit(False, messages, err or "Failed to download ComfyUI-Manager")
-                        return
-                    messages.append("Downloaded ComfyUI-Manager (zip)")
-                _append_requirements_tasks(tasks, python_exe, manager_dir, "ComfyUI-Manager")
-            else:
-                messages.append("ComfyUI-Manager already installed")
-
-            if missing_kjnodes:
-                statuses["kjnodes"] = "installing"
-                if git_path:
-                    tasks.append(
-                        (
-                            "Cloning ComfyUI-KJNodes...",
-                            [
-                                git_path,
-                                "clone",
-                                "https://github.com/kijai/ComfyUI-KJNodes",
-                                kjnodes_dir,
-                            ],
-                        )
-                    )
-                else:
-                    _emit_status(33, "Downloading ComfyUI-KJNodes (zip)...")
-                    ok, err = _download_and_extract_zip(
-                        "https://github.com/kijai/ComfyUI-KJNodes", kjnodes_dir, branch="main"
-                    )
-                    _debug_log(f"[download] kjnodes ok={ok} err={err}")
-                    if not ok:
-                        messages.append(f"ComfyUI-KJNodes download failed ({err})")
-                        statuses["kjnodes"] = "failed"
-                        self.finished.emit(False, messages, err or "Failed to download ComfyUI-KJNodes")
-                        return
-                    messages.append("Downloaded ComfyUI-KJNodes (zip)")
-                _append_requirements_tasks(tasks, python_exe, kjnodes_dir, "ComfyUI-KJNodes")
-            else:
-                messages.append("ComfyUI-KJNodes already installed")
-            if missing_charon:
-                if charon_src.exists():
-                    statuses["charon"] = "installing"
-                    tasks.append(
-                        (
-                            "Installing ComfyUI-Charon...",
-                            None,  # handled inline without spawning a new interpreter
-                        )
-                    )
-                    _append_requirements_tasks(tasks, python_exe, charon_dir, "ComfyUI-Charon")
-                else:
-                    messages.append("ComfyUI-Charon source missing in repo; skip install.")
-            else:
-                messages.append("ComfyUI-Charon already installed")
-
-            if not tasks:
-                _emit_status(60, "Dependencies already installed.")
-                _emit_status(95, "Finalizing setup...")
-                _debug_log("no tasks; finishing early")
-                self.finished.emit(True, messages or ["Dependencies already available."], "")
-                return
-
-            start_progress = 10
-            task_band = 70
-            task_count = max(len(tasks), 1)
-            step_size = task_band / float(task_count)
-            success = True
-
-            for idx, (label, cmd) in enumerate(tasks):
-                _debug_log(f"[task-start] {label} cmd={cmd}")
-                pre_progress = int(min(95, start_progress + idx * step_size))
-                post_progress = int(min(95, start_progress + (idx + 1) * step_size))
-                if "Playwright" in label:
-                    statuses["playwright"] = "installing"
-                elif "trimesh" in label:
-                    statuses["trimesh"] = "installing"
-                elif "ComfyUI-Manager" in label:
-                    statuses["manager"] = "installing"
-                elif "KJNodes" in label:
-                    statuses["kjnodes"] = "installing"
-                elif "ComfyUI-Charon" in label:
-                    statuses["charon"] = "installing"
-                _emit_status(pre_progress, label)
-                ok = True
-                err = ""
-                should_run = True
-                if cmd is None and "ComfyUI-Charon" in label:
-                    try:
-                        Path(charon_dir).parent.mkdir(parents=True, exist_ok=True)
-                        shutil.rmtree(charon_dir, ignore_errors=True)
-                        shutil.copytree(charon_src, charon_dir)
-                    except Exception as exc:
-                        ok = False
-                        err = str(exc)
-                    should_run = False
-                elif cmd and "pip" in cmd and "-r" in cmd:
-                    req_path = Path(cmd[-1])
-                    if not req_path.exists():
-                        ok = True
-                        err = ""
-                        messages.append(f"{label.replace('...', '').rstrip('.')} skipped (no requirements.txt)")
-                        _debug_log(f"[task] {label} skipped; missing {req_path}")
-                        if "ComfyUI-Manager" in label:
-                            statuses["manager"] = "found"
-                        elif "KJNodes" in label:
-                            statuses["kjnodes"] = "found"
-                        elif "ComfyUI-Charon" in label:
-                            statuses["charon"] = "found"
-                        _emit_status(post_progress, f"{label.replace('...', '').rstrip('.')} skipped")
-                        continue
-                elif cmd and len(cmd) == 2 and cmd[1].endswith("install.py"):
-                    install_path = Path(cmd[1])
-                    if not install_path.exists():
-                        ok = True
-                        err = ""
-                        messages.append(f"{label.replace('...', '').rstrip('.')} skipped (no install.py)")
-                        _debug_log(f"[task] {label} skipped; missing {install_path}")
-                        if "ComfyUI-Manager" in label:
-                            statuses["manager"] = "found"
-                        elif "KJNodes" in label:
-                            statuses["kjnodes"] = "found"
-                        elif "ComfyUI-Charon" in label:
-                            statuses["charon"] = "found"
-                        _emit_status(post_progress, f"{label.replace('...', '').rstrip('.')} skipped")
-                        continue
-                if should_run:
-                    ok, err = _run_command_silent(cmd)
-                _debug_log(f"[task] {label} -> ok={ok} err={err}")
-                if ok:
-                    messages.append(label.replace("...", "").rstrip("."))
-                    if "Playwright" in label:
-                        statuses["playwright"] = "found"
-                    elif "trimesh" in label:
-                        statuses["trimesh"] = "found"
-                    elif "ComfyUI-Manager" in label:
-                        statuses["manager"] = "found"
-                    elif "KJNodes" in label:
-                        statuses["kjnodes"] = "found"
-                    elif "ComfyUI-Charon" in label:
-                        statuses["charon"] = "found"
-                    _emit_status(post_progress, label.replace("...", "").rstrip(".") + " completed")
-                    continue
-                success = False
-                error_message = err or "Unknown failure"
-                messages.append(f"{label}: FAILED ({error_message})")
-                if "Playwright" in label:
-                    statuses["playwright"] = "failed"
-                elif "trimesh" in label:
-                    statuses["trimesh"] = "failed"
-                elif "ComfyUI-Manager" in label:
-                    statuses["manager"] = "failed"
-                elif "KJNodes" in label:
-                    statuses["kjnodes"] = "failed"
-                elif "ComfyUI-Charon" in label:
-                    statuses["charon"] = "failed"
-                _emit_status(post_progress, f"{label}: FAILED")
-                break
-
-            _emit_status(95, "Finalizing setup...")
-            self.finished.emit(success, messages, error_message)
-        except Exception as exc:  # pragma: no cover - defensive
-            error_message = str(exc)
-            _debug_log(f"[fatal] setup crashed: {error_message}")
-            _debug_log(f"[fatal] messages_so_far={messages}")
-            self.finished.emit(False, messages, error_message)
+            
+            success, messages, error = self.manager.install_dependencies(callback)
+            self.finished.emit(success, messages, error)
+        except Exception as exc:
+            self.finished.emit(False, [], str(exc))
 
 
 def get_icon(name: str) -> QtGui.QIcon:

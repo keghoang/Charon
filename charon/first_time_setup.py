@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
-import configparser
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict
 
 from . import preferences
 from .charon_logger import system_error, system_info
-from .dependency_check import PREF_DEPENDENCIES_VERIFIED, _module_available
+from .dependency_check import PREF_DEPENDENCIES_VERIFIED, ensure_manager_security_level
 from .paths import resolve_comfy_environment, get_default_comfy_launch_path
 from .qt_compat import QtWidgets
+from .setup_manager import SetupManager
 
 FIRST_TIME_SETUP_KEY = "first_time_setup_complete"
 FORCE_FIRST_TIME_SETUP_KEY = "force_first_time_setup"
@@ -65,136 +66,6 @@ def run_first_time_setup_if_needed(parent=None, force: bool = False) -> bool:
     return False
 
 
-# --- Dependency probing + logging (charon_log.json) ---
-
-def _requirements_modules() -> list[str]:
-    """
-    Read top-level requirements (one per line, ignores comments/empties).
-    """
-    modules: list[str] = []
-    try:
-        req_path = Path(__file__).resolve().parents[1] / "requirements.txt"
-        for line in req_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            modules.append(stripped)
-    except Exception as exc:  # pragma: no cover - defensive
-        system_error(f"Failed to read requirements.txt: {exc}")
-    return modules
-
-
-def _probe_requirements(python_exe: str | None, modules: list[str]) -> tuple[list[str], list[dict]]:
-    """
-    Probe required modules inside the ComfyUI embedded Python.
-    Returns (missing_modules, probe_results).
-    """
-    results: list[dict] = []
-    missing: list[str] = []
-    if not python_exe:
-        for name in modules:
-            results.append({"name": name, "ok": False, "error": "python_exe missing"})
-        missing.extend(modules)
-        return missing, results
-
-    for name in modules:
-        ok = _module_available(python_exe, name)
-        entry: dict = {"name": name, "ok": ok}
-        if not ok:
-            missing.append(name)
-        results.append(entry)
-    return missing, results
-
-
-def _probe_custom_nodes(comfy_dir: str | None) -> tuple[list[str], list[dict]]:
-    """
-    Check presence of expected custom nodes and manager security level.
-    """
-    expected_nodes = {
-        "ComfyUI-Manager": (
-            "user/default/ComfyUI-Manager",
-            "custom_nodes/ComfyUI-Manager",
-        ),
-        "ComfyUI-KJNodes": ("custom_nodes/ComfyUI-KJNodes",),
-        "ComfyUI-Charon": ("custom_nodes/ComfyUI-Charon",),
-    }
-    results: list[dict] = []
-    missing: list[str] = []
-    base = Path(comfy_dir) if comfy_dir else None
-    for name, rels in expected_nodes.items():
-        ok = False
-        path = ""
-        if base:
-            for rel in rels:
-                candidate = base / rel
-                if candidate.exists():
-                    ok = True
-                    path = str(candidate)
-                    break
-        entry = {"name": name, "ok": ok}
-        if path:
-            entry["path"] = path
-        if not ok:
-            missing.append(name)
-        results.append(entry)
-
-    # Manager security level check (record only; don't block setup on missing config)
-    sec_entry = {
-        "name": "ComfyUI-Manager security_level",
-        "ok": True,
-        "expected": "weak",
-    }
-    if base:
-        candidates = [
-            base / "user" / "__manager" / "config.ini",
-            base / "user" / "default" / "ComfyUI-Manager" / "config.ini",
-        ]
-        sec_entry["checked_paths"] = [str(c) for c in candidates]
-        sec_entry["config_present"] = False
-        for cfg in candidates:
-            if cfg.exists():
-                try:
-                    parser = configparser.ConfigParser()
-                    parser.read(cfg, encoding="utf-8")
-                    current = parser.get("default", "security_level", fallback="")
-                    sec_entry["found"] = current
-                    sec_entry["config_present"] = True
-                    sec_entry["matches_expected"] = current.lower() == "weak"
-                    sec_entry["path"] = str(cfg)
-                    break
-                except Exception as exc:  # pragma: no cover - defensive
-                    sec_entry["error"] = str(exc)
-    results.append(sec_entry)
-    # Do not add to missing: absence or mismatch should not block setup; we enforce separately on launch.
-    return missing, results
-
-
-def _ensure_manager_config(comfy_dir: str | None, desired_level: str = "weak") -> None:
-    """
-    Create/update ComfyUI-Manager config.ini in both expected locations with the desired security_level.
-    """
-    if not comfy_dir:
-        return
-    base = Path(comfy_dir)
-    targets = [
-        base / "user" / "default" / "ComfyUI-Manager" / "config.ini",
-        base / "user" / "__manager" / "config.ini",
-    ]
-    for cfg in targets:
-        try:
-            parser = configparser.ConfigParser()
-            if cfg.exists():
-                parser.read(cfg, encoding="utf-8")
-            if not parser.has_section("default"):
-                parser.add_section("default")
-            parser.set("default", "security_level", desired_level)
-            cfg.parent.mkdir(parents=True, exist_ok=True)
-            with open(cfg, "w", encoding="utf-8") as handle:
-                parser.write(handle)
-        except Exception as exc:  # pragma: no cover - defensive
-            system_error(f"Failed to write manager config {cfg}: {exc}")
-
-
 def _charon_log_path(comfy_dir: str | None) -> Path | None:
     if not comfy_dir:
         return None
@@ -203,8 +74,7 @@ def _charon_log_path(comfy_dir: str | None) -> Path | None:
 
 def _write_charon_log(
     log_path: Path | None,
-    results: list[dict],
-    custom_nodes: list[dict],
+    status_map: Dict[str, str],
     missing: list[str],
     setup_ran: bool,
     ok: bool,
@@ -215,8 +85,7 @@ def _write_charon_log(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "requirements": results,
-            "custom_nodes": custom_nodes,
+            "status_map": status_map,
             "missing": missing,
             "setup_ran": setup_ran,
             "ok": ok,
@@ -228,25 +97,25 @@ def _write_charon_log(
 
 def ensure_requirements_with_log(parent=None) -> bool:
     """
-    Always probe requirements in the embedded Python.
-    - If charon_log.json is missing OR any probe fails -> run First-Time Setup (forced), then re-probe.
+    Probes requirements using SetupManager.
+    - If charon_log.json is missing OR any dependency is missing -> run First-Time Setup (forced).
     - Write charon_log.json with the probe results.
     """
     # Resolve Comfy environment
     prefs = preferences.load_preferences()
     comfy_path = prefs.get("comfyui_launch_path") or get_default_comfy_launch_path()
-    env = resolve_comfy_environment(comfy_path)
-    comfy_dir = env.get("comfy_dir")
-    python_exe = env.get("python_exe")
+    
+    # 1. Initialize Manager
+    manager = SetupManager(comfy_path)
+    comfy_dir = manager.comfy_dir
     log_path = _charon_log_path(comfy_dir)
 
-    # Ensure manager config files exist with desired security level before probing
-    _ensure_manager_config(comfy_dir, desired_level="weak")
+    # 2. Ensure Security Level (using existing util)
+    ensure_manager_security_level("weak", comfy_path_override=comfy_path)
 
-    modules = _requirements_modules()
-    missing_req, results_req = _probe_requirements(python_exe, modules)
-    missing_nodes, results_nodes = _probe_custom_nodes(comfy_dir)
-    missing = missing_req + missing_nodes
+    # 3. Check Status
+    status_map = manager.check_dependencies()
+    missing = [k for k, v in status_map.items() if v != "found"]
 
     log_missing = log_path is None or not log_path.exists()
     need_setup = log_missing or bool(missing)
@@ -256,20 +125,21 @@ def ensure_requirements_with_log(parent=None) -> bool:
 
     if need_setup:
         setup_ran = True
+        # If we need setup, we launch the UI which uses the same SetupManager logic to install
         setup_ok = run_first_time_setup_if_needed(parent=parent, force=True)
-        # Refresh env in case setup updated paths
+        
+        # Refresh Manager and Status after setup
         prefs = preferences.load_preferences()
-        refreshed_path = prefs.get("comfyui_launch_path") or get_default_comfy_launch_path()
-        comfy_path = refreshed_path or comfy_path
-        env = resolve_comfy_environment(comfy_path)
-        comfy_dir = env.get("comfy_dir")
-        python_exe = env.get("python_exe")
+        comfy_path = prefs.get("comfyui_launch_path") or get_default_comfy_launch_path()
+        manager = SetupManager(comfy_path)
+        comfy_dir = manager.comfy_dir
         log_path = _charon_log_path(comfy_dir)
-        _ensure_manager_config(comfy_dir, desired_level="weak")
-        missing_req, results_req = _probe_requirements(python_exe, modules)
-        missing_nodes, results_nodes = _probe_custom_nodes(comfy_dir)
-        missing = missing_req + missing_nodes
+        
+        ensure_manager_security_level("weak", comfy_path_override=comfy_path)
+        
+        status_map = manager.check_dependencies()
+        missing = [k for k, v in status_map.items() if v != "found"]
 
     ok = setup_ok and not missing
-    _write_charon_log(log_path, results_req, results_nodes, missing, setup_ran, ok)
+    _write_charon_log(log_path, status_map, missing, setup_ran, ok)
     return ok
