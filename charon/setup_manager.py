@@ -119,6 +119,7 @@ class SetupManager:
         # Python Modules
         statuses["playwright"] = "found" if self._playwright_available() else "missing"
         statuses["trimesh"] = "found" if self._module_available("trimesh") else "missing"
+        statuses["hf_xet"] = "found" if self._module_available("hf_xet") else "missing"
 
         # Custom Nodes
         if self.comfy_dir:
@@ -173,7 +174,7 @@ class SetupManager:
         path = Path(node_dir)
         req_path = path / "requirements.txt"
         if req_path.exists():
-             tasks.append(
+            tasks.append(
                 (
                     f"Installing {label} dependencies...",
                     [self.python_exe, "-m", "pip", "install", "-r", str(req_path)],
@@ -223,7 +224,11 @@ class SetupManager:
         if current_status.get("trimesh") == "missing":
             tasks.append(("Installing trimesh...", [self.python_exe, "-m", "pip", "install", "trimesh"]))
 
-        # 3. ComfyUI-Manager
+        # 3. hf_xet
+        if current_status.get("hf_xet") == "missing":
+            tasks.append(("Installing hf_xet...", [self.python_exe, "-m", "pip", "install", "hf_xet"]))
+
+        # 4. ComfyUI-Manager
         if current_status.get("manager") == "missing":
             if git_path:
                 tasks.append(( 
@@ -239,7 +244,7 @@ class SetupManager:
             # For simplicity, we'll add a "Post-Install" task that checks for requirements.txt dynamically.
             tasks.append(("Installing Manager requirements...", ["__DYNAMIC_REQ__", self.manager_dir, "ComfyUI-Manager"]))
 
-        # 4. ComfyUI-KJNodes
+        # 5. ComfyUI-KJNodes
         if current_status.get("kjnodes") == "missing":
             if git_path:
                 tasks.append(( 
@@ -251,7 +256,7 @@ class SetupManager:
             
             tasks.append(("Installing KJNodes requirements...", ["__DYNAMIC_REQ__", self.kjnodes_dir, "ComfyUI-KJNodes"]))
 
-        # 5. ComfyUI-Charon
+        # 6. ComfyUI-Charon
         if current_status.get("charon") == "missing":
             if self.charon_src.exists():
                 tasks.append(("Installing ComfyUI-Charon...", ["__INTERNAL_COPY__"]))

@@ -140,6 +140,7 @@ class ScriptTableView(QtWidgets.QTableView):
         if model:
             # Configure column widths
             self.setColumnWidth(ScriptTableModel.COL_NAME, 300)  # Name column
+            self.setColumnWidth(ScriptTableModel.COL_VRAM, 90)   # VRAM column
             self.setColumnWidth(ScriptTableModel.COL_VALIDATE, 140)  # Status column
             self.setColumnWidth(ScriptTableModel.COL_RUN, 100)  # Actions button column
             

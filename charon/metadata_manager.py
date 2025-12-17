@@ -188,6 +188,8 @@ def update_charon_config(script_path, new_config):
         payload["tags"] = new_config["tags"]
     if "parameters" in new_config and new_config["parameters"] is not None:
         payload["parameters"] = new_config["parameters"]
+    if "min_vram_gb" in new_config:
+        payload["min_vram_gb"] = new_config["min_vram_gb"]
 
     if not payload.get("workflow_file"):
         payload["workflow_file"] = "workflow.json"

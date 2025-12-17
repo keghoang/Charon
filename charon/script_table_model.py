@@ -5,13 +5,14 @@ import os
 import time
 
 class ScriptTableModel(QtCore.QAbstractTableModel):
-    """Table model for displaying workflows with columns: Name, Status, Run"""
+    """Table model for displaying workflows with columns: Name, VRAM, Status, Run"""
     
     # Column indices
     COL_NAME = 0
-    COL_VALIDATE = 1
-    COL_RUN = 2
-    COLUMN_COUNT = 3
+    COL_VRAM = 1
+    COL_VALIDATE = 2
+    COL_RUN = 3
+    COLUMN_COUNT = 4
     
     # Custom roles
     ScriptRole = UserRole + 1
@@ -29,6 +30,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         self.scripts = []
         self.host = "None"
         self.validation_states = {}
+        self._system_vram_gb = None
     
     def _has_valid_entry_file(self, script: ScriptItem) -> bool:
         """Check if script has a valid entry file (uses cached validation)"""
@@ -39,6 +41,130 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         """Check if a script can be run."""
         can_run, _ = ScriptValidator.can_execute(script.path, script.metadata, self.host)
         return can_run
+    
+    @staticmethod
+    def _parse_min_vram(metadata: dict) -> tuple[float, str]:
+        """Return (required_gb, display_text) or (None, "") if missing."""
+        if not isinstance(metadata, dict):
+            return None, ""
+        raw = metadata.get("min_vram_gb") or metadata.get("charon_meta", {}).get("min_vram_gb")
+        if raw is None:
+            return None, ""
+        text = str(raw).strip()
+        import re
+        # Accept values like "32 GB", "32GB", "32", "32.0", "32gb"
+        match = re.search(r"(\d+(?:\.\d+)?)", text)
+        if not match:
+            return None, text or ""
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            return None, text or ""
+        return value, text or f"{value:g} GB"
+
+    def _detect_system_vram_gb(self) -> float:
+        """Detect the maximum available GPU VRAM (in GB) across adapters."""
+        if self._system_vram_gb is not None:
+            return self._system_vram_gb
+
+        def _round_gb(value, scale):
+            try:
+                return float(value) / float(scale)
+            except Exception:
+                return None
+
+        max_gb = None
+
+        # Prefer nvidia-smi when available for accurate totals
+        cmd = [
+            "nvidia-smi",
+            "--query-gpu=memory.total",
+            "--format=csv,noheader,nounits",
+        ]
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                val = _round_gb(line, 1024)
+                if val:
+                    max_gb = max(max_gb or 0, val)
+        except Exception:
+            pass
+
+        # Fallback to WMI on Windows
+        if max_gb is None and os.name == "nt":
+            ps_cmd = (
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object AdapterRAM | ConvertTo-Json -Compress"
+            )
+            try:
+                import subprocess, json as _json
+
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                payload = _json.loads(result.stdout)
+                records = payload if isinstance(payload, list) else [payload]
+                for rec in records:
+                    if not isinstance(rec, dict):
+                        continue
+                    raw = rec.get("AdapterRAM")
+                    if isinstance(raw, (int, float)):
+                        val = _round_gb(raw, 1024 ** 3)
+                        if val:
+                            max_gb = max(max_gb or 0, val)
+            except Exception:
+                pass
+
+        self._system_vram_gb = max_gb
+        return max_gb
+
+    def _compute_vram_status(self, script: ScriptItem) -> dict:
+        """Return a dict with display, color, tooltip, and state for VRAM column."""
+        metadata = script.metadata or {}
+        req_gb, display_text = self._parse_min_vram(metadata)
+        available_gb = self._detect_system_vram_gb()
+
+        if req_gb is None:
+            return {
+                "text": "?",
+                "color": "#f08c00",
+                "tooltip": "No minimum VRAM requirement set.",
+            }
+
+        if not display_text:
+            display_text = f"{req_gb:g} GB"
+
+        if available_gb is None:
+            return {
+                "text": f"{display_text} ?",
+                "color": "#f08c00",
+                "tooltip": f"Requires ≥ {display_text}. Unable to detect GPU VRAM.",
+            }
+
+        passes = available_gb >= req_gb
+        color = "#37b24d" if passes else "#ff6b6b"
+        marker = "✔" if passes else "✖"
+        tooltip = f"Requires ≥ {display_text}. Detected max VRAM: {available_gb:.1f} GB."
+        return {
+            "text": f"{display_text} {marker}",
+            "color": color,
+            "tooltip": tooltip,
+        }
     
     def get_foreground_brush(self, script: ScriptItem):
         """Get the foreground brush for a script item."""
@@ -157,6 +283,10 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
                 
                 return f"{prefix}{script.name}"
             
+            elif col == self.COL_VRAM:
+                vram = self._compute_vram_status(script)
+                return vram.get("text")
+            
             elif col == self.COL_VALIDATE:
                 state = self._get_validation_state_for_script(script)
                 entry = self._get_validation_entry_for_script(script)
@@ -200,8 +330,18 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         elif role == ForegroundRole:
             if col == self.COL_NAME:
                 return self.get_foreground_brush(script)
+            if col == self.COL_VRAM:
+                vram = self._compute_vram_status(script)
+                color = vram.get("color")
+                if color:
+                    return QtGui.QBrush(QtGui.QColor(color))
             if col == self.COL_VALIDATE:
                 return QtGui.QBrush(QtGui.QColor("#c2c7d1"))
+        
+        elif role == QtCore.Qt.ItemDataRole.ToolTipRole:
+            if col == self.COL_VRAM:
+                vram = self._compute_vram_status(script)
+                return vram.get("tooltip")
             
         # Custom roles for accessing script data
         elif role == self.ScriptRole:
@@ -236,6 +376,8 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
         if orientation == Horizontal and role == DisplayRole:
             if section == self.COL_NAME:
                 return "Workflow"
+            elif section == self.COL_VRAM:
+                return "VRAM"
             elif section == self.COL_VALIDATE:
                 return "Status"
             elif section == self.COL_RUN:

@@ -1,6 +1,6 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, UserRole, UniqueConnection, exec_dialog
 from typing import Optional, Tuple
-import os, sys, time
+import os, sys, time, json, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 
@@ -661,6 +661,11 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout = QtWidgets.QHBoxLayout()
         footer_layout.setContentsMargins(4, 0, 4, 4)
 
+        project_container = QtWidgets.QWidget(parent)
+        project_layout = QtWidgets.QVBoxLayout(project_container)
+        project_layout.setContentsMargins(0, 0, 0, 0)
+        project_layout.setSpacing(0)
+
         self.project_label = QtWidgets.QLabel(parent)
         self.project_label.setObjectName("charonProjectLabel")
         self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -669,7 +674,19 @@ class CharonWindow(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
         )
         self.project_label.setMinimumWidth(280)
-        footer_layout.addWidget(self.project_label, 1)
+        project_layout.addWidget(self.project_label)
+
+        self.gpu_label = QtWidgets.QLabel(parent)
+        self.gpu_label.setObjectName("charonGpuLabel")
+        self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.gpu_label.setWordWrap(False)
+        gpu_font = QtGui.QFont(self.project_label.font())
+        gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
+        self.gpu_label.setFont(gpu_font)
+        self.gpu_label.setStyleSheet("color: #cfd3dc;")
+        project_layout.addWidget(self.gpu_label)
+
+        footer_layout.addWidget(project_container, 1)
 
         footer_layout.addStretch()
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
@@ -683,7 +700,9 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.addWidget(self.comfy_connection_widget)
         self._footer_comfy_layout = footer_layout
         main_layout.addLayout(footer_layout)
+
         self._refresh_project_display()
+        self._refresh_gpu_display()
 
         # Initialize and populate folders
         self.current_base = self.global_path
@@ -847,6 +866,7 @@ QPushButton#NewWorkflowButton:pressed {{
         """Setup components shared between normal and command mode."""
         # Ensure project details stay updated after shared components load
         self._refresh_project_display()
+        self._refresh_gpu_display()
         
         # Connect tiny mode signals
         self.tiny_mode_widget.exit_tiny_mode.connect(self.exit_tiny_mode)
@@ -878,6 +898,100 @@ QPushButton#NewWorkflowButton:pressed {{
         self.normal_mode_geometry = None
         self.tiny_mode_geometry = None
         self._use_tiny_offset_defaults_once = False
+
+    # -------------------------------------------------
+    # Hardware detection
+    # -------------------------------------------------
+
+    @staticmethod
+    def _round_gb(value, scale: float) -> Optional[int]:
+        try:
+            return int(round(float(value) / scale))
+        except Exception:
+            return None
+
+    def _detect_nvidia_gpus(self) -> list[str]:
+        """Use nvidia-smi for accurate VRAM reporting when available."""
+        cmd = [
+            "nvidia-smi",
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except Exception as exc:
+            system_debug(f"GPU detection via nvidia-smi failed: {exc}")
+            return []
+
+        entries: list[str] = []
+        for line in result.stdout.splitlines():
+            parts = [part.strip() for part in line.split(",") if part.strip()]
+            if len(parts) < 2:
+                continue
+            name, mem_mib = parts[0], parts[1]
+            mem_gb = self._round_gb(mem_mib, 1024)
+            if mem_gb:
+                entries.append(f"{name} ({mem_gb} GB)")
+            else:
+                entries.append(name)
+        return entries
+
+    def _detect_wmi_gpus(self) -> list[str]:
+        """Fallback GPU detection for Windows using WMI (may under-report VRAM)."""
+        if sys.platform != "win32":
+            return []
+        cmd = (
+            "Get-CimInstance Win32_VideoController | "
+            "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", cmd],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except Exception as exc:
+            system_debug(f"GPU detection via WMI failed: {exc}")
+            return []
+
+        try:
+            payload = json.loads(result.stdout)
+        except Exception:
+            return []
+
+        records = payload if isinstance(payload, list) else [payload]
+        entries: list[str] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            name = str(record.get("Name") or "").strip()
+            raw_ram = record.get("AdapterRAM")
+            mem_gb = None
+            if isinstance(raw_ram, (int, float)):
+                mem_gb = self._round_gb(raw_ram, 1024 ** 3)
+            if name and mem_gb:
+                entries.append(f"{name} ({mem_gb} GB)")
+            elif name:
+                entries.append(name)
+        return entries
+
+    def _detect_gpu_summary(self) -> str:
+        """Return a concise GPU summary string for the footer."""
+        entries = self._detect_nvidia_gpus()
+        if not entries:
+            entries = self._detect_wmi_gpus()
+        if not entries:
+            return "GPU: Unknown"
+        summary = "; ".join(entries)
+        return f"GPU: {summary}"
 
     # -------------------------------------------------
     # Keybind handling
@@ -915,6 +1029,21 @@ QPushButton#NewWorkflowButton:pressed {{
         destination = os.path.normpath(destination)
         label.setText(f"Project not Found, saving outputs to {destination}")
         label.setToolTip(destination)
+
+    def _refresh_gpu_display(self):
+        """Update the footer with detected GPU/VRAM summary."""
+        label = getattr(self, "gpu_label", None)
+        if label is None:
+            return
+        if not getattr(self, "_gpu_summary", None):
+            try:
+                self._gpu_summary = self._detect_gpu_summary()
+            except Exception as exc:
+                system_debug(f"GPU detection fallback failed: {exc}")
+                self._gpu_summary = "GPU: Unknown"
+        summary = self._gpu_summary or "GPU: Unknown"
+        label.setText(summary)
+        label.setToolTip(summary)
     
     def _on_keybind_triggered(self, action: str):
         """Handle keybind trigger from keybind manager."""
@@ -2357,6 +2486,7 @@ Cache Stats:
         try:
             # Get current state
             current_folder = self.folder_panel.get_selected_folder()
+            is_bookmarks = current_folder == "Bookmarks"
             current_script = self.script_panel.get_selected_script()
             current_script_path = getattr(current_script, "path", None) if current_script else None
             self._debug_user_action(
@@ -2373,12 +2503,10 @@ Cache Stats:
                 # Refresh current folder (whether script or folder is selected)
                 folder_path = None
                 if current_script:
-                    # Get the folder containing the script
                     folder_path = os.path.dirname(current_script.path)
-                else:
-                    # Use the selected folder
+                elif current_folder and not is_bookmarks:
                     folder_path = os.path.join(self.current_base, current_folder)
-                self._debug_user_action(f"Refreshing current folder: {folder_path}")
+                self._debug_user_action(f"Refreshing current folder: {folder_path or 'Bookmarks'}")
                 self._pending_folder_selection = current_folder
                 
                 # Clear LRU cache since we're doing a refresh anyway
@@ -2394,11 +2522,12 @@ Cache Stats:
                     f"Invalidated folder list cache for base {self.current_base}"
                 )
                 
-                # Invalidate folder in persistent cache
-                cache_manager.invalidate_folder(folder_path)
-                self._debug_user_action(f"Invalidated cached folder data: {folder_path}")
+                # Invalidate folder in persistent cache (skip special Bookmarks pseudo-folder)
+                if folder_path:
+                    cache_manager.invalidate_folder(folder_path)
+                    self._debug_user_action(f"Invalidated cached folder data: {folder_path}")
                 
-                # Refresh the folder panel to pick up any new folders
+                # Refresh the folder panel to pick up any new folders/bookmark visibility
                 stored_folder = current_folder
                 self.refresh_folder_panel()
                 self._debug_user_action("Triggered folder panel refresh (current folder)")
@@ -2410,11 +2539,15 @@ Cache Stats:
                         self._debug_user_action(
                             f"Re-selected folder after refresh: {stored_folder}"
                         )
-                    # Reload scripts for the folder
-                    self.script_panel.load_scripts_for_folder(folder_path)
-                    self._debug_user_action(
-                        f"Reloaded scripts for folder: {folder_path}"
-                    )
+                    # Reload scripts for the folder or bookmarks
+                    if stored_folder == "Bookmarks":
+                        self.load_bookmarked_scripts()
+                        self._debug_user_action("Reloaded bookmarked workflows after refresh")
+                    else:
+                        self.script_panel.load_scripts_for_folder(folder_path)
+                        self._debug_user_action(
+                            f"Reloaded scripts for folder: {folder_path}"
+                        )
                     # Update metadata panel if a script is selected
                     if current_script:
                         self.metadata_panel.update_metadata(current_script.path)

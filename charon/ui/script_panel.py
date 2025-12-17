@@ -1381,6 +1381,7 @@ class ScriptPanel(QtWidgets.QWidget):
         default_meta = {
             "workflow_file": "workflow.json",
             "description": "",
+            "min_vram_gb": None,
             "dependencies": [],
             "last_changed": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "tags": [],

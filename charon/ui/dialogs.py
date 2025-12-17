@@ -27,6 +27,15 @@ _CACHE_FILENAME = "input_mapping_cache.json"
 _MEMORY_CACHE: Dict[str, Tuple[str, Tuple[ExposableNode, ...]]] = {}
 _ACTIVE_DISCOVERY_THREADS: List[QtCore.QThread] = []
 
+_VRAM_OPTIONS: List[Tuple[Optional[str], str]] = [
+    (None, "Not specified"),
+    ("8 GB", "8 GB"),
+    ("12 GB", "12 GB"),
+    ("16 GB", "16 GB"),
+    ("24 GB", "24 GB"),
+    ("32 GB", "32 GB"),
+]
+
 
 def _cache_key(path: str) -> str:
     return os.path.abspath(path)
@@ -227,6 +236,17 @@ def _resolve_parameter_default(value: Any, value_type: str, node_default: Any) -
         except (TypeError, ValueError):
             return node_default
     return value if value is not None else node_default
+
+
+def _normalize_min_vram(value: Any) -> Optional[str]:
+    """Normalize the stored minimum VRAM value to a trimmed string or None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (int, float)):
+        return f"{value}".strip()
+    return None
 
 
 class _ParameterDiscoveryWorker(QtCore.QObject):
@@ -641,12 +661,14 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         else:
             parameters = []
         self._metadata["parameters"] = parameters
+        self._metadata["min_vram_gb"] = _normalize_min_vram(self._metadata.get("min_vram_gb"))
         self._workflow_path = workflow_path
         self._discovery_thread: Optional[QtCore.QThread] = None
         self._discovery_worker: Optional[_ParameterDiscoveryWorker] = None
         self._scan_animation_timer: Optional[QtCore.QTimer] = None
         self._scan_animation_phase: int = 0
         self._scan_base_text: str = "Scanning workflow inputs"
+        self._input_mapping_title: str = "3. Select Parameters to Include"
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(8)
@@ -667,9 +689,10 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.description_edit.setPlainText(self._metadata.get("description", ""))
         layout.addWidget(self.description_edit)
 
+        self._build_vram_selector(layout)
         self._build_input_mapping_section(layout)
 
-        layout.addWidget(QtWidgets.QLabel("3.  Tags (comma separated)"))
+        layout.addWidget(QtWidgets.QLabel("4. Tags (comma separated)"))
         self.tags_edit = QtWidgets.QLineEdit(", ".join(self._metadata.get("tags", [])))
         self.tags_edit.setPlaceholderText("e.g. comfy, FLUX, Nano-Banana")
         layout.addWidget(self.tags_edit)
@@ -683,9 +706,27 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         hint = self.sizeHint()
         self.resize(hint.width(), hint.height() + 50)
 
+    def _build_vram_selector(self, layout: QtWidgets.QVBoxLayout) -> None:
+        """Add a dropdown for the minimum VRAM requirement."""
+        layout.addWidget(QtWidgets.QLabel("2. Minimum VRAM Requirement"))
+        self.vram_combo = QtWidgets.QComboBox()
+        self.vram_combo.setToolTip("Smallest GPU VRAM this workflow should target.")
+        for value, label in _VRAM_OPTIONS:
+            self.vram_combo.addItem(label, userData=value)
+        self._set_vram_selection(self._metadata.get("min_vram_gb"))
+        layout.addWidget(self.vram_combo)
+
+    def _set_vram_selection(self, value: Optional[str]) -> None:
+        normalized = _normalize_min_vram(value)
+        for index in range(self.vram_combo.count()):
+            if self.vram_combo.itemData(index) == normalized:
+                self.vram_combo.setCurrentIndex(index)
+                return
+        self.vram_combo.setCurrentIndex(0)
+
     def _build_input_mapping_section(self, layout: QtWidgets.QVBoxLayout) -> None:
         """Create and populate the workflow parameter preview list."""
-        self.input_mapping_group = QtWidgets.QGroupBox("2. Select Parameters to Include")
+        self.input_mapping_group = QtWidgets.QGroupBox(self._input_mapping_title)
         self.input_mapping_group.setVisible(False)
         group_layout = QtWidgets.QVBoxLayout(self.input_mapping_group)
         group_layout.setContentsMargins(8, 8, 8, 8)
@@ -755,7 +796,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         self.input_mapping_tree.setVisible(False)
         self.input_mapping_message.setVisible(True)
 
-        base_title = "2. Select Parameters to Include"
+        base_title = self._input_mapping_title
         self.input_mapping_group.setTitle(base_title)
 
         cached = _get_cached_parameters(self._workflow_path)
@@ -859,7 +900,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _render_parameter_candidates(self, candidates) -> None:
         self._stop_scan_animation()
-        base_title = "2. Select Parameters to Include"
+        base_title = self._input_mapping_title
 
         total_attributes = sum(len(node.attributes) for node in candidates)
         if total_attributes:
@@ -1030,11 +1071,14 @@ class CharonMetadataDialog(QtWidgets.QDialog):
         tags_raw = self.tags_edit.text()
         tags = [tag.strip() for tag in tags_raw.split(",") if tag.strip()] if tags_raw else []
         parameters = self._collect_selected_parameters()
+        min_vram = _normalize_min_vram(self.vram_combo.currentData())
 
         self._metadata["parameters"] = parameters
+        self._metadata["min_vram_gb"] = min_vram
 
         metadata = {
             "description": self.description_edit.toPlainText().strip(),
+            "min_vram_gb": min_vram,
             "tags": tags,
             "parameters": parameters,
         }

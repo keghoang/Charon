@@ -7,6 +7,7 @@ following schema:
 {
     "workflow_file": "workflow.json",
     "description": "Short summary shown in the metadata pane.",
+    "min_vram_gb": "24 GB",
     "dependencies": [
         {"name": "charon-core", "repo": "https://github.com/example/charon-core", "ref": "main"}
     ],
@@ -32,6 +33,7 @@ CHARON_METADATA_FILENAME = ".charon.json"
 CHARON_DEFAULTS: Dict[str, Any] = {
     "workflow_file": "workflow.json",
     "description": "Describe this workflow.",
+    "min_vram_gb": None,
     "dependencies": [],
     "last_changed": None,
     "tags": [],
@@ -105,9 +107,17 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
 
     normalized_dependencies = _normalize_dependencies(raw_meta.get("dependencies"))
     normalized_parameters = _normalize_parameters(raw_meta.get("parameters"))
+    raw_vram = raw_meta.get("min_vram_gb")
+    if isinstance(raw_vram, (int, float)):
+        normalized_vram = f"{raw_vram}".strip()
+    elif isinstance(raw_vram, str):
+        normalized_vram = raw_vram.strip() or None
+    else:
+        normalized_vram = None
     stored_meta: Dict[str, Any] = {
         "workflow_file": raw_meta.get("workflow_file") or "workflow.json",
         "description": raw_meta.get("description") or "",
+        "min_vram_gb": normalized_vram,
         "dependencies": normalized_dependencies,
         "last_changed": raw_meta.get("last_changed"),
         "tags": list(raw_meta.get("tags") or []),
@@ -119,6 +129,7 @@ def load_charon_metadata(script_path: str) -> Optional[Dict[str, Any]]:
         "workflow_file": stored_meta["workflow_file"],
         "last_changed": stored_meta["last_changed"],
         "tags": stored_meta["tags"],
+        "min_vram_gb": stored_meta["min_vram_gb"],
         "dependencies": normalized_dependencies,
         "parameters": normalized_parameters,
         "charon_meta": stored_meta,
