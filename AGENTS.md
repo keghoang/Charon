@@ -137,6 +137,7 @@ Manual QA to run next:
 
 Open questions / follow-up:
 - Once the manual run is validated, consider wiring status telemetry into the prototype logger (mirroring the planned instrumentation in Step 8).
+- Keep an eye on _API_conversion/conversion_log.md; expand to multi-entry history only if single-entry storage becomes limiting.
 - Future work: port the processor output management (Step 7) and instrumentation/error surfacing (Step 8).
 
 Thanks for keeping all shared logic in prototypes/galt_clone/galt/. Push only once Step 6 is fully verified and documented.
