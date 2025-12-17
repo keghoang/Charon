@@ -1207,11 +1207,16 @@ def _wait_for_single_image(client, prompt_id, timeout=300):
 def _create_step2_result_group(charon_node, image_paths):
     import nuke
     
+    # Deselect all to prevent auto-connection
+    for n in nuke.selectedNodes():
+        n.setSelected(False)
+    
     start_x = charon_node.xpos() + 200
-    start_y = charon_node.ypos()
+    start_y = charon_node.ypos() + 200
     
     group = nuke.createNode("Group")
     group.setName("Charon_Step2_Output")
+    group.setInput(0, None)
     group.setXYpos(start_x, start_y)
     
     group.begin()
