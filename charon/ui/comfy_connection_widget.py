@@ -9,7 +9,7 @@ from ..qt_compat import QtWidgets, QtCore, QtGui
 from ..charon_logger import system_info, system_warning, system_error
 from .. import preferences
 from ..comfy_client import ComfyUIClient
-from ..paths import extend_sys_path_with_comfy
+from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
 import urllib.request
 import urllib.error
 
@@ -438,13 +438,26 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         if not base_dir:
             base_dir = os.getcwd()
         task_name = f"Charon_ComfyUI_{int(time.time())}"
+        disable_flag = "--disable-auto-launch"
+        env_prefix = f'set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% {disable_flag}" && '
+        comfy_env = resolve_comfy_environment(path)
+        comfy_dir = comfy_env.get("comfy_dir") or base_dir
+        python_exe = comfy_env.get("python_exe")
+        main_py = os.path.join(comfy_dir, "main.py")
+
+        if python_exe and os.path.exists(main_py):
+            task_command = (
+                f'cmd /c cd /d "{comfy_dir}" && {env_prefix}"{python_exe}" -u "{main_py}" {disable_flag}'
+            )
+        else:
+            task_command = f'cmd /c cd /d "{base_dir}" && {env_prefix}"{path}" {disable_flag}'
         create_cmd = [
             "schtasks",
             "/create",
             "/tn",
             task_name,
             "/tr",
-            f'cmd /c cd /d "{base_dir}" && "{path}"',
+            task_command,
             "/sc",
             "once",
             "/st",
@@ -504,7 +517,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         reply = QtWidgets.QMessageBox.question(
             self,
             "Terminate ComfyUI",
-            "Send a shutdown signal to ComfyUI?",
+            "Force terminate ComfyUI now?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
@@ -512,12 +525,14 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return
 
         if self._terminate_managed_process():
+            self._launch_in_progress = False
+            self._set_status("checking", False)
+            QtCore.QTimer.singleShot(1500, lambda: self._check_connection(manual=False))
             return
 
-        success = self._send_shutdown_signal()
-
-        if success:
-            system_info("Sent ComfyUI shutdown request.")
+        forced = self._force_kill_comfy_processes()
+        if forced:
+            system_info("Force-terminated ComfyUI processes.")
             self._launch_in_progress = False
             self._set_status("checking", False)
             QtCore.QTimer.singleShot(1500, lambda: self._check_connection(manual=False))
@@ -525,8 +540,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Terminate ComfyUI",
-                "Could not send shutdown signal to ComfyUI.\n"
-                "Please close the ComfyUI window manually.",
+                "No ComfyUI process was force-terminated.\n"
+                "Please close the ComfyUI window or console manually.",
             )
 
     def handle_external_restart_request(self) -> None:
@@ -568,6 +583,34 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     def _send_shutdown_signal(self) -> bool:
         return send_shutdown_signal(self._DEFAULT_URL)
+
+    def _force_kill_comfy_processes(self) -> bool:
+        comfy_env = resolve_comfy_environment(self._comfy_path)
+        comfy_dir = comfy_env.get("comfy_dir") or ""
+        base_dir = comfy_env.get("base_dir") or ""
+        candidates = {os.path.normpath(p) for p in (comfy_dir, base_dir) if p}
+        if not candidates:
+            return False
+
+        try:
+            import psutil  # type: ignore
+        except Exception as exc:  # pragma: no cover - optional dependency
+            system_warning(f"Force kill skipped: psutil unavailable ({exc})")
+            return False
+
+        killed = False
+        for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+            try:
+                exe = proc.info.get("exe") or ""
+                cmdline = " ".join(proc.info.get("cmdline") or [])
+                haystack = (exe.lower(), cmdline.lower())
+                if any(candidate.lower() in text for candidate in candidates for text in haystack):
+                    proc.kill()
+                    killed = True
+            except Exception:
+                continue
+        return killed
+
     def _terminate_managed_process(self) -> bool:
         process = self._managed_process
         if process is None:
