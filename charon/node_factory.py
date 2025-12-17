@@ -1,7 +1,7 @@
 import json
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from .utilities import status_to_gl_color, status_to_tile_color
 
@@ -33,6 +33,39 @@ def _build_default_status_payload(
         "node_id": node_id,
         "read_node_id": "",
     }
+
+
+def _default_crop_box(nuke_module=None) -> Tuple[float, float, float, float]:
+    """
+    Return a best-effort default crop box using the current root format.
+    Falls back to a 1920x1080 frame when the format is unavailable.
+    """
+    module = nuke_module
+    if module is None:
+        try:
+            import nuke as module  # type: ignore
+        except Exception:
+            module = None
+
+    width = 1920.0
+    height = 1080.0
+    if module is not None:
+        try:
+            root = module.root()
+        except Exception:
+            root = None
+        try:
+            fmt = root.format() if root else None
+        except Exception:
+            fmt = None
+        if fmt is not None:
+            try:
+                width = float(fmt.width())
+                height = float(fmt.height())
+            except Exception:
+                pass
+
+    return (0.0, 0.0, width, height)
 
 
 def create_charon_group_node(
@@ -269,6 +302,27 @@ def create_charon_group_node(
     except Exception:
         pass
     node.addKnob(reuse_knob)
+
+    use_crop_knob = nuke.Boolean_Knob("charon_use_crop", "Use Crop", False)
+    use_crop_knob.setFlag(nuke.NO_ANIMATION)
+    use_crop_knob.setFlag(nuke.STARTLINE)
+    try:
+        use_crop_knob.setTooltip("Enable cropping inputs to the bounding box before submission.")
+    except Exception:
+        pass
+    node.addKnob(use_crop_knob)
+
+    crop_bbox_knob = nuke.BBox_Knob("charon_crop_bbox", "Crop Box")
+    crop_bbox_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        crop_bbox_knob.setTooltip("Bounding box applied when Use Crop is enabled.")
+    except Exception:
+        pass
+    try:
+        crop_bbox_knob.setValue(_default_crop_box(nuke))
+    except Exception:
+        pass
+    node.addKnob(crop_bbox_knob)
 
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)
@@ -699,6 +753,22 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
     _set_knob_value("charon_source_workflow_path", source_workflow_path or workflow_path)
     _set_knob_value("charon_validated", 1 if is_validated else 0)
     _set_knob_value("charon_local_state", local_state_payload)
+    _set_knob_value("charon_use_crop", 0)
+
+    crop_box_default = _default_crop_box()
+    try:
+        bbox_knob = node.knob("charon_crop_bbox")
+    except Exception:
+        bbox_knob = None
+    if bbox_knob is not None:
+        try:
+            bbox_knob.setValue(crop_box_default)
+        except Exception:
+            for index, coord in enumerate(crop_box_default):
+                try:
+                    bbox_knob.setValue(coord, index)
+                except Exception:
+                    pass
 
     ready_tile = status_to_tile_color("Ready")
     ready_gl = status_to_gl_color("Ready") or (0.0, 0.0, 0.0)

@@ -1205,6 +1205,79 @@ def process_charonop_node():
             write_metadata('charon/link_anchor', anchor_value or "")
             return anchor_value or 0.0
 
+        def _coerce_crop_box(raw) -> Optional[Tuple[float, float, float, float]]:
+            if raw is None:
+                return None
+
+            coords: List[Optional[float]] = []
+            if isinstance(raw, (list, tuple)):
+                coords.extend(raw[:4])
+            else:
+                for attr in ('x', 'y', 'r', 't'):
+                    try:
+                        candidate = getattr(raw, attr)
+                        candidate = candidate() if callable(candidate) else candidate
+                    except Exception:
+                        candidate = None
+                    coords.append(candidate)
+
+            if len(coords) < 4:
+                return None
+
+            numeric: List[float] = []
+            for coord in coords[:4]:
+                if coord is None:
+                    return None
+                try:
+                    numeric.append(float(coord))
+                except Exception:
+                    return None
+
+            return tuple(numeric)
+
+        def resolve_crop_settings() -> Optional[Tuple[float, float, float, float]]:
+            enabled = False
+            try:
+                knob = node.knob('charon_use_crop')
+                if knob is not None:
+                    try:
+                        enabled = bool(int(knob.value()))
+                    except Exception:
+                        enabled = bool(knob.value())
+            except Exception:
+                enabled = False
+
+            if not enabled:
+                return None
+
+            try:
+                bbox_knob = node.knob('charon_crop_bbox')
+            except Exception:
+                bbox_knob = None
+            if bbox_knob is None:
+                return None
+
+            try:
+                raw_box = bbox_knob.value()
+            except Exception:
+                try:
+                    raw_box = bbox_knob.getValue()  # type: ignore[attr-defined]
+                except Exception:
+                    raw_box = None
+
+            crop_box = _coerce_crop_box(raw_box)
+            if not crop_box:
+                log_debug('Use Crop enabled but crop box is invalid; skipping crop', 'WARNING')
+                return None
+
+            x, y, r, t = crop_box
+            if r <= x or t <= y:
+                log_debug('Use Crop enabled but crop box is empty; skipping crop', 'WARNING')
+                return None
+
+            log_debug(f'Using crop box {crop_box} for CharonOp inputs')
+            return crop_box
+
         link_anchor_value = ensure_link_anchor_value()
         current_node_state = 'Ready'
 
@@ -1983,6 +2056,7 @@ def process_charonop_node():
             if input_node is not None:
                 connected_inputs[index] = input_node
 
+        crop_box = resolve_crop_settings()
         render_jobs = []
         ensure_placeholder_read_node()
         if isinstance(input_mapping, list):
@@ -2034,6 +2108,7 @@ def process_charonop_node():
 
                 source_node = input_node
                 shuffle_node = None
+                crop_node = None
                 try:
                     channels = source_node.channels()
                 except Exception:
@@ -2063,6 +2138,36 @@ def process_charonop_node():
                                 pass
                         shuffle_node = None
 
+                if crop_box:
+                    try:
+                        crop_node = nuke.createNode('Crop', inpanel=False)
+                        crop_node.setInput(0, source_node)
+                        try:
+                            crop_node['box'].setValue(crop_box)
+                        except Exception:
+                            for index, coord in enumerate(crop_box):
+                                try:
+                                    crop_node['box'].setValue(coord, index)
+                                except Exception:
+                                    pass
+                        try:
+                            crop_node['reformat'].setValue(True)
+                        except Exception:
+                            pass
+                        try:
+                            crop_node['label'].setValue("CharonOp Crop")
+                        except Exception:
+                            pass
+                        source_node = crop_node
+                    except Exception as crop_error:
+                        log_debug(f"Failed to apply crop for '{friendly_name}': {crop_error}", 'WARNING')
+                        if crop_node:
+                            try:
+                                nuke.delete(crop_node)
+                            except Exception:
+                                pass
+                        crop_node = None
+
                 write_node = nuke.createNode('Write', inpanel=False)
                 write_node['file'].setValue(temp_path_nuke)
                 write_node['file_type'].setValue('png')
@@ -2077,6 +2182,11 @@ def process_charonop_node():
                     if shuffle_node:
                         try:
                             nuke.delete(shuffle_node)
+                        except Exception:
+                            pass
+                    if crop_node:
+                        try:
+                            nuke.delete(crop_node)
                         except Exception:
                             pass
 
