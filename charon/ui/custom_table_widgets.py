@@ -102,6 +102,7 @@ class ScriptTableView(QtWidgets.QTableView):
             color: palette(windowText);
             border: none;
             padding: 4px 6px;
+            font-weight: bold;
             margin: 0px;
         }
         """
@@ -460,6 +461,7 @@ class FolderTableView(QtWidgets.QTableView):
             color: palette(windowText);
             border: none;
             padding: 4px 6px;
+            font-weight: bold;
             margin: 0px;
         }
         """

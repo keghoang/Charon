@@ -166,7 +166,9 @@ class ScriptPanel(QtWidgets.QWidget):
                 border: 1px solid palette(mid);
                 border-radius: 4px;
                 background-color: palette(button);
-                font-weight: bold;
+                font-weight: normal;
+                text-shadow: none;
+                box-shadow: none;
             }
             QPushButton:hover {
                 background-color: palette(button).lighter(115);
