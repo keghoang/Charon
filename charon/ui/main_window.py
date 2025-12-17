@@ -671,18 +671,7 @@ class CharonWindow(QtWidgets.QWidget):
         footer_layout.setSpacing(4)
         footer_layout.setVerticalSpacing(0)
 
-        # Left Column: Project Label (Row 0)
-        self.project_label = QtWidgets.QLabel(parent)
-        self.project_label.setObjectName("charonProjectLabel")
-        self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.project_label.setWordWrap(False)
-        self.project_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
-        self.project_label.setMinimumWidth(280)
-        footer_layout.addWidget(self.project_label, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
-
-        # Left Column: GPU Label (Row 1)
+        # Left Column: GPU Label (Row 0) - Aligned Bottom to match GPU bars
         self.gpu_label = QtWidgets.QLabel(parent)
         self.gpu_label.setObjectName("charonGpuLabel")
         self.gpu_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -691,12 +680,27 @@ class CharonWindow(QtWidgets.QWidget):
         gpu_font.setPointSize(max(gpu_font.pointSize() - 1, 7))
         self.gpu_label.setFont(gpu_font)
         self.gpu_label.setStyleSheet("color: #cfd3dc;")
-        footer_layout.addWidget(self.gpu_label, 1, 0, Qt.AlignLeft | Qt.AlignBottom)
+        footer_layout.addWidget(self.gpu_label, 0, 0, Qt.AlignLeft | Qt.AlignBottom)
+
+        # Left Column: Project Label (Row 1)
+        self.project_label = QtWidgets.QLabel(parent)
+        self.project_label.setObjectName("charonProjectLabel")
+        self.project_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.project_label.setWordWrap(False)
+        self.project_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self.project_label.setMinimumWidth(280)
+        footer_layout.addWidget(self.project_label, 1, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
         # Spacer Column (Row 0-1, Col 1)
         footer_layout.setColumnStretch(1, 1)
 
-        # Right Column: Comfy Connection (Row 0)
+        # Right Column: Resource Widget (Row 0)
+        self.resource_widget = ResourceWidget(parent)
+        footer_layout.addWidget(self.resource_widget, 0, 2, Qt.AlignRight | Qt.AlignTop)
+
+        # Right Column: Comfy Connection (Row 1)
         self.comfy_connection_widget = ComfyConnectionWidget(parent)
         self.comfy_connection_widget.client_changed.connect(self._on_comfy_client_changed)
         self.comfy_connection_widget.connection_status_changed.connect(
@@ -705,11 +709,7 @@ class CharonWindow(QtWidgets.QWidget):
         self.script_panel.update_comfy_connection_status(
             self.comfy_connection_widget.is_connected()
         )
-        footer_layout.addWidget(self.comfy_connection_widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
-        
-        # Right Column: Resource Widget (Row 1)
-        self.resource_widget = ResourceWidget(parent)
-        footer_layout.addWidget(self.resource_widget, 1, 2, Qt.AlignRight | Qt.AlignTop)
+        footer_layout.addWidget(self.comfy_connection_widget, 1, 2, Qt.AlignRight | Qt.AlignVCenter)
         
         # Set the main footer layout reference to our grid layout
         self._footer_comfy_layout = footer_layout
@@ -1282,7 +1282,7 @@ QPushButton#NewWorkflowButton:pressed {{
         if layout is not None:
             # Handle QGridLayout specifically to ensure correct placement
             if isinstance(layout, QtWidgets.QGridLayout):
-                layout.addWidget(widget, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
+                layout.addWidget(widget, 1, 2, Qt.AlignRight | Qt.AlignVCenter)
             else:
                 layout.addWidget(widget)
         widget.setParent(self.normal_widget)
