@@ -474,6 +474,9 @@ class CharonWindow(QtWidgets.QWidget):
             self.generate_cameras_button.setVisible(checked)
         if hasattr(self, 'debug_input_gen_button'):
             self.debug_input_gen_button.setVisible(checked)
+            
+        from .. import preferences
+        preferences.set_preference("3d_mode_enabled", checked)
 
     def _on_debug_generate_inputs_clicked(self):
         """Debug: Render individual camera views from rig and display."""
@@ -1000,6 +1003,11 @@ class CharonWindow(QtWidgets.QWidget):
         """)
         self.mode_3d_button.setToolTip("Toggle 3D Texturing workflows")
         self.mode_3d_button.toggled.connect(self._on_3d_mode_toggled)
+        
+        from .. import preferences
+        initial_3d_state = preferences.get_preference("3d_mode_enabled", False)
+        self.mode_3d_button.setChecked(initial_3d_state)
+        
         info_layout.addWidget(self.mode_3d_button)
         
         # ACEScg Toggle Button
