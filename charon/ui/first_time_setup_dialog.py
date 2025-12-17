@@ -66,7 +66,7 @@ STYLESHEET = f"""
         border: 1px solid {COLORS['border']};
         border-radius: 6px;
         text-align: center;
-        color: transparent;
+        color: #ffffff;
         height: 12px;
     }}
     QProgressBar::chunk {{
