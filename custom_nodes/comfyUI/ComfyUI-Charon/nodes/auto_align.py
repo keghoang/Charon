@@ -252,7 +252,8 @@ class CHARON_3D_Auto_Align:
         # Save to ComfyUI output directory with user prefix
         output_dir = folder_paths.get_output_directory()
         os.makedirs(output_dir, exist_ok=True)
-        ext = os.path.splitext(mesh_path)[1] or ".obj"
+        # Always force .obj output
+        ext = ".obj"
         out_name = f"{filename_prefix}_{uuid.uuid4().hex[:8]}{ext}"
         out_path = os.path.join(output_dir, out_name)
         aligned_mesh.export(out_path)
