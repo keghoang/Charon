@@ -468,6 +468,133 @@ class CharonWindow(QtWidgets.QWidget):
     def _on_3d_mode_toggled(self, checked):
         if hasattr(self, 'script_panel'):
             self.script_panel.set_3d_mode(checked)
+        if hasattr(self, 'create_camera_button'):
+            self.create_camera_button.setVisible(checked)
+        if hasattr(self, 'generate_cameras_button'):
+            self.generate_cameras_button.setVisible(checked)
+
+    def _on_create_camera_clicked(self):
+        """Create a camera framing the selected geometry."""
+        host = str(self.host).lower()
+        if host == "nuke":
+            self._create_camera_nuke()
+        else:
+            QtWidgets.QMessageBox.information(
+                self, 
+                "Not Supported", 
+                f"Camera creation is not yet implemented for {self.host}."
+            )
+
+    def _create_camera_nuke(self):
+        try:
+            import nuke
+        except ImportError:
+            return
+
+        geo_nodes = nuke.selectedNodes()
+        if not geo_nodes:
+            QtWidgets.QMessageBox.warning(self, "Selection", "Please select a geometry node to frame.")
+            return
+
+        # Get anchor position from first selected node for layout
+        anchor_node = geo_nodes[0]
+        anchor_x = anchor_node.xpos()
+        anchor_y = anchor_node.ypos()
+
+        # --- 1. Calculate Center & Scale ---
+        center = [0.0, 0.0, 0.0]
+        count = 0
+        avg_scale = 1.0
+        
+        for node in geo_nodes:
+            if 'translate' in node.knobs():
+                val = node['translate'].value()
+                center[0] += val[0]
+                center[1] += val[1]
+                center[2] += val[2]
+                count += 1
+            for scale_knob in ('scaling', 'scale'):
+                if scale_knob in node.knobs():
+                    s = node[scale_knob].value()
+                    if isinstance(s, (list, tuple)) and len(s) >= 1:
+                        comps = s[:3]
+                        current_avg = sum(comps) / len(comps) if comps else 1.0
+                        avg_scale = (avg_scale + current_avg) / 2.0 if count > 1 else current_avg
+                    elif isinstance(s, (int, float)):
+                        avg_scale = (avg_scale + float(s)) / 2.0 if count > 1 else float(s)
+                    break
+        
+        if count > 0:
+            center = [c / count for c in center]
+        
+        # Deselect geometry
+        for n in nuke.selectedNodes():
+            n.setSelected(False)
+
+        # --- 2. Create Material (Vertical above Geo) ---
+        gray_constant = nuke.createNode("Constant")
+        gray_constant['color'].setValue([0.64, 0.64, 0.64, 1])
+        gray_constant['name'].setValue("BaseGray")
+        gray_constant.setXYpos(anchor_x, anchor_y - 250)
+        gray_constant.setSelected(False)
+        
+        texture_output = gray_constant
+        try:
+            wireframe_node = nuke.createNode("Wireframe")
+            wireframe_node.setInput(0, gray_constant)
+            wireframe_node['operation'].setValue("over")
+            wireframe_node['line_width'].setValue(0.35)
+            wireframe_node['line_color'].setValue([0.02, 0.02, 0.02, 1])
+            wireframe_node.setXYpos(anchor_x, anchor_y - 150)
+            wireframe_node.setSelected(False)
+            texture_output = wireframe_node
+        except Exception:
+            pass
+
+        for geo in geo_nodes:
+            geo.setInput(0, texture_output)
+
+        # --- 3. Create Render (Vertical below Geo) ---
+        scanline = nuke.createNode("ScanlineRender")
+        # Connect the first geometry node directly to ScanlineRender's obj/scene input
+        scanline.setInput(1, anchor_node) 
+        scanline.setXYpos(anchor_x, anchor_y + 150) # Adjusted position
+        
+        # --- 4. Create Camera & Target (Left of Render) ---
+        target = nuke.createNode("Axis3")
+        target.setName("Charon_CamTarget_1")
+        target['translate'].setValue(center)
+        target.setXYpos(anchor_x - 200, anchor_y + 50) # Move Target Up
+        target.setSelected(False)
+        
+        cam = nuke.createNode("Camera3")
+        cam.setName("Charon_InitCam_1")
+        cam['focal'].setValue(100)
+        cam.setInput(1, target)
+        cam.setXYpos(anchor_x - 200, anchor_y + 150)
+        
+        distance = 150.0 * avg_scale
+        cam['translate'].setValue([center[0], center[1], center[2] + distance])
+        cam['rotate'].setValue([0, 0, 0])
+        
+        scanline.setInput(2, cam)
+        scanline.setSelected(False)
+
+        # --- 5. Create Background (Constant + Merge) ---
+        bg_constant = nuke.createNode("Constant")
+        bg_constant['color'].setValue([0.36, 0.36, 0.36, 1])
+        bg_constant['name'].setValue("BG_Constant")
+        bg_constant.setXYpos(anchor_x + 150, anchor_y + 250) # Move Constant Down
+        bg_constant.setSelected(False)
+        
+        merge = nuke.createNode("Merge2")
+        merge.setInput(1, scanline)    # A = Foreground
+        merge.setInput(0, bg_constant) # B = Background
+        merge.setXYpos(anchor_x, anchor_y + 250)
+        merge.setSelected(True)
+
+    def _on_generate_cameras_clicked(self):
+        QtWidgets.QMessageBox.information(self, "Generate Cameras", "Coverage camera generation coming soon.")
     def _setup_normal_ui(self, parent):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
@@ -520,6 +647,39 @@ class CharonWindow(QtWidgets.QWidget):
         info_layout.addWidget(labels_container)
         
         info_layout.addStretch()
+
+        # 3D Texturing Buttons
+        self.create_camera_button = QtWidgets.QPushButton("🎥", info_container)
+        self.create_camera_button.setToolTip("Create Initial Camera (Frame Selected Geo)")
+        self.create_camera_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.create_camera_button.setFixedSize(28, 24)
+        btn_style = """
+            QPushButton {
+                border: 1px solid #2c323c;
+                border-radius: 4px;
+                background-color: #37383D;
+                color: #e8eaef;
+                font-size: 14px;
+                padding-bottom: 2px;
+            }
+            QPushButton:hover { background-color: #404248; }
+            QPushButton:pressed { background-color: #2f3034; }
+        """
+        self.create_camera_button.setStyleSheet(btn_style)
+        self.create_camera_button.clicked.connect(self._on_create_camera_clicked)
+        self.create_camera_button.setVisible(False)
+        info_layout.addWidget(self.create_camera_button)
+
+        self.generate_cameras_button = QtWidgets.QPushButton("🌐", info_container)
+        self.generate_cameras_button.setToolTip("Generate Coverage Cameras")
+        self.generate_cameras_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.generate_cameras_button.setFixedSize(28, 24)
+        self.generate_cameras_button.setStyleSheet(btn_style)
+        self.generate_cameras_button.clicked.connect(self._on_generate_cameras_clicked)
+        self.generate_cameras_button.setVisible(False)
+        info_layout.addWidget(self.generate_cameras_button)
+        
+        info_layout.addSpacing(8)
         
         # Right side: 3D Mode Toggle
         self.mode_3d_button = QtWidgets.QPushButton("3D Mode", info_container)
@@ -686,6 +846,19 @@ class CharonWindow(QtWidgets.QWidget):
         center_width = int(total_width * (config.UI_FOLDER_PANEL_RATIO + config.UI_CENTER_PANEL_RATIO))
         history_width = 0  # History panel removed from view
         self.main_splitter.setSizes([center_width, history_width])
+
+        # Configure splitter inside Workflows tab (folders + workflows)
+        workflow_total = max(center_width, 600)
+        folder_width = int(workflow_total * config.UI_FOLDER_PANEL_RATIO)
+        workflow_content_width = max(workflow_total - folder_width, 400)
+        self.workflows_splitter.setSizes([folder_width, workflow_content_width])
+        handle = self.workflows_splitter.handle(1)
+        if handle is not None:
+            handle.setEnabled(False)
+            handle.setStyleSheet(
+                f"background: {COLOR_MAIN_BG}; width: {folder_workflow_gap}px; "
+                "margin: 0px; padding: 0px; border: none;"
+            )
 
         # Configure splitter inside Workflows tab (folders + workflows)
         workflow_total = max(center_width, 600)
