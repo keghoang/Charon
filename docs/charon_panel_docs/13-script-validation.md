@@ -181,6 +181,20 @@ The validation system provides clear error messages:
 - "Not compatible with [host]"
 - "No valid entry file found"
 
+## Workflow Validation (ComfyUI Integration)
+
+Beyond script metadata checks, Charon performs pre-flight validation for ComfyUI workflows:
+
+- **Entry Point**: `charon.comfy_validation.validate_comfy_environment()` inspects the configured Comfy install, embedded Python, required models, and custom nodes. Missing pieces are returned as `ValidationIssue` objects.
+- **UI Integration**: The script browser triggers validation via the new *Validate* column. States progress from *Validate* → *Validating…* → *Resolve* → *✓ Passed*. Results are cached per workflow hash so the UI can display status without re-hitting ComfyUI every time.
+- **Per-User Cache**: Validation payloads persist under `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache\<workflow>_<hash>\status.json`. This keeps personal model layouts and overrides local to each artist.
+- **Execution Guard**: Grab/Execute is disabled until a workflow reaches *✓ Passed*, preventing surprise failures when models or custom nodes are missing.
+
+### Custom Node & Model Resolution
+- **Dynamic Categories**: Model discovery asks the running ComfyUI instance (via `folder_paths`) to resolve each filename, so reorganized libraries (e.g. `models/unet`) are detected automatically.
+- **Custom Node Script**: A small helper spins up the embedded interpreter, loads ComfyUI, and reports any node classes that failed to register.
+- **Error Surfacing**: The *Resolve* dialog displays the raw payload, including missing models and stack traces, to guide artists towards fixes.
+
 ## Best Practices
 
 1. **Always validate before execution**: Use `can_execute()` before running scripts

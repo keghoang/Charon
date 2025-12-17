@@ -20,10 +20,10 @@ charon/
 `-- uv.lock                   # Locked dependency versions
 ```
 
-## Documentation (`documentation/`)
+## Documentation (`docs/charon_panel_docs/`)
 Architecture and design references:
 ```
-documentation/
+docs/charon_panel_docs/
 |-- README.md                     # Documentation overview
 |-- 01-architecture.md            # System overview and components
 |-- 02-data-patterns.md           # Data handling and threading

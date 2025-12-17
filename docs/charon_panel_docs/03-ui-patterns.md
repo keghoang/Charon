@@ -46,6 +46,7 @@ class SomeLoader(QtCore.QThread):
 - Connect actions to panel signals
 - **Empty Space Context Menus**: Right-clicking empty space in script panel shows "New Script" and "Open Folder" options
 - **Folder Context Menu**: Right-clicking folders shows "New Script" and "Open Folder" (excludes special folders like Bookmarks)
+- **Comfy Control Widget**: Launch button exposes a custom context menu (via `setContextMenuPolicy(Qt.CustomContextMenu)`) with a "Terminate ComfyUI" action that posts to `/system/shutdown` when the footer detects a running instance.
 
 ### Keyboard Navigation
 - Implement `keyPressEvent()` for custom navigation
@@ -74,6 +75,12 @@ class SomeLoader(QtCore.QThread):
   - Subtle `palette(midlight)` background on hover
   - No borders for clean appearance
 - **Implementation**: Uses flat QPushButtons with custom stylesheets
+
+### Workflow Browser Interactions
+- **Validation Column**: `ScriptTableModel` exposes a dedicated column that cycles between *Validate → Validating… → Resolve → ✓ Passed*. Delegates consume `ValidationStateRole` to render state and colorize the button text.
+- **Run Guarding**: Grab/Execute buttons consult the same validation role, keeping the control visible but disabled until a workflow reaches *✓ Passed*.
+- **Per-Workflow Caching**: Validation results are restored from `%LOCALAPPDATA%\Charon\plugins\charon\validation_cache/<workflow>_<hash>/status.json` during `ScriptPanel.on_scripts_loaded`, allowing offline browsing without re-hitting ComfyUI.
+- **Quick Output Access**: CharonOp action menu includes *Open Output Folder*, wired to the `charon_last_output` knob so artists jump directly to the most recent render batch.
 
 ## Tag System
 
