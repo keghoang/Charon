@@ -261,7 +261,7 @@ class ScriptTableModel(QtCore.QAbstractTableModel):
             elif section == self.COL_HOTKEY:
                 return "Hotkey"
             elif section == self.COL_VALIDATE:
-                return "Validate"
+                return "Status"
             elif section == self.COL_RUN:
                 return ""
         return None
