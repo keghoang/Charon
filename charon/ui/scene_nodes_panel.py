@@ -10,6 +10,9 @@ from .. import config, preferences
 from ..charon_logger import system_debug, system_warning, system_error
 from ..script_table_model import ScriptTableModel
 from .. import scene_nodes_runtime as runtime
+from .model_upload_dialog import ModelUploadDialog
+from ..comfy_validation import _validate_models
+from ..paths import resolve_comfy_environment, get_default_comfy_launch_path
 
 
 class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
@@ -446,6 +449,9 @@ class SceneNodesPanel(QtWidgets.QWidget):
         open_workflow = misc_menu.addAction("Open Workflow Location")
         open_workflow.triggered.connect(lambda: self._open_workflow_location(info))
 
+        upload_models = misc_menu.addAction("Upload model files to Global Repo")
+        upload_models.triggered.connect(lambda: self._upload_models_to_global_repo(info))
+
         copy_prompt = misc_menu.addAction("Copy Converted Workflow")
         copy_prompt.triggered.connect(lambda: self._copy_converted_workflow(info))
 
@@ -634,6 +640,87 @@ class SceneNodesPanel(QtWidgets.QWidget):
                 os.startfile(folder_to_open)
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, "Output Folder", f"Failed to open folder: {exc}")
+
+    def _upload_models_to_global_repo(self, info: runtime.SceneNodeInfo):
+        comfy_path = preferences.get_preference("comfyui_launch_path", "") or get_default_comfy_launch_path()
+        if not comfy_path:
+            QtWidgets.QMessageBox.warning(self, "Upload Models", "ComfyUI path not configured. Cannot resolve model paths.")
+            return
+
+        env_info = resolve_comfy_environment(comfy_path)
+        if not env_info.get("python_exe"):
+            QtWidgets.QMessageBox.warning(self, "Upload Models", "ComfyUI environment invalid.")
+            return
+
+        # Get workflow data
+        try:
+            knob = info.node.knob("workflow_data")
+            if not knob:
+                QtWidgets.QMessageBox.warning(self, "Upload Models", "No workflow data found on node.")
+                return
+            workflow_data = json.loads(knob.value() or "{}")
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Upload Models", f"Failed to load workflow data: {exc}")
+            return
+
+        # Show busy cursor
+        QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            # Resolve models using ComfyUI validator
+            # We construct a minimal bundle
+            bundle = {"workflow": workflow_data, "folder": info.workflow_path}
+            issue = _validate_models(env_info, bundle)
+            
+            if not issue.ok and not issue.data.get("found"):
+                 QtWidgets.QMessageBox.information(self, "Upload Models", "No local models found to upload.")
+                 return
+
+            # Extract found models and their categories
+            found_paths = issue.data.get("found") or []
+            resolver_data = issue.data.get("resolver") or {}
+            
+            # Map paths back to categories using the resolver output list
+            path_to_category = {}
+            resolved_list = resolver_data.get("resolved") or []
+            for entry in resolved_list:
+                if not isinstance(entry, dict):
+                    continue
+                path = entry.get("path")
+                category = entry.get("category")
+                if path and category:
+                    path_to_category[os.path.normpath(path)] = category
+
+            models_to_process = []
+            for path in found_paths:
+                norm_path = os.path.normpath(path)
+                category = path_to_category.get(norm_path)
+                # If category missing, try to infer from path relative to models root
+                if not category:
+                    models_root = issue.data.get("models_root")
+                    if models_root and norm_path.startswith(os.path.normpath(models_root)):
+                        try:
+                            rel = os.path.relpath(norm_path, models_root)
+                            # e.g. checkpoints/foo.ckpt -> checkpoints
+                            # e.g. foo.ckpt -> "" (root of models)
+                            dirname = os.path.dirname(rel)
+                            if dirname and not dirname.startswith(".."):
+                                category = dirname
+                        except ValueError:
+                            pass
+                
+                models_to_process.append((path, category or ""))
+
+            if not models_to_process:
+                 QtWidgets.QMessageBox.information(self, "Upload Models", "No models found.")
+                 return
+
+            dialog = ModelUploadDialog(models_to_process, parent=self)
+            dialog.exec_()
+
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Upload Models", f"Error scanning models: {exc}")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
     def _open_workflow_location(self, info: runtime.SceneNodeInfo):
         workflow_path = info.workflow_path
