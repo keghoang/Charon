@@ -2597,6 +2597,14 @@ Cache Stats:
                     self._debug_user_action("Refreshed CharonBoard nodes")
             except Exception as board_exc:
                 system_warning(f"CharonBoard refresh failed: {board_exc}")
+            
+            # Restart resource monitor to ensure it's healthy
+            if hasattr(self, "resource_widget"):
+                try:
+                    self.resource_widget.restart_monitor()
+                    self._debug_user_action("Restarted resource monitor")
+                except Exception as exc:
+                    system_warning(f"Failed to restart resource monitor: {exc}")
 
             # No pop-up message - refresh happens silently
             

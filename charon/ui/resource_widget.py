@@ -240,3 +240,12 @@ class ResourceWidget(QWidget):
     def closeEvent(self, event):
         self.monitor.stop()
         super().closeEvent(event)
+
+    def restart_monitor(self):
+        """Restart the resource monitor thread."""
+        if self.monitor:
+            self.monitor.stop()
+        # Re-create and start
+        self.monitor = ResourceMonitor(self)
+        self.monitor.stats_updated.connect(self.update_stats)
+        self.monitor.start()
