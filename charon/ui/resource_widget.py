@@ -81,9 +81,9 @@ class ResourceWidget(QWidget):
         self.grid.addWidget(self.ram_bar, 0, 1)
         
         # Flush VRAM Button (Row 0, Col 2) - spans 2 rows
-        self.flush_btn = QPushButton("Flush VRAM")
+        self.flush_btn = QPushButton("🧹 VRAM")
         self.flush_btn.setToolTip("Force ComfyUI to unload models and free VRAM")
-        self.flush_btn.setFixedWidth(70)
+        self.flush_btn.setFixedWidth(60)
         self.flush_btn.setFixedHeight(24) # Match approximate height of 2 rows
         self.flush_btn.setCursor(Qt.PointingHandCursor)
         self.flush_btn.setStyleSheet("""
