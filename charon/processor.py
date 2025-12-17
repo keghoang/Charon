@@ -3015,22 +3015,36 @@ def process_charonop_node():
                 target_coverage_node_id = None
                 
                 if is_step2:
+                    setup_result = {}
+                    def _step2_setup_task():
+                        try:
+                            import nuke
+                            rig = nuke.toNode("Charon_Coverage_Rig")
+                            if not rig:
+                                return
+                            sheet = None
+                            with rig:
+                                sheet = nuke.toNode("ContactSheet1")
+                                if not sheet:
+                                    for n in nuke.allNodes("ContactSheet"):
+                                        sheet = n
+                                        break
+                            if sheet:
+                                views = []
+                                for i in range(sheet.inputs()):
+                                    inp = sheet.input(i)
+                                    if inp:
+                                        # Store node name or reference? Reference is unsafe across threads if deleted.
+                                        # But here we just render it. Keeping reference is usually okay in Nuke Python if node persists.
+                                        views.append({'index': i, 'node': inp, 'group': rig})
+                                setup_result['views'] = views
+                        except Exception as e:
+                            log_debug(f"Step 2 setup task error: {e}", "WARNING")
+
                     try:
                         import nuke
-                        rig_group = nuke.toNode("Charon_Coverage_Rig")
-                        if rig_group:
-                            contact_sheet = None
-                            with rig_group:
-                                contact_sheet = nuke.toNode("ContactSheet1")
-                                if not contact_sheet:
-                                    for n in nuke.allNodes("ContactSheet"):
-                                        contact_sheet = n
-                                        break
-                            if contact_sheet:
-                                for i in range(contact_sheet.inputs()):
-                                    inp = contact_sheet.input(i)
-                                    if inp:
-                                        step2_views.append({'index': i, 'node': inp, 'group': rig_group})
+                        nuke.executeInMainThread(_step2_setup_task)
+                        step2_views = setup_result.get('views', [])
                         
                         if step2_views:
                             batch_count = len(step2_views)
@@ -3051,7 +3065,6 @@ def process_charonop_node():
                                 
                             if not target_coverage_node_id:
                                 log_debug("Step 2: Could not identify Coverage Rig input node.", "WARNING")
-                                
                     except Exception as exc:
                         log_debug(f"Step 2 setup failed: {exc}", "WARNING")
 
@@ -3276,11 +3289,15 @@ def process_charonop_node():
                         rig_group_ref = view_info['group']
                         
                         view_filename = f'step2_view_{batch_index}_{str(uuid.uuid4())[:8]}.png'
-                        view_path = os.path.join(temp_dir, view_filename).replace('\\', '/')
+                        view_path = os.path.join(temp_root, view_filename).replace('\\', '/')
                         
                         try:
-                            with rig_group_ref:
-                                _render_nuke_node(view_node, view_path)
+                            def _step2_render_task():
+                                with rig_group_ref:
+                                    _render_nuke_node(view_node, view_path)
+                            
+                            import nuke
+                            nuke.executeInMainThread(_step2_render_task)
                             
                             view_upload = comfy_client.upload_image(view_path)
                             if view_upload:
