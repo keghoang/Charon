@@ -711,16 +711,20 @@ class SceneNodesPanel(QtWidgets.QWidget):
                 models_to_process.append((path, category or ""))
 
             if not models_to_process:
+                 QtWidgets.QApplication.restoreOverrideCursor()
                  QtWidgets.QMessageBox.information(self, "Upload Models", "No models found.")
                  return
 
+            QtWidgets.QApplication.restoreOverrideCursor()
             dialog = ModelUploadDialog(models_to_process, parent=self)
             dialog.exec_()
 
         except Exception as exc:
+            QtWidgets.QApplication.restoreOverrideCursor()
             QtWidgets.QMessageBox.critical(self, "Upload Models", f"Error scanning models: {exc}")
         finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
+            while QtWidgets.QApplication.overrideCursor():
+                QtWidgets.QApplication.restoreOverrideCursor()
 
     def _open_workflow_location(self, info: runtime.SceneNodeInfo):
         workflow_path = info.workflow_path

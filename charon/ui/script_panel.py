@@ -878,16 +878,21 @@ class ScriptPanel(QtWidgets.QWidget):
                 models_to_process.append((path, category or ""))
 
             if not models_to_process:
+                 QtWidgets.QApplication.restoreOverrideCursor()
                  QtWidgets.QMessageBox.information(self, "Upload Models", "No models found.")
                  return
 
+            QtWidgets.QApplication.restoreOverrideCursor()
             dialog = ModelUploadDialog(models_to_process, parent=self)
             exec_dialog(dialog)
 
         except Exception as exc:
+            QtWidgets.QApplication.restoreOverrideCursor()
             QtWidgets.QMessageBox.critical(self, "Upload Models", f"Error scanning models: {exc}")
         finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
+            # Safety net to ensure cursor is definitely restored
+            while QtWidgets.QApplication.overrideCursor():
+                QtWidgets.QApplication.restoreOverrideCursor()
 
     def _handle_override_validation(self, script_path: str):
         """Force validation state to passed for a workflow."""
