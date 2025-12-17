@@ -987,12 +987,25 @@ class ScriptPanel(QtWidgets.QWidget):
             for issue in issues:
                 if not isinstance(issue, dict):
                     continue
-                if issue.get("key") == "models":
-                    data = issue.get("data") or {}
-                    missing = data.get("missing") or []
+                key = issue.get("key")
+                data = issue.get("data") or {}
+                if key == "models":
+                    missing = data.get("missing_models") or data.get("missing") or []
                     if missing:
                         issue["ok"] = False
-                    else:
+                    elif "ok" not in issue:
+                        issue["ok"] = True
+                elif key == "custom_nodes":
+                    missing_packs = data.get("missing_packs") or []
+                    unresolved = [
+                        pack
+                        for pack in missing_packs
+                        if str(pack.get("resolve_status") or "").strip().lower()
+                        not in {"success", "resolved", "installed"}
+                    ]
+                    if unresolved:
+                        issue["ok"] = False
+                    elif "ok" not in issue:
                         issue["ok"] = True
                 if not issue.get("ok", False):
                     all_ok = False
