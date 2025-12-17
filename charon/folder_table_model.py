@@ -121,13 +121,17 @@ class FolderTableModel(QtCore.QAbstractTableModel):
     def sortItems(self):
         """Sort folders using cached properties to avoid I/O"""
         def sort_key(folder):
-            # 1. Special folders (Bookmarks) - Priority 0
+            is_current_user = getattr(folder, "is_current_user", False)
+            # 1. Special folders (Bookmarks)
             if folder.is_special:
                 priority = 0
-            # 2. Compatible folders - Priority 1
-            elif folder.is_compatible:
+            # 2. Current user's folder
+            elif is_current_user:
                 priority = 1
-            # 3. Incompatible folders - Priority 3 (matches legacy)
+            # 3. Compatible folders
+            elif folder.is_compatible:
+                priority = 2
+            # 4. Incompatible folders
             else:
                 priority = 3
                 

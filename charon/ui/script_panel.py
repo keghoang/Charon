@@ -501,6 +501,36 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Start background loading
         self.folder_loader.load_folder(folder_path, self.host or "None")
+
+    def begin_bookmark_load(self):
+        """Prepare the view to receive bookmark results (no folder path)."""
+        if self.folder_loader.isRunning():
+            self._reset_folder_loader()
+            self._loading = False
+        elif self._loading:
+            self._on_folder_load_finished()
+
+        if self.current_script:
+            self.on_script_deselected()
+
+        self.parent_folder = None
+        self._active_folder_path = None
+        self._active_load_id = None
+        self._load_sequence += 1
+
+        self.script_view.clear_delegate_caches()
+
+        self._loading = True
+        self.script_view.setEnabled(False)
+
+        def _failsafe_enable():
+            if self._loading:
+                self._loading = False
+                try:
+                    self.script_view.setEnabled(True)
+                except Exception:
+                    pass
+        QtCore.QTimer.singleShot(3000, _failsafe_enable)
     
     def on_scripts_loaded(self, scripts):
         """Handle when scripts are loaded into the model"""
