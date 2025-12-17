@@ -446,7 +446,7 @@ class CharonWindow(QtWidgets.QWidget):
         main_layout.setSpacing(config.UI_ELEMENT_SPACING + 4)
 
         base_margin = 10
-        header_margin = base_margin + 15
+        header_margin = base_margin + 10
 
         # Text-only header (replaces legacy banner)
         header_layout = QtWidgets.QVBoxLayout()
@@ -454,7 +454,7 @@ class CharonWindow(QtWidgets.QWidget):
         header_layout.setSpacing(0)
         title_label = QtWidgets.QLabel("Charon")
         title_label.setObjectName("CharonTitle")
-        title_label.setStyleSheet("font-size: 34px; font-weight: 800; color: #ffffff;")
+        title_label.setStyleSheet("font-size: 34px; font-weight: 600; color: #ffffff;")
         subtitle_label = QtWidgets.QLabel("Nuke/ComfyUI Integration")
         subtitle_label.setObjectName("CharonSubtitle")
         subtitle_label.setStyleSheet("font-size: 13px; color: #d0d0d0; font-weight: 500;")
@@ -466,16 +466,6 @@ class CharonWindow(QtWidgets.QWidget):
         main_layout.addLayout(header_layout)
         main_layout.addSpacing(config.UI_ELEMENT_SPACING + 2)
 
-        # Add horizontal separator
-        separator = QtWidgets.QFrame()
-        separator.setFrameShape(QtWidgets.QFrame.HLine)
-        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
-        separator.setStyleSheet("QFrame { color: palette(mid); }")
-        main_layout.addWidget(separator)
-        
-        # Add spacing after separator
-        main_layout.addSpacing(config.UI_ELEMENT_SPACING + 2)
-        
         # Main content layout
         content_layout = QtWidgets.QVBoxLayout()
         content_layout.setContentsMargins(base_margin, 10, base_margin, 10)
@@ -687,32 +677,7 @@ class CharonWindow(QtWidgets.QWidget):
     
     def _install_tab_corner_controls(self):
         """Attach Refresh and Settings buttons to the tab bar corner."""
-        corner_container = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(corner_container)
-        layout.setContentsMargins(0, 2, 4, 2)
-        layout.setSpacing(4)
-        layout.setAlignment(Qt.AlignVCenter)
-
-        self.refresh_btn = QtWidgets.QPushButton("Refresh")
-        self.refresh_btn.setToolTip("Refresh metadata and re-index quick search (Ctrl+R)")
-        self.refresh_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
-        self.refresh_btn.clicked.connect(self.on_refresh_clicked)
-        layout.addWidget(self.refresh_btn)
-
-        self.settings_btn = QtWidgets.QPushButton("Settings")
-        self.settings_btn.setToolTip("Configure keybinds and preferences")
-        self.settings_btn.setMaximumWidth(config.UI_BUTTON_WIDTH)
-        self.settings_btn.clicked.connect(self.open_settings)
-        layout.addWidget(self.settings_btn)
-
-        corner_container.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
-        self.center_tab_widget.setCornerWidget(corner_container, Qt.TopRightCorner)
-
-        # Update cache stats on a timer so tooltip reflects current values
-        self.cache_stats_timer = QtCore.QTimer()
-        self.cache_stats_timer.timeout.connect(self.update_cache_stats)
-        self.cache_stats_timer.start(5000)  # Update every 5 seconds
-        QtCore.QTimer.singleShot(0, self.update_cache_stats)
+        self.center_tab_widget.setCornerWidget(None, Qt.TopRightCorner)
 
     def _setup_shared_components(self):
         """Setup components shared between normal and command mode."""
