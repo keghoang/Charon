@@ -3866,7 +3866,7 @@ def process_charonop_node():
                                                 if ivt_node:
                                                     ivt_node.setInput(0, read_node)
                                                     ivt_node.setXpos(read_node.xpos())
-                                                    ivt_node.setYpos(read_node.ypos() + 100)
+                                                    ivt_node.setYpos(read_node.ypos() + 200)
                                                     
                                             except Exception as paste_error:
                                                 log_debug(f"Failed to paste InverseViewTransform: {paste_error}", "WARNING")
