@@ -16,11 +16,10 @@ from ..comfy_validation import validate_comfy_environment
 from ..paths import get_default_comfy_launch_path
 from .validation_dialog import ValidationResolveDialog
 from ..workflow_local_store import (
-    clear_ui_validation_status,
     clear_validation_artifacts,
-    load_ui_validation_status,
-    save_ui_validation_status,
     write_validation_raw,
+    write_validation_resolve_status,
+    load_validation_resolve_status,
 )
 import os
 import shutil
@@ -294,20 +293,40 @@ class ScriptPanel(QtWidgets.QWidget):
     def _normalize_script_path(self, script_path: str) -> str:
         return os.path.normpath(script_path or "").lower()
 
+    def _derive_state_from_payload(self, payload: dict, fallback: str = "idle") -> str:
+        """
+        Infer a validation state from a cached payload.
+        """
+        state_value = str(payload.get("state") or "").strip().lower()
+        if state_value in {"validated", "needs_resolve", "validating", "idle"}:
+            inferred = state_value
+        else:
+            inferred = "validated"
+            for issue in payload.get("issues") or []:
+                if not isinstance(issue, dict):
+                    continue
+                if not issue.get("ok", False):
+                    inferred = "needs_resolve"
+                    break
+        restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
+        if restart_required and inferred == "validated":
+            inferred = "needs_resolve"
+        return inferred or fallback
+
     def _read_validation_cache(self, script_path: str):
-        cached = load_ui_validation_status(script_path or "")
-        if isinstance(cached, dict) and isinstance(cached.get("state"), str):
-            return cached
+        resolved_payload = load_validation_resolve_status(script_path or "")
+        if isinstance(resolved_payload, dict):
+            state = self._derive_state_from_payload(resolved_payload, fallback="needs_resolve")
+            normalized = self._normalize_script_path(script_path)
+            self._validation_cache[normalized] = {"state": state, "payload": resolved_payload}
+            return {"state": state, "payload": resolved_payload}
         return None
 
     def _write_validation_cache(self, script_path: str, state: str, payload) -> None:
-        save_ui_validation_status(script_path or "", state, payload)
-        data = {"state": state, "payload": payload}
         normalized = self._normalize_script_path(script_path)
-        self._validation_cache[normalized] = data
+        self._validation_cache[normalized] = {"state": state, "payload": payload}
 
     def _clear_validation_cache(self, script_path: str) -> None:
-        clear_ui_validation_status(script_path or "")
         normalized = self._normalize_script_path(script_path)
         self._validation_cache.pop(normalized, None)
 
@@ -741,8 +760,9 @@ class ScriptPanel(QtWidgets.QWidget):
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "Override Failed", str(exc))
             return
+        self._write_validation_cache(script_path, "validated", payload)
         try:
-            save_ui_validation_status(script_path, "validated", payload)
+            write_validation_resolve_status(script_path, payload, overwrite=True)
         except Exception:
             pass
         system_debug(f"[Validation] Override set to Passed for {script_path}")
@@ -841,6 +861,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 remote_folder = workflow_info.get("folder") or ""
         if remote_folder:
             write_validation_raw(remote_folder, payload)
+            write_validation_resolve_status(remote_folder, payload, overwrite=True)
         state = "validated" if ok else "needs_resolve"
         self.script_model.set_validation_state(script_path, state, payload)
         self._write_validation_cache(script_path, state, payload)
@@ -909,17 +930,14 @@ class ScriptPanel(QtWidgets.QWidget):
             self._validation_timer.stop()
 
     def _show_validation_payload(self, script_path: str) -> bool:
-        payload = self.script_model.get_validation_payload(script_path)
+        resolved_payload = load_validation_resolve_status(script_path or "")
+        payload = resolved_payload if isinstance(resolved_payload, dict) else None
+        if payload is None:
+            payload = self.script_model.get_validation_payload(script_path)
         if not isinstance(payload, dict):
             cached = self._read_validation_cache(script_path)
             if isinstance(cached, dict):
                 payload = cached.get("payload")
-                if isinstance(payload, dict):
-                    state = cached.get("state") or self.script_model.get_validation_state(script_path)
-                    restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
-                    if restart_required and state == "validated":
-                        state = "needs_resolve"
-                    self.script_model.set_validation_state(script_path, state or "idle", payload)
             if not isinstance(payload, dict):
                 QtWidgets.QMessageBox.information(
                     self,
@@ -927,6 +945,13 @@ class ScriptPanel(QtWidgets.QWidget):
                     "No structured validation details are available yet for this workflow.",
                 )
                 return False
+        else:
+            # Keep model/cache aligned with the on-disk resolve payload.
+            state = self._derive_state_from_payload(
+                payload, fallback=self.script_model.get_validation_state(script_path)
+            )
+            self.script_model.set_validation_state(script_path, state or "idle", payload)
+            self._write_validation_cache(script_path, state or "idle", payload)
 
         workflow_name = os.path.basename(script_path.rstrip(os.sep)) or "Workflow"
         comfy_path = self._resolve_comfy_path()
@@ -975,6 +1000,13 @@ class ScriptPanel(QtWidgets.QWidget):
             new_state = "validated" if all_ok and not restart_required else "needs_resolve"
         self.script_model.set_validation_state(script_path, new_state, payload)
         self._write_validation_cache(script_path, new_state, payload)
+        try:
+            workflow_info = payload.get("workflow") if isinstance(payload, dict) else {}
+            remote_folder = workflow_info.get("folder") if isinstance(workflow_info, dict) else script_path
+            if remote_folder:
+                write_validation_resolve_status(remote_folder, payload, overwrite=True)
+        except Exception:
+            pass
 
         return dialog.result() == 1
 
@@ -1057,15 +1089,13 @@ class ScriptPanel(QtWidgets.QWidget):
         """Show the validation result dialog with options to inspect raw data."""
         if not script_path:
             return
-        if self._show_validation_payload(script_path):
-            self._handle_script_revalidate_request(script_path)
+        self._show_validation_payload(script_path)
 
     def _handle_script_show_raw_payload_request(self, script_path: str) -> None:
         """Show the raw validation payload."""
         if not script_path:
             return
-        if self._show_raw_validation_payload(script_path):
-            self._handle_script_revalidate_request(script_path)
+        self._show_raw_validation_payload(script_path)
 
     def on_script_run(self, index):
         if not index.isValid():

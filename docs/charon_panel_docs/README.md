@@ -38,7 +38,7 @@ This directory contains comprehensive architecture and design documentation for 
 
 ### Recent Improvements
 - **Workflow Validation**: Script browser now exposes a stateful *Validate / Resolve / âœ“ Passed* column that blocks Grab until a workflow passes Comfy checks.
-- **Per-User Cache**: Validation results persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json`, supporting bespoke model layouts per artist.
+- **Per-User Cache**: Validation results persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_resolve_status.json`, supporting bespoke model layouts per artist.
 - **Context Menus**: Right-click empty space for "New Script" and "Open Folder"
 - **Panel Indicators**: Collapsible panels show << >> indicators, clickable to reopen
 - **Execution Dialog**: Real-time updates, monospace font, minimal interface

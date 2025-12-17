@@ -21,9 +21,8 @@ CACHE_DIR_NAME = ".charon_cache"
 LEGACY_VALIDATION_CACHE_DIR = "validation_cache"
 LEGACY_WORKFLOW_CACHE_DIR = "workflow_cache"
 LEGACY_CACHE_SUBDIR = ".charon_cache"
-UI_STATUS_FILENAME = "validation_status.json"
-LEGACY_UI_STATUS_FILENAME = "status.json"
 VALIDATION_LOG_FILENAME = "validation_log.json"
+RESOLVE_STATUS_FILENAME = "validation_resolve_status.json"
 
 
 class WorkflowState(Dict[str, Any]):
@@ -102,125 +101,6 @@ def migrate_validation_log(remote_folder: str) -> None:
             pass
     except Exception as exc:
         system_warning(f"Failed to migrate validation log for '{remote_folder}': {exc}")
-
-
-def ui_validation_status_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
-    cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
-    return cache_root / UI_STATUS_FILENAME
-
-
-def _legacy_ui_status_path(remote_folder: str) -> Path:
-    return _legacy_ui_validation_cache_dir(remote_folder) / LEGACY_UI_STATUS_FILENAME
-
-
-def _migrate_ui_validation_status(remote_folder: str) -> None:
-    if not remote_folder:
-        return
-    new_path = ui_validation_status_path(remote_folder, ensure_parent=False)
-    if new_path.exists():
-        return
-    legacy_path = _legacy_ui_status_path(remote_folder)
-    if not legacy_path.exists():
-        return
-    try:
-        new_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(legacy_path), str(new_path))
-        # Remove emptied legacy directory if possible
-        legacy_dir = legacy_path.parent
-        if legacy_dir.exists() and not any(legacy_dir.iterdir()):
-            legacy_dir.rmdir()
-    except Exception as exc:
-        system_warning(f"Failed to migrate validation status for '{remote_folder}': {exc}")
-
-
-def load_ui_validation_status(remote_folder: str) -> Optional[Dict[str, Any]]:
-    if not remote_folder:
-        return None
-    _migrate_ui_validation_status(remote_folder)
-    status_path = ui_validation_status_path(remote_folder, ensure_parent=False)
-    legacy_local_status = status_path.with_name(LEGACY_UI_STATUS_FILENAME)
-    if not status_path.exists() and legacy_local_status.exists():
-        try:
-            legacy_local_status.rename(status_path)
-        except Exception as exc:
-            system_warning(
-                f"Failed to rename legacy validation status for '{remote_folder}': {exc}"
-            )
-            status_path = legacy_local_status
-    if not status_path.exists():
-        return None
-    try:
-        with status_path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-        if isinstance(payload, dict):
-            state = payload.get("state")
-            if isinstance(state, str):
-                return payload
-    except Exception as exc:
-        system_warning(f"Failed to read validation status for '{remote_folder}': {exc}")
-    return None
-
-
-def save_ui_validation_status(remote_folder: str, state: str, payload: Any) -> None:
-    if not remote_folder or not isinstance(state, str):
-        return
-    status_path = ui_validation_status_path(remote_folder, ensure_parent=True)
-    data = {"state": state, "payload": payload}
-    try:
-        with status_path.open("w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2)
-    except Exception as exc:
-        system_warning(f"Failed to write validation status for '{remote_folder}': {exc}")
-        return
-    legacy_local_status = status_path.with_name(LEGACY_UI_STATUS_FILENAME)
-    if legacy_local_status.exists():
-        try:
-            legacy_local_status.unlink()
-        except Exception:
-            pass
-    legacy_path = _legacy_ui_status_path(remote_folder)
-    if legacy_path.exists():
-        try:
-            legacy_path.unlink()
-        except Exception:
-            pass
-        legacy_dir = legacy_path.parent
-        try:
-            if legacy_dir.exists() and not any(legacy_dir.iterdir()):
-                legacy_dir.rmdir()
-        except Exception:
-            pass
-
-
-def clear_ui_validation_status(remote_folder: str) -> None:
-    if not remote_folder:
-        return
-    status_path = ui_validation_status_path(remote_folder, ensure_parent=False)
-    try:
-        if status_path.exists():
-            status_path.unlink()
-    except Exception as exc:
-        system_warning(f"Failed to remove validation status for '{remote_folder}': {exc}")
-    # Attempt to clean empty directory
-    parent = status_path.parent
-    try:
-        if parent.exists() and not any(parent.iterdir()):
-            parent.rmdir()
-    except Exception:
-        pass
-    # Remove legacy artifacts if they remain
-    legacy_local_status = status_path.with_name(LEGACY_UI_STATUS_FILENAME)
-    if legacy_local_status.exists():
-        try:
-            legacy_local_status.unlink()
-        except Exception:
-            pass
-    legacy_dir = _legacy_ui_validation_cache_dir(remote_folder)
-    if legacy_dir.exists():
-        try:
-            shutil.rmtree(legacy_dir)
-        except OSError as exc:
-            system_warning(f"Failed to clear legacy UI validation cache at {legacy_dir}: {exc}")
 
 
 def _local_repo_root(ensure: bool = True) -> str:
@@ -335,8 +215,9 @@ def _clear_validation_cache(remote_folder: str) -> None:
 
     cache_root = get_validation_cache_root(remote_folder, ensure=False)
     resolve_log = cache_root / "validation_resolve_log.json"
+    resolve_status = cache_root / RESOLVE_STATUS_FILENAME
     raw_log = cache_root / "validation_result_raw.json"
-    for artifact in (resolve_log, raw_log):
+    for artifact in (resolve_log, resolve_status, raw_log):
         try:
             if artifact.exists():
                 artifact.unlink()
@@ -372,7 +253,6 @@ def purge_local_artifacts(remote_folder: str) -> None:
         _clear_local_cache_folder(local_folder)
         clear_conversion_cache(local_folder)
     _clear_validation_cache(remote_folder)
-    _clear_ui_validation_cache(remote_folder)
 
 
 def clear_validation_artifacts(remote_folder: str) -> None:
@@ -382,7 +262,6 @@ def clear_validation_artifacts(remote_folder: str) -> None:
     if not remote_folder:
         return
     _clear_validation_cache(remote_folder)
-    clear_ui_validation_status(remote_folder)
     try:
         validated_path = Path(get_validated_workflow_path(remote_folder, ensure=False))
     except Exception:
@@ -399,13 +278,6 @@ def clear_validation_artifacts(remote_folder: str) -> None:
         state['validated_at'] = None
         state['local_path'] = state.get('source_path') or ''
         _write_workflow_state(remote_folder, state)
-
-
-def _clear_ui_validation_cache(remote_folder: str) -> None:
-    """
-    Remove the UI validation cache (script panel) associated with the workflow.
-    """
-    clear_ui_validation_status(remote_folder)
 
 
 def synchronize_remote_payload(
@@ -488,10 +360,7 @@ def write_validation_raw(remote_folder: str, payload: Dict[str, Any], *, overwri
     raw_path = validation_raw_path(remote_folder, ensure_parent=True)
     if raw_path.exists() and not overwrite:
         return
-    wrapped = {
-        "recorded_at": time.time(),
-        "payload": payload,
-    }
+    wrapped = {"payload": _normalize_validation_payload(payload, remote_folder)}
     try:
         with raw_path.open("w", encoding="utf-8") as handle:
             json.dump(wrapped, handle, indent=2)
@@ -538,9 +407,325 @@ def validation_raw_path(remote_folder: str, *, ensure_parent: bool = False) -> P
     return cache_root / "validation_result_raw.json"
 
 
+def validation_resolve_status_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
+    cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
+    return cache_root / RESOLVE_STATUS_FILENAME
+
+
 def validation_resolve_log_path(remote_folder: str, *, ensure_parent: bool = False) -> Path:
     cache_root = get_validation_cache_root(remote_folder, ensure=ensure_parent)
     return cache_root / "validation_resolve_log.json"
+
+
+def _normalize_custom_node_missing_entry(pack: Dict[str, Any], *, include_resolve: bool = False) -> Dict[str, Any]:
+    normalized = dict(pack or {})
+    if not include_resolve:
+        normalized.pop("resolve_status", None)
+        normalized.pop("resolve_method", None)
+        normalized.pop("resolve_failed", None)
+    status_from_nodes = {"resolve_status": "", "resolve_method": "", "resolve_failed": ""}
+    nodes = []
+    for node in normalized.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        if not include_resolve:
+            node = {k: v for k, v in node.items() if k not in {"resolve_status", "resolve_method", "resolve_failed"}}
+        node_status = str(node.get("resolve_status") or "").strip()
+        node_method = str(node.get("resolve_method") or "").strip()
+        node_failed = str(node.get("resolve_failed") or "").strip()
+        if node_status and not status_from_nodes["resolve_status"]:
+            status_from_nodes = {
+                "resolve_status": node_status,
+                "resolve_method": node_method if node_status == "success" else "",
+                "resolve_failed": node_failed if node_status == "failed" else "",
+            }
+        entry = {
+            "class_type": node.get("class_type"),
+            "id": node.get("id"),
+        }
+        nodes.append(entry)
+    normalized_status = str(normalized.get("resolve_status") or status_from_nodes["resolve_status"] or "").strip()
+    if include_resolve:
+        normalized["resolve_status"] = normalized_status
+        normalized["resolve_method"] = (
+            str(normalized.get("resolve_method") or status_from_nodes["resolve_method"] or "").strip()
+            if normalized_status == "success"
+            else ""
+        )
+        normalized["resolve_failed"] = (
+            str(normalized.get("resolve_failed") or status_from_nodes["resolve_failed"] or "").strip()
+            if normalized_status == "failed"
+            else ""
+        )
+    else:
+        normalized.pop("resolve_status", None)
+        normalized.pop("resolve_method", None)
+        normalized.pop("resolve_failed", None)
+    normalized["nodes"] = nodes
+    return normalized
+
+
+def _normalize_model_missing_entry(entry: Dict[str, Any], models_root: str, *, include_resolve: bool = False) -> Dict[str, Any]:
+    normalized = dict(entry or {})
+    if not include_resolve:
+        normalized.pop("resolve_status", None)
+        normalized.pop("resolve_method", None)
+        normalized.pop("resolve_failed", None)
+    dirs: list[str] = []
+    for path in normalized.get("attempted_directories") or []:
+        if not isinstance(path, str):
+            continue
+        abs_path = os.path.abspath(path if os.path.isabs(path) else os.path.join(models_root, path))
+        dirs.append(abs_path)
+    if dirs:
+        normalized["attempted_directories"] = dirs
+    if include_resolve:
+        normalized_status = str(normalized.get("resolve_status") or "").strip()
+        normalized["resolve_status"] = normalized_status
+        normalized["resolve_method"] = (
+            str(normalized.get("resolve_method") or "").strip() if normalized_status == "success" else ""
+        )
+        normalized["resolve_failed"] = (
+            str(normalized.get("resolve_failed") or "").strip() if normalized_status == "failed" else ""
+        )
+    else:
+        normalized.pop("resolve_status", None)
+        normalized.pop("resolve_method", None)
+        normalized.pop("resolve_failed", None)
+    return normalized
+
+
+def _build_resolve_status_payload(raw_payload: Dict[str, Any], remote_folder: str) -> Dict[str, Any]:
+    payload = _normalize_validation_payload(raw_payload, remote_folder, include_resolve=True)
+    issues = payload.get("issues") if isinstance(payload, dict) else None
+    if isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            key = issue.get("key")
+            data = issue.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            if key == "custom_nodes":
+                missing = data.get("missing_packs") or []
+                data.pop("raw_missing", None)
+                data.pop("missing", None)
+                normalized_packs = []
+                if isinstance(missing, list):
+                    for pack in missing:
+                        if not isinstance(pack, dict) or "nodes" not in pack:
+                            continue
+                        normalized_packs.append(_normalize_custom_node_missing_entry(pack, include_resolve=True))
+                if normalized_packs:
+                    data["missing_packs"] = normalized_packs
+            if key == "models":
+                models_root = data.get("models_root") or ""
+                if not isinstance(models_root, str):
+                    models_root = ""
+                missing_models = data.get("missing") or []
+                normalized_missing = []
+                for entry in missing_models:
+                    if not isinstance(entry, dict):
+                        continue
+                    normalized_missing.append(_normalize_model_missing_entry(entry, models_root, include_resolve=True))
+                if normalized_missing:
+                    data["missing"] = normalized_missing
+                else:
+                    data.pop("missing", None)
+    return {"payload": payload}
+
+
+EXPECTED_MODEL_CATEGORIES = [
+    "audio_encoders",
+    "checkpoints",
+    "classifiers",
+    "clip_vision",
+    "configs",
+    "controlnet",
+    "diffusers",
+    "diffusion_models",
+    "embeddings",
+    "gligen",
+    "hypernetworks",
+    "latent_upscale_models",
+    "loras",
+    "model_patches",
+    "photomaker",
+    "style_models",
+    "text_encoders",
+    "upscale_models",
+    "vae",
+    "vae_approx",
+]
+
+
+def _normalize_validation_payload(
+    payload: Dict[str, Any], remote_folder: str, *, include_resolve: bool = False
+) -> Dict[str, Any]:
+    """
+    Enforce the agreed validation schema for raw payloads before writing to disk.
+    """
+    comfy_path = ""
+    comfy_dir = ""
+    try:
+        comfy_dir = payload.get("comfy_path") or ""
+        comfy_path = comfy_dir
+    except Exception:
+        comfy_dir = ""
+    if not comfy_path and comfy_dir:
+        comfy_path = comfy_dir
+
+    issues = payload.get("issues") if isinstance(payload, dict) else []
+    normalized_issues: list[dict] = []
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        key = issue.get("key")
+        if key not in {"custom_nodes", "models"}:
+            continue
+        data = issue.get("data") or {}
+        if not isinstance(data, dict):
+            data = {}
+        if key == "custom_nodes":
+            missing_packs: list[dict] = []
+            missing_source = data.get("missing_packs") or data.get("missing") or []
+            for pack in missing_source:
+                if not isinstance(pack, dict):
+                    continue
+                normalized_pack = _normalize_custom_node_missing_entry(
+                    pack, include_resolve=include_resolve
+                )
+                missing_packs.append(normalized_pack)
+            norm_data = {
+                "missing_packs": missing_packs,
+            }
+            total_nodes = sum(len(p.get("nodes") or []) for p in missing_packs)
+            summary = f"Missing {len(missing_packs)} custom node pack(s) ({total_nodes} nodes total)." if missing_packs else "All custom nodes registered in the active ComfyUI session."
+            normalized_issues.append(
+                {
+                    "key": "custom_nodes",
+                    "label": issue.get("label") or "Custom nodes loaded",
+                    "ok": bool(not missing_packs),
+                    "summary": summary,
+                    "details": issue.get("details") or [],
+                    "data": norm_data,
+                }
+            )
+        elif key == "models":
+            models_root = data.get("models_root") or ""
+            if not isinstance(models_root, str):
+                models_root = ""
+            if not comfy_path and models_root:
+                comfy_path = os.path.dirname(models_root)
+            model_paths = {}
+            raw_paths = data.get("model_paths") if isinstance(data, dict) else {}
+            if isinstance(raw_paths, dict):
+                for cat, paths in raw_paths.items():
+                    if cat not in EXPECTED_MODEL_CATEGORIES and not cat.startswith("custom_nodes"):
+                        continue
+                    if isinstance(paths, (list, tuple, set)):
+                        cleaned = []
+                        for path in paths:
+                            if not isinstance(path, str):
+                                continue
+                            if models_root and not os.path.isabs(path):
+                                cleaned.append(path.replace("\\", "/"))
+                            else:
+                                cleaned.append(os.path.abspath(path))
+                        if cleaned:
+                            model_paths[cat] = cleaned
+            # If no paths populated, scan models_root for immediate subdirectories.
+            if models_root and os.path.isdir(models_root):
+                try:
+                    for entry in os.scandir(models_root):
+                        if entry.is_dir():
+                            rel = entry.name
+                            if rel in EXPECTED_MODEL_CATEGORIES and not model_paths.get(rel):
+                                model_paths[rel] = [rel]
+                except Exception:
+                    pass
+            # Ensure expected categories exist even if empty lists are omitted by source.
+            for cat in EXPECTED_MODEL_CATEGORIES:
+                model_paths.setdefault(cat, [])
+            # Preserve custom_nodes-related paths if present.
+            for cat in list(raw_paths.keys()) if isinstance(raw_paths, dict) else []:
+                if cat.startswith("custom_nodes") and cat not in model_paths:
+                    model_paths[cat] = raw_paths.get(cat) if isinstance(raw_paths.get(cat), list) else []
+            missing_entries = []
+            for entry in data.get("missing") or []:
+                if isinstance(entry, dict):
+                    missing_entries.append(
+                        _normalize_model_missing_entry(entry, models_root, include_resolve=include_resolve)
+                    )
+            found = data.get("found") if isinstance(data, dict) else []
+            ok_flag = len(missing_entries) == 0
+            summary = (
+                "All required model files reported by ComfyUI."
+                if ok_flag
+                else f"Missing {len(missing_entries)} model file(s)."
+            )
+            norm_data = {
+                "models_root": models_root,
+                "model_paths": model_paths,
+                "found": found if isinstance(found, list) else [],
+            }
+            if missing_entries:
+                norm_data["missing"] = missing_entries
+            normalized_issues.append(
+                {
+                    "key": "models",
+                    "label": issue.get("label") or "Models available",
+                    "ok": ok_flag,
+                    "summary": summary,
+                    "details": [],
+                    "data": norm_data,
+                }
+            )
+
+    normalized_payload = dict(payload)
+    normalized_payload["comfy_path"] = comfy_path
+    normalized_payload["issues"] = normalized_issues
+    # Ensure workflow metadata is well-formed.
+    workflow_info = normalized_payload.get("workflow") if isinstance(normalized_payload, dict) else {}
+    if not isinstance(workflow_info, dict):
+        workflow_info = {}
+    folder = workflow_info.get("folder") or remote_folder
+    folder_name = os.path.basename(folder.rstrip(os.sep)) if folder else ""
+    normalized_payload["workflow"] = {"folder": folder or "", "name": folder_name}
+    return normalized_payload
+
+
+def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any], *, overwrite: bool = True) -> None:
+    if not remote_folder or not isinstance(payload, dict):
+        return
+    status_path = validation_resolve_status_path(remote_folder, ensure_parent=True)
+    if status_path.exists() and not overwrite:
+        return
+    wrapped = _build_resolve_status_payload(payload, remote_folder)
+    try:
+        with status_path.open("w", encoding="utf-8") as handle:
+            json.dump(wrapped, handle, indent=2)
+    except Exception as exc:
+        system_warning(f"Failed to write validation resolve status for '{remote_folder}': {exc}")
+
+
+def load_validation_resolve_status(remote_folder: str) -> Optional[Dict[str, Any]]:
+    if not remote_folder:
+        return None
+    status_path = validation_resolve_status_path(remote_folder, ensure_parent=False)
+    if not status_path.exists():
+        return None
+    try:
+        with status_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            payload = data.get("payload")
+            if isinstance(payload, dict):
+                return payload
+            return data
+    except Exception as exc:
+        system_warning(f"Failed to read validation resolve status for '{remote_folder}': {exc}")
+    return None
 
 
 def reset_local_repository() -> bool:

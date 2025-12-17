@@ -187,7 +187,7 @@ Beyond script metadata checks, Charon performs pre-flight validation for ComfyUI
 
 - **Entry Point**: `charon.comfy_validation.validate_comfy_environment()` inspects the configured Comfy install, embedded Python, required models, and custom nodes. Missing pieces are returned as `ValidationIssue` objects.
 - **UI Integration**: The script browser triggers validation via the *Validate* column. States progress from *Validate* ? *Validatingâ€¦* ? *Resolve* ? *? Passed*. Results are cached per workflow hash so the UI can display status without re-hitting ComfyUI every time.
-- **Per-User Cache**: Validation payloads persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json`. This keeps personal model layouts and overrides local to each artist.
+- **Per-User Cache**: Validation payloads persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_resolve_status.json`. This keeps personal model layouts and overrides local to each artist.
 - **Execution Guard**: Grab/Execute remains disabled until a workflow reaches *? Passed*, preventing surprise failures when models or custom nodes are missing.
 
 ### Validation Result Dialog

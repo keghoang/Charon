@@ -90,7 +90,7 @@ REPOSITORY_SEARCH_PATHS = [WORKFLOW_REPOSITORY_ROOT]
 ```
 
 - **Global Repository**: All workflow browsing starts at the shared `Charon_repo\workflows` hierarchy. Folder loaders enforce the boundary so the UI cannot traverse outside the approved tree.
-- **Artist Cache**: Workflow validation payloads persist per user under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_status.json`, allowing personal model layouts without polluting source control.
+- **Artist Cache**: Workflow validation payloads persist per user under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_resolve_status.json`, allowing personal model layouts without polluting source control.
 - **Overrides**: Runtime arguments or environment overrides can still redirect discovery, but defaults now assume the shared `Charon_repo`.
 
 ## Qt Compatibility Settings
