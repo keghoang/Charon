@@ -7,6 +7,7 @@ from ..qt_compat import (QtWidgets, QtCore, QtGui, Qt, WindowContextHelpButtonHi
 from ..qt_compat import exec_dialog
 import os
 from pathlib import Path
+import re
 from .. import utilities
 from ..input_mapping import (
     discover_prompt_widget_parameters,
@@ -56,7 +57,10 @@ def _is_placeholder_label(label: Optional[str]) -> bool:
     if not label:
         return False
     normalized = str(label).strip().lower()
-    return normalized.startswith("widgets_values[") and normalized.endswith("]")
+    if normalized.startswith("widgets_values[") and normalized.endswith("]"):
+        return True
+    normalized = re.sub(r"\s*\([^)]+\)\s*$", "", normalized)
+    return bool(re.fullmatch(r"value\s+\d+", normalized))
 
 
 def _has_meaningful_labels(candidates: Tuple[ExposableNode, ...]) -> bool:
