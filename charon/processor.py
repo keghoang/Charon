@@ -3375,6 +3375,29 @@ def process_charonop_node():
                                     t_inputs = t_node.setdefault('inputs', {})
                                     t_inputs['image'] = view_upload
                                     log_debug(f"Step 2: Injected view {batch_index} into node {target_coverage_node_id}")
+                                    
+                                # Inject dynamic prompt
+                                prompt_text = ""
+                                if batch_index == 0:
+                                    prompt_text = "Keep the painting unchanged. Change the lighting to even and flat with no shadow"
+                                elif batch_index == 1:
+                                    prompt_text = "Rotate the painting 90 degrees to the right. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
+                                elif batch_index == 2:
+                                    prompt_text = "Rotate the painting 180 degrees. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
+                                elif batch_index == 3:
+                                    prompt_text = "Rotate the painting 90 degrees to the left. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
+                                elif batch_index == 4:
+                                    prompt_text = "Rotate the painting to view from top. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
+                                elif batch_index == 5:
+                                    prompt_text = "Rotate the painting to view from bottom. Keep everything else unchanged. Change the lighting to even and flat with no shadow"
+                                
+                                if prompt_text:
+                                    for nid, ndata in prompt_payload.items():
+                                        inputs = ndata.get('inputs')
+                                        if isinstance(inputs, dict) and 'prompt' in inputs:
+                                            inputs['prompt'] = prompt_text
+                                            log_debug(f"Step 2: Injected prompt for view {batch_index} into node {nid}")
+
                         except Exception as render_err:
                             log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
 
