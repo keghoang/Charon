@@ -67,7 +67,7 @@ STYLESHEET = f"""
         border-radius: 6px;
         text-align: center;
         color: #ffffff;
-        height: 12px;
+        height: 20px;
     }}
     QProgressBar::chunk {{
         background-color: {COLORS['success']};
