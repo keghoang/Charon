@@ -3421,14 +3421,24 @@ def process_charonop_node():
                                                     log_debug(f"Step 2: Injected prompt into node {nid} input 'prompt'")
                                     
                                     if not injected_via_template:
-                                        log_debug(f"Step 2: Attempting to inject angle '{angle_desc}' via token replacement...")
+                                        log_debug("Step 2: Template injection failed. Inspecting payload...")
                                         for nid, ndata in prompt_payload.items():
-                                            inputs = ndata.get('inputs')
+                                            inputs = ndata.get('inputs', {})
                                             if isinstance(inputs, dict):
-                                                for key, val in inputs.items():
+                                                keys = list(inputs.keys())
+                                                # log_debug(f"Node {nid} ({ndata.get('class_type')}) inputs: {keys}")
+                                                
+                                                # Expanded fallback search
+                                                for key in keys:
+                                                    val = inputs[key]
                                                     if isinstance(val, str) and "*charon_angle*" in val:
                                                         inputs[key] = val.replace("*charon_angle*", angle_desc)
-                                                        log_debug(f"Step 2: Injected angle '{angle_desc}' into node {nid} input {key}")
+                                                        log_debug(f"Step 2: Injected angle '{angle_desc}' into node {nid} input {key} (fallback)")
+                                                    elif key in ('text', 'string'): # Try common text input names if template matched but input name differed
+                                                        if prompt_template and "*charon_angle*" in prompt_template:
+                                                             final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
+                                                             inputs[key] = final_prompt
+                                                             log_debug(f"Step 2: Injected template into node {nid} input {key} (heuristic)")
 
                         except Exception as render_err:
                             log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
