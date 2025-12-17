@@ -179,7 +179,7 @@ def update_charon_config(script_path, new_config):
         if key in new_config and new_config[key] is not None:
             payload[key] = new_config[key]
 
-    for key in ("workflow_file", "description", "last_changed"):
+    for key in ("workflow_file", "description", "last_changed", "is_3d_texturing"):
         _apply(key)
 
     if "dependencies" in new_config and new_config["dependencies"] is not None:

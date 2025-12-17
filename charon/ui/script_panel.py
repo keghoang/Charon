@@ -1316,6 +1316,7 @@ class ScriptPanel(QtWidgets.QWidget):
         
         # Update the model with filtered scripts (sorting is done inside updateItems)
         self.script_model.updateItems(filtered_scripts)
+        self._apply_cached_validation_states(filtered_scripts)
     
     def _get_user_folder_context(self):
         """Resolve the active base path and user workflow folder."""
