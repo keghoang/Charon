@@ -1245,6 +1245,19 @@ def _create_step2_result_group(charon_node, image_paths):
     read_id_knob.setFlag(nuke.INVISIBLE)
     group.addKnob(read_id_knob)
     
+    info_tab = nuke.Tab_Knob('charon_info_tab', 'Charon Info')
+    group.addKnob(info_tab)
+    
+    info_text = nuke.Text_Knob('charon_info_text', 'Metadata', '')
+    group.addKnob(info_text)
+    
+    summary = [
+        f"Parent ID: {charon_node_id or 'N/A'}",
+        f"Read Node ID: {read_id or 'N/A'}",
+        f"Status: Completed",
+    ]
+    info_text.setValue("\n".join(summary))
+    
     try:
         group.setMetaData('charon/parent_id', charon_node_id or "")
         group.setMetaData('charon/read_id', read_id)
