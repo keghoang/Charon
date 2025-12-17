@@ -1025,6 +1025,27 @@ def _validate_models_browser(
         "found": [],
     }
 
+    def _is_within_roots(candidate: str, roots: Iterable[str]) -> bool:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return False
+        try:
+            candidate_abs = os.path.abspath(candidate)
+        except Exception:
+            return False
+        for root in roots or []:
+            if not root:
+                continue
+            try:
+                root_abs = os.path.abspath(root)
+                if os.path.commonpath([candidate_abs, root_abs]) == root_abs:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    allowed_roots = [models_root, comfy_dir]
+
     if not python_exe or not os.path.exists(python_exe):
         return ValidationIssue(
             key="models",
@@ -1115,7 +1136,13 @@ def _validate_models_browser(
             attempted_dirs.extend(normalized_paths.get(directory_value, []))
             entry["attempted_categories"] = [directory_value]
         if attempted_dirs:
-            entry["attempted_directories"] = [os.path.abspath(path) for path in attempted_dirs]
+            filtered_dirs = [
+                os.path.abspath(path)
+                for path in attempted_dirs
+                if _is_within_roots(path, allowed_roots)
+            ]
+            if filtered_dirs:
+                entry["attempted_directories"] = filtered_dirs
         if raw_entry.get("directory_invalid") is True:
             entry["directory_invalid"] = True
 

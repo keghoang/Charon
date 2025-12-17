@@ -758,12 +758,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
             )
             models_root = row_info.get("models_root") or ""
             target_hint = display_source or models_root
-            expected_path = (
-                self._format_model_display_path(target_hint, models_root) if target_hint else models_root
-            )
             subtitle_parts = []
-            if expected_path:
-                subtitle_parts.append(f"Expected: {expected_path}")
             if category_value:
                 subtitle_parts.append(f"Folder: {category_value}")
             if directory_invalid:
