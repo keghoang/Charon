@@ -1,8 +1,25 @@
 from ..qt_compat import (
     QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QProgressBar, 
-    Qt, QSizePolicy, QFrame, QPushButton
+    Qt, QSizePolicy, QFrame, QPushButton, QObject, Signal, QThread, QTimer
 )
 from ..resource_monitor import ResourceMonitor
+
+class FlushWorker(QObject):
+    finished = Signal(bool)
+
+    def run(self):
+        from ..config import COMFY_URL_BASE
+        import urllib.request
+        
+        url = f"{COMFY_URL_BASE}/free"
+        req = urllib.request.Request(url, method="POST")
+        req.add_header('Content-Type', 'application/json')
+        
+        try:
+            with urllib.request.urlopen(req, data=b'{"unload_models":true, "free_memory":true}', timeout=5) as response:
+                self.finished.emit(response.getcode() == 200)
+        except Exception:
+            self.finished.emit(False)
 
 class CompactResourceBar(QWidget):
     def __init__(self, label_text, color="#4CAF50", parent=None):
@@ -65,6 +82,7 @@ class ResourceWidget(QWidget):
         super().__init__(parent)
         self.monitor = ResourceMonitor(self)
         self.monitor.stats_updated.connect(self.update_stats)
+        self.current_total_vram_gb = 0
         
         # Use Grid layout to align columns (CPU/GPU, RAM/VRAM)
         self.grid = QGridLayout(self)
@@ -102,39 +120,68 @@ class ResourceWidget(QWidget):
             QPushButton:pressed {
                 background-color: #2f3034;
             }
+            QPushButton:disabled {
+                color: #7f848e;
+                background-color: #2c323c;
+            }
         """)
         self.flush_btn.clicked.connect(self._flush_vram)
         self.grid.addWidget(self.flush_btn, 0, 2, 2, 1) # Span 2 rows
         
+        # Feedback Label (Row 0, Col 3) - spans 2 rows
+        self.flush_feedback = QLabel("")
+        self.flush_feedback.setStyleSheet("color: #4CAF50; font-size: 10px; font-weight: bold; margin-left: 4px;")
+        self.flush_feedback.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.grid.addWidget(self.flush_feedback, 0, 3, 2, 1)
+        
         # GPU widgets storage
         self.gpu_widgets = {} # index -> (core_bar, vram_bar)
         
+        # Animation state
+        self.anim_dots = 0
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._update_anim)
+        
         self.monitor.start()
 
+    def _update_anim(self):
+        self.anim_dots = (self.anim_dots + 1) % 4
+        self.flush_feedback.setText(f"Flushing{' .' * self.anim_dots}")
+
     def _flush_vram(self):
-        """Call ComfyUI's /free endpoint to unload models."""
-        from ..config import COMFY_URL_BASE
-        import urllib.request
+        self.pre_flush_vram = self.current_total_vram_gb
+        self.flush_btn.setEnabled(False)
+        self.flush_feedback.setStyleSheet("color: #FFC107; font-size: 10px; font-weight: bold; margin-left: 4px;") # Amber
+        self.flush_feedback.setText("Flushing")
+        self.anim_timer.start(300)
         
-        url = f"{COMFY_URL_BASE}/free"
-        req = urllib.request.Request(url, method="POST")
-        # Empty JSON body required by some endpoints, usually safe to send
-        req.add_header('Content-Type', 'application/json')
-        
-        try:
-            with urllib.request.urlopen(req, data=b'{"unload_models":true, "free_memory":true}', timeout=2) as response:
-                if response.getcode() == 200:
-                    # Flash button green briefly
-                    self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#37383D", "#2E7D32"))
-                    from ..qt_compat import QTimer
-                    QTimer.singleShot(500, lambda: self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#2E7D32", "#37383D")))
-        except Exception as e:
-            from ..charon_logger import system_error
-            system_error(f"Failed to flush VRAM: {e}")
-            # Flash button red briefly
-            self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#37383D", "#C62828"))
-            from ..qt_compat import QTimer
-            QTimer.singleShot(500, lambda: self.flush_btn.setStyleSheet(self.flush_btn.styleSheet().replace("#C62828", "#37383D")))
+        self.worker = FlushWorker()
+        self.worker_thread = QThread()
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self._on_flush_finished)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.start()
+
+    def _on_flush_finished(self, success):
+        self.anim_timer.stop()
+        if success:
+            # Wait 1.5s for VRAM to actually drop and update in monitor
+            QTimer.singleShot(1500, self._show_flush_result)
+        else:
+            self.flush_feedback.setStyleSheet("color: #F44336; font-size: 10px; font-weight: bold; margin-left: 4px;") # Red
+            self.flush_feedback.setText("Failed")
+            self.flush_btn.setEnabled(True)
+            QTimer.singleShot(3000, lambda: self.flush_feedback.setText(""))
+
+    def _show_flush_result(self):
+        diff = max(0, self.pre_flush_vram - self.current_total_vram_gb)
+        self.flush_feedback.setStyleSheet("color: #4CAF50; font-size: 10px; font-weight: bold; margin-left: 4px;") # Green
+        self.flush_feedback.setText(f"Freed {diff:.1f}GB!")
+        self.flush_btn.setEnabled(True)
+        QTimer.singleShot(4000, lambda: self.flush_feedback.setText(""))
 
     def update_stats(self, stats):
         self.cpu_bar.set_value(stats['cpu_percent'])
@@ -145,9 +192,14 @@ class ResourceWidget(QWidget):
         
         gpus = stats.get('gpus', [])
         
+        total_vram_used = 0
+        
         # Create widgets for GPUs if they don't exist
         for i, gpu in enumerate(gpus):
             idx = gpu['index']
+            
+            total_vram_used += gpu.get('vram_used_gb', 0)
+            
             if idx not in self.gpu_widgets:
                 core_bar = CompactResourceBar(f"GPU", color="#00BCD4")
                 vram_bar = CompactResourceBar(f"VRAM", color="#9C27B0")
@@ -165,6 +217,8 @@ class ResourceWidget(QWidget):
             vram_p = gpu['vram_percent']
             vram_txt = f"VRAM: {gpu['vram_used_gb']:.1f}GB / {gpu['vram_total_gb']:.1f}GB ({vram_p:.1f}%)"
             vram.set_value(vram_p, vram_txt)
+            
+        self.current_total_vram_gb = total_vram_used
 
     def closeEvent(self, event):
         self.monitor.stop()
