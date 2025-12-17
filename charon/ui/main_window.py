@@ -1222,6 +1222,16 @@ class CharonWindow(QtWidgets.QWidget):
         self.header_refresh_button.clicked.connect(self.on_refresh_clicked)
         self.actions_layout.addWidget(self.header_refresh_button)
 
+        # ACEScg Toggle Button
+        self.aces_toggle_button = QtWidgets.QPushButton("ACEScg", self.actions_container)
+        self.aces_toggle_button.setCheckable(True)
+        self.aces_toggle_button.setFixedHeight(button_height)
+        self.aces_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.aces_toggle_button.setStyleSheet(action_style)
+        self.aces_toggle_button.setToolTip("Toggle ACEScg color space handling for ComfyUI integration")
+        self.aces_toggle_button.toggled.connect(self._on_aces_toggle_changed)
+        self.actions_layout.insertWidget(0, self.aces_toggle_button) # Insert at position 0 (leftmost)
+
         settings_icon, settings_box = _make_symbol_icon("⏣")
         self.header_settings_button = QtWidgets.QPushButton("Settings", self.actions_container)
         self.header_settings_button.setIcon(settings_icon)
@@ -1234,10 +1244,18 @@ class CharonWindow(QtWidgets.QWidget):
         self.header_settings_button.clicked.connect(self.open_settings)
         width_refresh = self.header_refresh_button.sizeHint().width()
         width_settings = self.header_settings_button.sizeHint().width()
-        target_width = max(width_refresh, width_settings, refresh_icon_px + 20, settings_icon_px + 20)
+        width_aces = self.aces_toggle_button.sizeHint().width() # Get width for new button
+        target_width = max(width_refresh, width_settings, width_aces, refresh_icon_px + 20, settings_icon_px + 20)
         self.header_refresh_button.setFixedWidth(target_width)
         self.header_settings_button.setFixedWidth(target_width)
+        self.aces_toggle_button.setFixedWidth(target_width) # Set width for new button
         self.actions_layout.addWidget(self.header_settings_button)
+
+        # Load initial ACEScg state
+        from .. import preferences
+        initial_aces_state = preferences.get_preference("aces_mode_enabled", False)
+        if hasattr(self, 'aces_toggle_button'):
+            self.aces_toggle_button.setChecked(initial_aces_state)
 
         # Apply consistent styling to the reused button
         new_workflow_style = f"""
@@ -1502,6 +1520,12 @@ QPushButton#NewWorkflowButton:pressed {{
         handler = self.local_keybind_handlers.get(action)
         if handler:
             handler()
+
+    def _on_aces_toggle_changed(self, checked: bool) -> None:
+        """Save the ACEScg toggle state to preferences."""
+        from .. import preferences
+        preferences.set_preference("aces_mode_enabled", checked)
+        system_debug(f"ACEScg mode toggled: {checked}")
     
     def _run_script_by_path(self, script_path: str):
         """Run a script by its path - delegates to execute_script."""

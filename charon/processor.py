@@ -54,6 +54,65 @@ IMAGE_OUTPUT_EXTENSIONS = {
     ".webp",
 }
 
+INVERSE_VIEW_TRANSFORM_GROUP = """set cut_paste_input [stack 0]
+version 16.0 v3
+push $cut_paste_input
+Group {
+ name InverseViewTransform1
+ selected true
+ xpos 1274
+ ypos 1193
+ addUserKnob {20 User}
+ addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\\n\\nAutomatic alpha channel detection"}
+ addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
+ addUserKnob {41 display l "display device" T OCIODisplayLinked1.display}
+}
+ Input {
+  inputs 0
+  name Input1
+  xpos -468
+  ypos 495
+ }
+ Unpremult {
+  name Unpremult1
+  xpos -468
+  ypos 567
+  disable {{"\[python not\\ len(\\\[n\\ for\\ n\\ in\\ nuke.channels(nuke.thisNode().input(0))\\ if\\ n.find(\\\".a\\\")\\ !=\\ -1\\])>0]"}}
+ }
+ OCIOColorSpace {
+  in_colorspace compositing_linear
+  out_colorspace default
+  name OCIOColorSpace2
+  xpos -468
+  ypos 626
+ }
+ OCIODisplay {
+  colorspace compositing_linear
+  display "sRGB Display"
+  view {{root.monitorLut x1002 1 x1023 1}}
+  invert true
+  name OCIODisplayLinked1
+  note_font Verdana
+  note_font_size 12
+  xpos -468
+  ypos 652
+  addUserKnob {20 User}
+  addUserKnob {26 viewer_note l "View Transform" T "Driven by Root > Color > Thumbnails setting"}
+ }
+ Premult {
+  name Premult1
+  xpos -468
+  ypos 711
+  disable {{"\[python not\\ len(\\\[n\\ for\\ n\\ in\\ nuke.channels(nuke.thisNode().input(0))\\ if\\ n.find(\\\".a\\\")\\ !=\\ -1\\])>0]"}}
+ }
+ Output {
+  name Output1
+  xpos -468
+  ypos 776
+ }
+end_group
+"""
+
 
 def _allocate_output_path(
     node_id: Optional[str],
@@ -972,6 +1031,27 @@ def _apply_seed_control(node, seed_spec, control_spec) -> Dict[str, Any]:
     return updates
 
 
+def _apply_aces_pre_write_transform(node_to_render, aces_enabled: bool):
+    """
+    Apply ACEScg pre-write transform if enabled.
+    Returns the node that should be connected to the Write node input.
+    """
+    if not aces_enabled:
+        return node_to_render
+
+    import nuke
+    ocm_display = nuke.createNode("OCIODisplay")
+    ocm_display.setInput(0, node_to_render)
+    ocm_display['colorspace'].setValue("scene_linear")
+    ocm_display['display'].setValue("sRGB Display")
+    ocm_display['view'].setValue("ACES 1.0 SDR-video")
+    ocm_display.setName("OCIODisplay_ACEScg_PreWrite")
+    # Position relative to input_node for cleaner graph
+    ocm_display.setXpos(node_to_render.xpos())
+    ocm_display.setYpos(node_to_render.ypos() + 50)
+
+    return ocm_display
+
 def _run_3d_texturing_step2_logic(
     node,
     workflow_data: Dict[str, Any],
@@ -1090,10 +1170,17 @@ def _run_3d_texturing_step2_logic(
     else:
         raise Exception("No results generated from Step 2 execution.")
 
-def _render_nuke_node(node, path):
+def _render_nuke_node(node_to_render, path):
     import nuke
+    from . import preferences
+    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+    
+    transformed_node = _apply_aces_pre_write_transform(node_to_render, aces_enabled)
+
     w = nuke.createNode("Write", inpanel=False)
-    w.setInput(0, node)
+    w.setInput(0, transformed_node)
+    if aces_enabled:
+        w['raw'].setValue(True)
     w['file'].setValue(path)
     w['file_type'].setValue("png")
     # Ensure alpha is handled if needed, but assuming standard render
@@ -2575,9 +2662,15 @@ def process_charonop_node():
                         crop_node = None
 
                 write_node = nuke.createNode('Write', inpanel=False)
+                from . import preferences
+                aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                
+                transformed_source_node = _apply_aces_pre_write_transform(source_node, aces_enabled)
+                write_node.setInput(0, transformed_source_node)
+                if aces_enabled:
+                    write_node['raw'].setValue(True)
                 write_node['file'].setValue(temp_path_nuke)
                 write_node['file_type'].setValue('png')
-                write_node.setInput(0, source_node)
                 try:
                     nuke.execute(write_node, current_frame, current_frame)
                 finally:
@@ -3750,6 +3843,19 @@ def process_charonop_node():
                                         except Exception:
                                             pass
                                         layout_index += 1
+
+                                        # --- NEW CODE START ---
+                                        from . import preferences
+                                        aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                                        
+                                        if aces_enabled:
+                                            # Create the InverseViewTransform1 group node
+                                            ivt_node = nuke.nodePaste(INVERSE_VIEW_TRANSFORM_GROUP)
+                                            ivt_node.setName(f"InverseViewTransform_{read_node.name()}")
+                                            ivt_node.setInput(0, read_node)
+                                            ivt_node.setXpos(read_node.xpos())
+                                            ivt_node.setYpos(read_node.ypos() + 70)
+                                        # --- NEW CODE END ---
 
                                     grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in mesh_entries:
