@@ -311,6 +311,9 @@ class KeybindManager(QtCore.QObject):
         self.app_settings[key] = str_value
         if key == "debug_logging":
             self._apply_debug_logging_setting()
+        elif key == "force_first_time_setup":
+            # Keep raw preference (on/off) aligned with stored flag
+            self.app_settings[key] = str_value
 
     def reset_app_settings_to_defaults(self) -> None:
         """Reset all application settings for the current host to defaults."""

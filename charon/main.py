@@ -5,6 +5,7 @@ from .qt_compat import QtWidgets, QtCore
 from . import config, utilities
 from .ui.window_manager import WindowManager
 from .charon_logger import system_info, system_debug, system_error
+from .first_time_setup import run_first_time_setup_if_needed
 
 def launch(host_override=None, user_override=None, global_path=None, local_path=None, script_paths=None, dock=False, debug=False, xoffset=0, yoffset=0):
     """
@@ -67,13 +68,13 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     if not QtWidgets.QApplication.instance():
         app = QtWidgets.QApplication(sys.argv)
 
-    # Prompt for optional dependencies (playwright/trimesh) before building the window
+    # Run first-time setup (Comfy path + dependencies) before building the window
     try:
-        from .dependency_check import check_and_prompt
-
-        check_and_prompt(parent=None)
+        if not run_first_time_setup_if_needed(parent=None):
+            system_info("First-time setup not completed; aborting launch.")
+            return None
     except Exception as exc:
-        system_error(f"Dependency check failed: {exc}")
+        system_error(f"First-time setup failed: {exc}")
 
     # Scripts now use dual execution model based on run_on_main metadata
 
