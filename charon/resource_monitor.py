@@ -24,16 +24,33 @@ class HardwareInfo:
             except Exception as e:
                 system_error(f"Failed to initialize pynvml: {e}")
 
+    def _is_supported_gpu(self, name: str) -> bool:
+        """
+        Check if the GPU is a supported GeForce RTX 30xx/40xx/50xx card.
+        Ignores A2000, 20xx series, and non-GeForce cards.
+        """
+        if not name:
+            return False
+        
+        name_clean = name.strip()
+        if "GeForce RTX" not in name_clean:
+            return False
+            
+        import re
+        # Match 30xx, 40xx, 50xx
+        # \b ensures we match "3060" but not "1030" or similar false positives if they existed
+        return bool(re.search(r"\b(30|40|50)\d{2}\b", name_clean))
+
     def _get_gpu_stats_nvidia_smi(self):
         """Fallback to nvidia-smi if pynvml is unavailable"""
         if not self.nvidia_smi_path:
             return []
             
         try:
-            # query: utilization.gpu [%], memory.total [MiB], memory.used [MiB]
+            # query: utilization.gpu [%], memory.total [MiB], memory.used [MiB], name
             cmd = [
                 self.nvidia_smi_path,
-                "--query-gpu=utilization.gpu,memory.total,memory.used",
+                "--query-gpu=utilization.gpu,memory.total,memory.used,name",
                 "--format=csv,noheader,nounits"
             ]
             # Use a short timeout to prevent UI freeze
@@ -44,12 +61,16 @@ class HardwareInfo:
             stats = []
             for i, line in enumerate(result.stdout.strip().splitlines()):
                 parts = [p.strip() for p in line.split(',')]
-                if len(parts) < 3:
+                if len(parts) < 4:
                     continue
                     
                 util = float(parts[0])
                 total_mb = float(parts[1])
                 used_mb = float(parts[2])
+                name = parts[3]
+                
+                if not self._is_supported_gpu(name):
+                    continue
                 
                 vram_percent = (used_mb / total_mb * 100) if total_mb > 0 else 0
                 
@@ -59,7 +80,8 @@ class HardwareInfo:
                     "vram_percent": vram_percent,
                     "vram_used_gb": used_mb / 1024,
                     "vram_total_gb": total_mb / 1024,
-                    "temperature": 0 # Not queried to keep it simple
+                    "temperature": 0, # Not queried to keep it simple
+                    "name": name
                 })
             return stats
         except Exception:
@@ -83,6 +105,19 @@ class HardwareInfo:
                 for i in range(device_count):
                     handle = pynvml.nvmlDeviceGetHandleByIndex(i)
                     
+                    # Name check
+                    try:
+                        name_raw = pynvml.nvmlDeviceGetName(handle)
+                        if isinstance(name_raw, bytes):
+                            name = name_raw.decode("utf-8")
+                        else:
+                            name = str(name_raw)
+                    except Exception:
+                        name = "Unknown GPU"
+                    
+                    if not self._is_supported_gpu(name):
+                        continue
+                    
                     # Utilization
                     util = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
                     
@@ -101,7 +136,8 @@ class HardwareInfo:
                         "vram_percent": vram_percent,
                         "vram_used_gb": vram_used / (1024**3),
                         "vram_total_gb": vram_total / (1024**3),
-                        "temperature": temp
+                        "temperature": temp,
+                        "name": name
                     })
             except Exception as e:
                 # Fallback if runtime error occurs
