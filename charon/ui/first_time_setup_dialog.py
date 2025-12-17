@@ -541,7 +541,9 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         except Exception as exc:  # pragma: no cover - defensive path
             system_error(f"Failed to persist first-time setup preferences: {exc}")
 
-        self.install_desc.setText(summary or "Installation finished.")
+        self.install_desc.setText("All dependencies installed. Please click 'Next'.")
+        self.install_status_label.clear()
+        self.install_status_label.setVisible(False)
         self.pbar.setValue(100)
         self.setup_completed = True
         if self.comfy_running_preinstall:
