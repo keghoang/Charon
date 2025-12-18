@@ -998,18 +998,31 @@ end_group
 
         # Find connected geometry source
         geo_source = None
-        # Try to find the ScanlineRender created by init
-        for node in nuke.allNodes("ScanlineRender"):
+        
+        # 1. Try to find a ScanlineRender connected to the camera (Global search)
+        # We search recursively to find it even if it's inside a Group
+        for node in nuke.allNodes("ScanlineRender", recurseGroups=True):
             if node.input(2) == init_cam:
                 geo_source = node.input(1)
                 break
         
+        # 2. If not found, check immediate dependents of the camera (e.g. if camera is plugged into a Group)
         if not geo_source:
-            # Fallback to selection if user selected geo too? 
-            # Or just warn.
-            # Assuming user followed workflow: geo -> scanline -> viewer
-            pass
-        
+            deps = init_cam.dependent()
+            for dep in deps:
+                if dep.Class() == "Group":
+                    # Check inputs of the group to find something that looks like geometry (not the camera itself)
+                    # We assume the camera is one input. The geometry should be another.
+                    for i in range(dep.inputs()):
+                        inp = dep.input(i)
+                        if inp and inp != init_cam and inp != target:
+                            # Verify it's not another camera or axis just in case
+                            if inp.Class() not in ("Camera3", "Camera2", "Camera", "Axis3", "Axis2", "Axis"):
+                                geo_source = inp
+                                break
+                if geo_source:
+                    break
+
         if not geo_source:
              # Try to find a geo node in selection if available
              for n in selection:
@@ -1081,40 +1094,39 @@ end_group
         int_target['translate'].setValue(pivot)
         int_target.setXYpos(0, 0)
         
-        # Create 6 Cameras and Render setups
+        # Create 8 Cameras and Render setups (45 degree increments)
         cam_configs = [
-            ("Init",   0,   0,   0, 0), # Renamed "Front" to "Init"
-            ("Right",  90,  0,   1, 0),
-            ("Back",   180, 0,   2, 0),
-            ("Left",   270, 0,   3, 0),
-            ("Top",    0,   90,  0, 1),
-            ("Bottom", 0,   -90, 1, 1)
+            ("Init",   0),
+            ("45",     45),
+            ("90",     90),
+            ("135",    135),
+            ("180",    180),
+            ("225",    225),
+            ("270",    270),
+            ("315",    315)
         ]
         
         render_outputs = []
         
-        for name, yaw, pitch, grid_x, grid_y in cam_configs:
+        for i, (name, yaw) in enumerate(cam_configs):
+            grid_x = i % 4
+            grid_y = i // 4
             x_pos = (grid_x + grid_y * 4) * 200 
             
             # Paste Camera (Clone)
             nuke.nodePaste("%clipboard%")
             cam = nuke.selectedNode()
-            cam.setName(f"Cam_{name}")
+            cam.setName(f"Cam{name}")
             cam.setInput(1, int_target) # Reconnect LookAt to internal target
             
             # Explicitly reset rotation knobs to zero for clean LookAt behavior
             cam['rotate'].setValue([0, 0, 0])
             
             # Position
-            if pitch == 90:
-                cam['translate'].setValue([pivot[0], pivot[1] + radius, pivot[2]])
-            elif pitch == -90:
-                cam['translate'].setValue([pivot[0], pivot[1] - radius, pivot[2]])
-            else:
-                rad_yaw = math.radians(yaw)
-                nx = rx * math.cos(rad_yaw) - rz * math.sin(rad_yaw)
-                nz = rx * math.sin(rad_yaw) + rz * math.cos(rad_yaw)
-                cam['translate'].setValue([pivot[0] + nx, pivot[1] + ry, pivot[2] + nz])
+            rad_yaw = math.radians(yaw)
+            nx = rx * math.cos(rad_yaw) - rz * math.sin(rad_yaw)
+            nz = rx * math.sin(rad_yaw) + rz * math.cos(rad_yaw)
+            cam['translate'].setValue([pivot[0] + nx, pivot[1] + ry, pivot[2] + nz])
             
             cam.setXYpos(x_pos, 200)
             
@@ -1142,10 +1154,10 @@ end_group
         contact = nuke.createNode("ContactSheet")
         
         # Fixed resolution and layout as specified by user
-        contact_width = 3072
+        contact_width = 4096
         contact_height = 2048
         rows = 2
-        columns = 3
+        columns = 4
         gap = 10 # This gap is for internal calculation, Nuke uses 'row_gap' and 'col_gap' knobs
 
         contact['width'].setValue(contact_width)
