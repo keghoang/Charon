@@ -1558,6 +1558,80 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
         except: pass
 
+        # Early Spawn for Recursive Mode (Iteration 0) - Executed in Main Thread
+        if rec_enabled_captured and rec_current_captured == 0 and rec_loop_start_captured:
+            try:
+                loop_start_name = rec_loop_start_captured
+                read_name = 'Read_Recursive_' + loop_start_name
+                read_node = nuke.toNode(read_name)
+                
+                if read_node is None:
+                    target_node = nuke.toNode(loop_start_name)
+                    if target_node:
+                        log_debug(f"Spawning recursive Read/IVT for {loop_start_name}")
+                        parent = target_node.parent() or nuke.root()
+                        with parent:
+                            read_node = nuke.createNode('Read', inpanel=False)
+                            read_node.setName(read_name)
+                            read_node.setSelected(False)
+                            try:
+                                read_node.setXYpos(int(target_node.xpos()), int(target_node.ypos()) + 50)
+                            except: pass
+                            
+                            from . import preferences
+                            aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                            final_source_node = read_node
+                            
+                            if aces_enabled:
+                                # Check IVT
+                                deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                                has_inverse = False
+                                for d in deps:
+                                    if "InverseViewTransform" in d.name():
+                                        has_inverse = True
+                                        break
+                                
+                                if not has_inverse:
+                                    from .paths import get_charon_temp_dir
+                                    ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_rec_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
+                                    try:
+                                        with open(ivt_temp, "w") as f:
+                                            f.write(INVERSE_VIEW_TRANSFORM_GROUP)
+                                        
+                                        read_node.setSelected(True)
+                                        nuke.nodePaste(ivt_temp)
+                                        inv_node = nuke.selectedNode()
+                                        
+                                        if inv_node:
+                                            inv_node.setInput(0, read_node)
+                                            try:
+                                                inv_node.setXYpos(read_node.xpos(), read_node.ypos() + 50)
+                                            except: pass
+                                            final_source_node = inv_node
+                                    except Exception as e:
+                                        log_debug(f"Failed to spawn recursive IVT: {e}", "WARNING")
+                                    finally:
+                                        if os.path.exists(ivt_temp):
+                                            try: os.remove(ivt_temp)
+                                            except: pass
+                            
+                            # Connect downstream
+                            deps_start = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                            for dep in deps_start:
+                                if dep == read_node or dep == final_source_node: continue
+                                if "InverseViewTransform" in dep.name(): continue
+                                for i in range(dep.inputs()):
+                                    inp = dep.input(i)
+                                    if inp == target_node:
+                                        dep.setInput(i, final_source_node)
+                            
+                            for i in range(node.inputs()):
+                                inp = node.input(i)
+                                if inp == target_node:
+                                    node.setInput(i, final_source_node)
+            except Exception as e:
+                log_debug(f"Failed to pre-spawn recursive nodes: {e}", "WARNING")
+
         if hasattr(node, 'setMetaData'):
             metadata_writer = node.setMetaData
         elif hasattr(node, 'setMetadata'):
@@ -3736,89 +3810,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         node.knob('charon_prompt_id').setValue(prompt_id)
                     except Exception:
                         pass
-
-                    # --- Recursive Mode: Pre-spawn Read Node & IVT (Iteration 1) ---
-                    try:
-                        if rec_enabled_captured and rec_current_captured == 0 and batch_index == 0:
-                            def _spawn_recursive_placeholders():
-                                import nuke
-                                import os
-                                import uuid
-                                
-                                loop_start_name = rec_loop_start_captured
-                                
-                                if not loop_start_name:
-                                    return
-
-                                read_name = 'Read_Recursive_' + loop_start_name
-                                read_node = nuke.toNode(read_name)
-                                
-                                if read_node is None:
-                                    target_node = nuke.toNode(loop_start_name)
-                                    if target_node:
-                                        parent = target_node.parent() or nuke.root()
-                                        with parent:
-                                            read_node = nuke.createNode('Read', inpanel=False)
-                                            read_node.setName(read_name)
-                                            read_node.setSelected(False)
-                                            try:
-                                                read_node.setXYpos(int(target_node.xpos()), int(target_node.ypos()) + 50)
-                                            except: pass
-                                            
-                                            from . import preferences
-                                            aces_enabled = preferences.get_preference("aces_mode_enabled", False)
-                                            final_source_node = read_node
-                                            
-                                            if aces_enabled:
-                                                # Check IVT
-                                                deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
-                                                has_inverse = False
-                                                for d in deps:
-                                                    if "InverseViewTransform" in d.name():
-                                                        has_inverse = True
-                                                        break
-                                                
-                                                if not has_inverse:
-                                                    ivt_temp = os.path.join(temp_root, f"ivt_rec_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
-                                                    try:
-                                                        with open(ivt_temp, "w") as f:
-                                                            f.write(INVERSE_VIEW_TRANSFORM_GROUP)
-                                                        
-                                                        read_node.setSelected(True)
-                                                        nuke.nodePaste(ivt_temp)
-                                                        inv_node = nuke.selectedNode()
-                                                        
-                                                        if inv_node:
-                                                            inv_node.setInput(0, read_node)
-                                                            try:
-                                                                inv_node.setXYpos(read_node.xpos(), read_node.ypos() + 50)
-                                                            except: pass
-                                                            final_source_node = inv_node
-                                                    except Exception as e:
-                                                        log_debug(f"Failed to spawn recursive IVT: {e}", "WARNING")
-                                                    finally:
-                                                        if os.path.exists(ivt_temp):
-                                                            try: os.remove(ivt_temp)
-                                                            except: pass
-                                            
-                                            # Connect downstream
-                                            deps_start = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
-                                            for dep in deps_start:
-                                                if dep == read_node or dep == final_source_node: continue
-                                                if "InverseViewTransform" in dep.name(): continue
-                                                for i in range(dep.inputs()):
-                                                    inp = dep.input(i)
-                                                    if inp == target_node:
-                                                        dep.setInput(i, final_source_node)
-                                            
-                                            for i in range(node.inputs()):
-                                                inp = node.input(i)
-                                                if inp == target_node:
-                                                    node.setInput(i, final_source_node)
-                                                    
-                            nuke.executeInMainThread(_spawn_recursive_placeholders)
-                    except Exception as e:
-                        log_debug(f"Failed to pre-spawn recursive nodes: {e}", "WARNING")
 
                     start_time = time.time()
                     update_progress(
