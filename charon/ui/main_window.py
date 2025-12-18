@@ -1319,8 +1319,8 @@ end_group
             finally:
                 final_prep_group.end()
             
-            # 7. Connect Geometry
-            final_prep_group.setInput(0, geo_source)
+            # 7. Connect Geometry (Disabled for standalone import)
+            # final_prep_group.setInput(0, geo_source)
             
             # Position near the rig
             final_prep_group.setXYpos(rig_group.xpos() + 200, rig_group.ypos() + 200)
