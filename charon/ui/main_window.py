@@ -1209,20 +1209,21 @@ end_group
             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Selected node must be a Group (Charon Coverage Rig).")
             return
 
-        # 2. Extract Camera Data
-        # Expected camera names in the rig
+        # 2. Extract Camera and Target Data
         cam_names = ["CamInit", "Cam45", "Cam90", "Cam135", "Cam180", "Cam225", "Cam270", "Cam315"]
         cam_data = {}
+        target_data = None
         
         with rig_group:
             for name in cam_names:
                 cam = nuke.toNode(name)
-                if not cam:
-                    QtWidgets.QMessageBox.warning(self, "Invalid Rig", f"Could not find camera '{name}' inside the group.")
-                    return
-                
-                # Store the raw translate value (list/tuple)
-                cam_data[name] = cam['translate'].value()
+                if cam:
+                    cam_data[name] = cam['translate'].value()
+            
+            # Extract Target Data
+            tgt = nuke.toNode("Target")
+            if tgt:
+                target_data = tgt['translate'].value()
 
         # 3. Find Geometry Source
         geo_source = None
@@ -1284,7 +1285,7 @@ end_group
             nuke.nodePaste(temp_path)
             final_prep_group = nuke.selectedNode()
             
-            # 6. Apply Camera Data
+            # 6. Apply Camera and Target Data
             with final_prep_group:
                 for name, translate_val in cam_data.items():
                     cam = nuke.toNode(name)
@@ -1292,6 +1293,14 @@ end_group
                         cam['translate'].setValue(translate_val)
                     else:
                         print(f"Warning: Could not find camera '{name}' in pasted group to update.")
+                
+                # Apply Target Data
+                if target_data:
+                    tgt_pasted = nuke.toNode("Target")
+                    if tgt_pasted:
+                        tgt_pasted['translate'].setValue(target_data)
+                    else:
+                        print("Warning: Could not find 'Target' in pasted group to update.")
             
             # 7. Connect Geometry
             final_prep_group.setInput(0, geo_source)
