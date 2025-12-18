@@ -1283,10 +1283,25 @@ end_group
                 temp_path = f.name
             
             nuke.nodePaste(temp_path)
-            final_prep_group = nuke.selectedNode()
+            final_prep_group = None
+            for n in nuke.selectedNodes():
+                if n.Class() == "Group":
+                    final_prep_group = n
+                    break
+            
+            if not final_prep_group:
+                try:
+                    sel = nuke.selectedNode()
+                    if sel and sel.Class() == "Group":
+                        final_prep_group = sel
+                except: pass
+            
+            if not final_prep_group:
+                raise RuntimeError("Could not find pasted Group node.")
             
             # 6. Apply Camera and Target Data
-            with final_prep_group:
+            final_prep_group.begin()
+            try:
                 for name, translate_val in cam_data.items():
                     cam = nuke.toNode(name)
                     if cam:
@@ -1301,6 +1316,8 @@ end_group
                         tgt_pasted['translate'].setValue(target_data)
                     else:
                         print("Warning: Could not find 'Target' in pasted group to update.")
+            finally:
+                final_prep_group.end()
             
             # 7. Connect Geometry
             final_prep_group.setInput(0, geo_source)
