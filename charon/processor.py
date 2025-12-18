@@ -1536,16 +1536,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         log_debug(f'Starting CharonOp node processing (recursive={is_recursive_call})...')
         node = node_override or nuke.thisNode()
 
-        # Capture recursive config in main thread safely
-        rec_enabled_captured = False
-        rec_current_captured = 0
-        rec_loop_start_captured = ""
-        try:
-            rec_enabled_captured = bool(node.knob('charon_recursive_enable').value())
-            rec_current_captured = int(node.knob('charon_recursive_current').value())
-            rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
-        except: pass
-
         # Handle recursive state reset
         if not is_recursive_call:
             try:
@@ -1554,6 +1544,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     curr_knob.setValue(0)
             except:
                 pass
+
+        # Capture recursive config in main thread safely
+        rec_enabled_captured = False
+        rec_current_captured = 0
+        rec_loop_start_captured = ""
+        try:
+            rec_enabled_captured = bool(node.knob('charon_recursive_enable').value())
+            if not is_recursive_call:
+                rec_current_captured = 0
+            else:
+                rec_current_captured = int(node.knob('charon_recursive_current').value())
+            rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
+        except: pass
 
         if hasattr(node, 'setMetaData'):
             metadata_writer = node.setMetaData
