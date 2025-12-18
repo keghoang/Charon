@@ -265,7 +265,7 @@ def _build_processor_script() -> str:
         "    import nuke\n"
         "    nuke.message('Charon processor unavailable: {0}'.format(exc))\n"
         "else:\n"
-        "    process_charonop_node()\n"
+        "    process_charonop_node(is_recursive_call=False)\n"
     )
 
 

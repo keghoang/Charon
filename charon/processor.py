@@ -1362,15 +1362,100 @@ def _create_step2_result_group(charon_node, image_paths):
 
 
 
-def process_charonop_node():
+def _handle_recursive_updates(node, last_output):
+    import nuke
+    print(f"[CHARON] Recursive Update Triggered for {node.name()}")
+    
+    # 1. Increment Attribute
+    try:
+        attr = node.knob('charon_recursive_attribute').value()
+        if attr:
+            k = None
+            if '.' in attr:
+                parts = attr.split('.', 1)
+                target_node = nuke.toNode(parts[0])
+                if target_node and parts[1] in target_node.knobs():
+                    k = target_node[parts[1]]
+            elif attr in node.knobs():
+                k = node[attr]
+            
+            if k:
+                v = k.value()
+                print(f"[CHARON] Incrementing attribute {attr} from {v}")
+                if isinstance(v, (int, float)):
+                    k.setValue(v + 1)
+                elif isinstance(v, str) and v.isdigit():
+                    k.setValue(str(int(v) + 1))
+    except Exception as e:
+        print(f"[CHARON] Failed to increment recursive attribute: {e}")
+        log_debug(f"Failed to increment recursive attribute: {e}", "WARNING")
+
+    # 2. Update Read Node
+    try:
+        loop_start = node.knob('charon_recursive_loop_start').value()
+        if loop_start and last_output:
+            read_name = 'Read_Recursive_' + loop_start
+            read_node = nuke.toNode(read_name)
+            
+            # Create if missing
+            if read_node is None:
+                print(f"[CHARON] Creating missing Read node: {read_name}")
+                target_node = nuke.toNode(loop_start)
+                if target_node:
+                    parent = target_node.parent() or nuke.root()
+                    with parent:
+                        read_node = nuke.createNode('Read', inpanel=False)
+                        read_node.setName(read_name)
+                        read_node.setSelected(False)
+                        try:
+                            read_node.setXYpos(int(target_node.xpos()), int(target_node.ypos()) + 50)
+                        except: pass
+                        
+                        # Connect downstream
+                        deps = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
+                        for dep in deps:
+                            for i in range(dep.inputs()):
+                                if dep.input(i) == target_node:
+                                    dep.setInput(i, read_node)
+            
+            if read_node and 'file' in read_node.knobs():
+                print(f"[CHARON] Updating Read node {read_name} with {last_output}")
+                read_node['file'].setValue(last_output)
+            else:
+                print(f"[CHARON] Read node {read_name} could not be created or is invalid.")
+    except Exception as e:
+        print(f"[CHARON] Failed to update recursive read node: {e}")
+        log_debug(f"Failed to update recursive read node: {e}", "WARNING")
+
+    # 3. Increment Counter
+    try:
+        curr_knob = node.knob('charon_recursive_current')
+        if curr_knob:
+            new_val = int(curr_knob.value()) + 1
+            print(f"[CHARON] Incrementing iteration counter to {new_val}")
+            curr_knob.setValue(new_val)
+    except:
+        pass
+
+
+def process_charonop_node(is_recursive_call=False):
     try:
         import nuke  # type: ignore
     except ImportError as exc:  # pragma: no cover - guarded for testing
         raise RuntimeError('Nuke is required to process CharonOp nodes.') from exc
 
     try:
-        log_debug('Starting CharonOp node processing...')
+        log_debug(f'Starting CharonOp node processing (recursive={is_recursive_call})...')
         node = nuke.thisNode()
+
+        # Handle recursive state reset
+        if not is_recursive_call:
+            try:
+                curr_knob = node.knob('charon_recursive_current')
+                if curr_knob:
+                    curr_knob.setValue(0)
+            except:
+                pass
 
         if hasattr(node, 'setMetaData'):
             metadata_writer = node.setMetaData
@@ -2782,7 +2867,7 @@ def process_charonop_node():
 
         results_dir = os.path.join(temp_root, 'results')
         os.makedirs(results_dir, exist_ok=True)
-        result_file = os.path.join(results_dir, f"charon_result_{int(time.time())}.json")
+        result_file = os.path.join(results_dir, f"charon_result_{int(time.time())}_{str(uuid.uuid4())[:8]}.json")
 
         def update_progress(progress, status='Processing', error=None, extra=None):
             nonlocal current_node_state
@@ -4508,6 +4593,35 @@ def process_charonop_node():
                                         log_debug(f"Contact Sheet creation failed: {cs_err}", "WARNING")
                                 
                                 nuke.executeInMainThread(check_auto_contact_sheet)
+
+                                def handle_recursion():
+                                    try:
+                                        is_recursive = bool(node.knob('charon_recursive_enable').value())
+                                        iterations = int(node.knob('charon_recursive_iterations').value())
+                                        current = int(node.knob('charon_recursive_current').value())
+                                        
+                                        if is_recursive and current < iterations - 1:
+                                            last_output = result_data.get('output_path')
+                                            print(f"[CHARON] Recursive Mode: Iteration {current + 1}/{iterations} finished. Starting next...")
+                                            _handle_recursive_updates(node, last_output)
+                                            
+                                            # Short wait to allow Nuke to refresh the graph
+                                            import time
+                                            time.sleep(0.5)
+                                            
+                                            # Trigger next iteration
+                                            process_charonop_node(is_recursive_call=True)
+                                        elif is_recursive:
+                                            print("[CHARON] Recursive Mode: All iterations completed.")
+                                            try:
+                                                node.knob('charon_recursive_current').setValue(0)
+                                            except: pass
+                                    except Exception as rec_err:
+                                        import traceback
+                                        traceback.print_exc()
+                                        log_debug(f"Recursive trigger failed: {rec_err}", "WARNING")
+                                
+                                nuke.executeInMainThread(handle_recursion)
                             else:
                                 log_debug('Auto import disabled; skipping Read node creation.')
                                 for idx, entry in enumerate(entries, start=1):

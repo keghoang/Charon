@@ -337,6 +337,15 @@ def create_charon_group_node(
     recursive_enable.setFlag(nuke.STARTLINE)
     node.addKnob(recursive_enable)
 
+    recursive_iterations = nuke.Int_Knob("charon_recursive_iterations", "Iteration Count")
+    recursive_iterations.setValue(1)
+    node.addKnob(recursive_iterations)
+
+    recursive_current = nuke.Int_Knob("charon_recursive_current", "Current Iteration")
+    recursive_current.setValue(0)
+    recursive_current.setEnabled(False)
+    node.addKnob(recursive_current)
+
     recursive_attr = nuke.String_Knob("charon_recursive_attribute", "Attribute to Increment")
     recursive_attr.setFlag(nuke.STARTLINE)
     node.addKnob(recursive_attr)
