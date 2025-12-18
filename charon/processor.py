@@ -1629,6 +1629,28 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 inp = node.input(i)
                                 if inp == target_node:
                                     node.setInput(i, final_source_node)
+
+                            # Store initial attribute value
+                            try:
+                                attr_name = node.knob('charon_recursive_attribute').value()
+                                if attr_name:
+                                    target_knob = None
+                                    if '.' in attr_name:
+                                        parts = attr_name.split('.', 1)
+                                        tn = nuke.toNode(parts[0])
+                                        if tn and parts[1] in tn.knobs():
+                                            target_knob = tn[parts[1]]
+                                    elif attr_name in node.knobs():
+                                        target_knob = node[attr_name]
+                                    
+                                    if target_knob:
+                                        start_val = str(target_knob.value())
+                                        if hasattr(node, 'setMetaData'):
+                                            node.setMetaData('charon/recursive_attr_start', start_val)
+                                        elif hasattr(node, 'setMetadata'):
+                                            node.setMetadata('charon/recursive_attr_start', start_val)
+                            except Exception as e:
+                                log_debug(f"Failed to store recursive start value: {e}", "WARNING")
             except Exception as e:
                 log_debug(f"Failed to pre-spawn recursive nodes: {e}", "WARNING")
 
@@ -4803,8 +4825,79 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         elif is_recursive:
                                             print("[CHARON] Recursive Mode: All iterations completed.")
                                             try:
+                                                # Cleanup Recursive Nodes & Reset Attribute
+                                                loop_start = node.knob('charon_recursive_loop_start').value()
+                                                if loop_start:
+                                                    read_name = 'Read_Recursive_' + loop_start
+                                                    read_node = nuke.toNode(read_name)
+                                                    start_node = nuke.toNode(loop_start)
+                                                    
+                                                    if read_node and start_node:
+                                                        final_source_node = read_node
+                                                        ivt_node = None
+                                                        
+                                                        # Identify IVT
+                                                        deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                                                        for d in deps:
+                                                            if "InverseViewTransform" in d.name():
+                                                                ivt_node = d
+                                                                final_source_node = ivt_node
+                                                                break
+                                                        
+                                                        # Collect all dependents of Read and IVT
+                                                        restore_candidates = list(read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True))
+                                                        if ivt_node:
+                                                            restore_candidates.extend(ivt_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True))
+                                                        
+                                                        restore_candidates = list(set(restore_candidates))
+                                                        
+                                                        for dep in restore_candidates:
+                                                            if dep == ivt_node: continue
+                                                            for i in range(dep.inputs()):
+                                                                inp = dep.input(i)
+                                                                if inp == final_source_node or inp == read_node:
+                                                                    dep.setInput(i, start_node)
+                                                        
+                                                        # Reconnect CharonOp inputs
+                                                        for i in range(node.inputs()):
+                                                            inp = node.input(i)
+                                                            if inp == final_source_node or inp == read_node:
+                                                                node.setInput(i, start_node)
+
+                                                        # Delete nodes
+                                                        if ivt_node:
+                                                            nuke.delete(ivt_node)
+                                                        nuke.delete(read_node)
+                                                
+                                                # Reset Attribute
+                                                try:
+                                                    attr_start = node.metadata('charon/recursive_attr_start')
+                                                    if attr_start is not None:
+                                                        attr_name = node.knob('charon_recursive_attribute').value()
+                                                        if attr_name:
+                                                            target_knob = None
+                                                            if '.' in attr_name:
+                                                                parts = attr_name.split('.', 1)
+                                                                tn = nuke.toNode(parts[0])
+                                                                if tn and parts[1] in tn.knobs():
+                                                                    target_knob = tn[parts[1]]
+                                                            elif attr_name in node.knobs():
+                                                                target_knob = node[attr_name]
+                                                            
+                                                            if target_knob:
+                                                                val = attr_start
+                                                                try:
+                                                                    if '.' in val: val = float(val)
+                                                                    else: val = int(val)
+                                                                except: pass
+                                                                target_knob.setValue(val)
+                                                except Exception as attr_err:
+                                                    log_debug(f"Failed to reset attribute: {attr_err}", "WARNING")
+
                                                 node.knob('charon_recursive_current').setValue(0)
-                                            except: pass
+                                            except Exception as cleanup_err:
+                                                print(f"[CHARON] Cleanup failed: {cleanup_err}")
+                                                log_debug(f"Cleanup failed: {cleanup_err}", "ERROR")
                                     except Exception as rec_err:
                                         import traceback
                                         traceback.print_exc()
