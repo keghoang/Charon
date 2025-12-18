@@ -514,110 +514,448 @@ class CharonWindow(QtWidgets.QWidget):
     def _create_camera_nuke(self):
         try:
             import nuke
+            import tempfile
+            import os
         except ImportError:
             return
 
-        geo_nodes = nuke.selectedNodes()
-        if not geo_nodes:
-            QtWidgets.QMessageBox.warning(self, "Selection", "Please select a geometry node to frame.")
-            return
-
-        # Get anchor position from first selected node for layout
-        anchor_node = geo_nodes[0]
-        anchor_x = anchor_node.xpos()
-        anchor_y = anchor_node.ypos()
-
-        # --- 1. Calculate Center & Scale ---
-        center = [0.0, 0.0, 0.0]
-        count = 0
-        avg_scale = 1.0
+        # Nuke script snippet
+        rig_script = r"""
+set cut_paste_input [stack 0]
+version 16.0 v3
+Axis3 {
+ inputs 0
+ translate {0 143.3999939 0}
+ name Charon_CamTarget_1
+ selected true
+ xpos 897
+ ypos 389
+}
+push 0
+Camera3 {
+ inputs 2
+ translate {0 145 120}
+ focal 100
+ name Charon_InitCam_1
+ selected true
+ xpos 1275
+ ypos 349
+}
+set N1ad78f00 [stack 0]
+push $N1ad78f00
+push $cut_paste_input
+Group {
+ inputs 3
+ name Charon_InitCam_render
+ selected true
+ xpos 1054
+ ypos 545
+}
+ Input {
+  inputs 0
+  name cam
+  xpos 200
+  ypos 312
+  number 1
+ }
+ Input {
+  inputs 0
+  name object
+  xpos 339
+  ypos 202
+ }
+push 0
+add_layer {P P.red P.green P.blue P.alpha P.X P.Y P.Z P.x P.y P.z}
+add_layer {N N.red N.green N.blue}
+ ScanlineRender {
+  inputs 3
+  conservative_shader_sampling false
+  motion_vectors_type distance
+  output_shader_vectors true
+  P_channel {P.red P.green P.blue}
+  N_channel N
+  name ScanlineRender1
+  xpos 339
+  ypos 312
+ }
+ Dot {
+  name Dot10
+  xpos 373
+  ypos 389
+ }
+set N4e077400 [stack 0]
+ Dot {
+  name Dot17
+  xpos 275
+  ypos 389
+ }
+set N4e077000 [stack 0]
+ Dot {
+  name Dot15
+  xpos 165
+  ypos 389
+ }
+ Group {
+  name NormalsRotate1
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 131
+  ypos 495
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam_1.world_matrix.2, Charon_InitCam_1.world_matrix.10))"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 1
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N715dc500 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N715dc500
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+push $N4e077000
+ Shuffle2 {
+  fromInput1 {
+   {0}
+   B
+  }
+  fromInput2 {
+   {0}
+   B
+  }
+  mappings "4 rgba.alpha 0 3 rgba.alpha 0 3 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.red 0 0"
+  name Shuffle9
+  xpos 241
+  ypos 431
+ }
+ Grade {
+  channels rgba
+  white 0.18
+  name Grade3
+  xpos 241
+  ypos 462
+ }
+ Grade {
+  inputs 1+1
+  white 4
+  name Grade2
+  xpos 241
+  ypos 495
+ }
+add_layer {facingratio facingratio.red facingratio.green facingratio.blue none}
+ Shuffle2 {
+  fromInput1 {
+   {0}
+   B
+  }
+  in1 rgb
+  out1 facingratio
+  fromInput2 {
+   {0}
+   B
+  }
+  mappings "3 rgba.red 0 0 facingratio.red 0 0 rgba.green 0 1 facingratio.green 0 1 rgba.blue 0 2 facingratio.blue 0 2"
+  name Shuffle15
+  xpos 241
+  ypos 533
+ }
+ Dot {
+  name Dot19
+  xpos 275
+  ypos 616
+ }
+push $N4e077400
+ Constant {
+  inputs 0
+  channels rgb
+  color {0.36 0.36 0.36 1}
+  name BG_Constant
+  xpos 501
+  ypos 430
+ }
+ Merge2 {
+  inputs 2
+  name Merge2
+  xpos 339
+  ypos 454
+ }
+add_layer {wireframe wireframe.red wireframe.green wireframe.blue}
+ Shuffle2 {
+  fromInput1 {
+   {0}
+   B
+  }
+  out1 wireframe
+  fromInput2 {
+   {0}
+   B
+  }
+  mappings "3 rgba.red 0 0 wireframe.red 0 0 rgba.green 0 1 wireframe.green 0 1 rgba.blue 0 2 wireframe.blue 0 2"
+  name Shuffle14
+  xpos 339
+  ypos 535
+ }
+ Shuffle2 {
+  inputs 2
+  fromInput1 {
+   {0}
+   B
+   A
+  }
+  in1 wireframe
+  out1 wireframe
+  fromInput2 {
+   {1}
+   B
+   A
+  }
+  in2 facingratio
+  out2 facingratio
+  mappings "6 wireframe.red 0 0 wireframe.red 0 0 wireframe.green 0 1 wireframe.green 0 1 wireframe.blue 0 2 wireframe.blue 0 2 facingratio.red 1 0 facingratio.red 1 0 facingratio.green 1 1 facingratio.green 1 1 facingratio.blue 1 2 facingratio.blue 1 2"
+  name Shuffle16
+  xpos 339
+  ypos 613
+ }
+ Output {
+  name Output1
+  xpos 339
+  ypos 753
+ }
+end_group
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as f:
+            f.write(rig_script)
+            temp_path = f.name
         
-        for node in geo_nodes:
-            if 'translate' in node.knobs():
-                val = node['translate'].value()
-                center[0] += val[0]
-                center[1] += val[1]
-                center[2] += val[2]
-                count += 1
-            for scale_knob in ('scaling', 'scale'):
-                if scale_knob in node.knobs():
-                    s = node[scale_knob].value()
-                    if isinstance(s, (list, tuple)) and len(s) >= 1:
-                        comps = s[:3]
-                        current_avg = sum(comps) / len(comps) if comps else 1.0
-                        avg_scale = (avg_scale + current_avg) / 2.0 if count > 1 else current_avg
-                    elif isinstance(s, (int, float)):
-                        avg_scale = (avg_scale + float(s)) / 2.0 if count > 1 else float(s)
-                    break
-        
-        if count > 0:
-            center = [c / count for c in center]
-        
-        # Deselect geometry
-        for n in nuke.selectedNodes():
-            n.setSelected(False)
-
-        # --- 2. Create Material (Vertical above Geo) ---
-        gray_constant = nuke.createNode("Constant")
-        gray_constant['color'].setValue([0.64, 0.64, 0.64, 1])
-        gray_constant['name'].setValue("BaseGray")
-        gray_constant.setXYpos(anchor_x, anchor_y - 250)
-        gray_constant.setSelected(False)
-        
-        texture_output = gray_constant
         try:
-            wireframe_node = nuke.createNode("Wireframe")
-            wireframe_node.setInput(0, gray_constant)
-            wireframe_node['operation'].setValue("over")
-            wireframe_node['line_width'].setValue(0.35)
-            wireframe_node['line_color'].setValue([0.02, 0.02, 0.02, 1])
-            wireframe_node.setXYpos(anchor_x, anchor_y - 150)
-            wireframe_node.setSelected(False)
-            texture_output = wireframe_node
-        except Exception:
-            pass
+            nuke.nodePaste(temp_path)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", f"Failed to create camera rig: {str(e)}")
+        finally:
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
 
-        for geo in geo_nodes:
-            geo.setInput(0, texture_output)
-
-        # --- 3. Create Render (Vertical below Geo) ---
-        scanline = nuke.createNode("ScanlineRender")
-        # Connect the first geometry node directly to ScanlineRender's obj/scene input
-        scanline.setInput(1, anchor_node) 
-        scanline.setXYpos(anchor_x, anchor_y + 150) # Adjusted position
-        
-        # --- 4. Create Camera & Target (Left of Render) ---
-        target = nuke.createNode("Axis3")
-        target.setName("Charon_CamTarget_1")
-        target['translate'].setValue(center)
-        target.setXYpos(anchor_x - 200, anchor_y + 50) # Move Target Up
-        target.setSelected(False)
-        
-        cam = nuke.createNode("Camera3")
-        cam.setName("Charon_InitCam_1")
-        cam['focal'].setValue(100)
-        cam.setInput(1, target)
-        cam.setXYpos(anchor_x - 200, anchor_y + 150)
-        
-        distance = 150.0 * avg_scale
-        cam['translate'].setValue([center[0], center[1], center[2] + distance])
-        cam['rotate'].setValue([0, 0, 0])
-        
-        scanline.setInput(2, cam)
-        scanline.setSelected(False)
-
-        # --- 5. Create Background (Constant + Merge) ---
-        bg_constant = nuke.createNode("Constant")
-        bg_constant['color'].setValue([0.36, 0.36, 0.36, 1])
-        bg_constant['name'].setValue("BG_Constant")
-        bg_constant.setXYpos(anchor_x + 150, anchor_y + 250) # Move Constant Down
-        bg_constant.setSelected(False)
-        
-        merge = nuke.createNode("Merge2")
-        merge.setInput(1, scanline)    # A = Foreground
-        merge.setInput(0, bg_constant) # B = Background
-        merge.setXYpos(anchor_x, anchor_y + 250)
-        merge.setSelected(True)
 
     def _on_generate_cameras_clicked(self):
         host = str(self.host).lower()
@@ -884,7 +1222,7 @@ class CharonWindow(QtWidgets.QWidget):
 
         # 3D Texturing Buttons
         self.create_camera_button = QtWidgets.QPushButton("🎥", info_container)
-        self.create_camera_button.setToolTip("Create Initial Camera (Frame Selected Geo)")
+        self.create_camera_button.setToolTip("Create Initial Camera Rig")
         self.create_camera_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.create_camera_button.setFixedSize(28, 24)
         btn_style = """
