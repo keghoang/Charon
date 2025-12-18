@@ -1421,6 +1421,59 @@ def _handle_recursive_updates(node, last_output):
             if read_node and 'file' in read_node.knobs():
                 print(f"[CHARON] Updating Read node {read_name} with {last_output}")
                 read_node['file'].setValue(last_output)
+                
+                # ACES Handling
+                try:
+                    from . import preferences
+                    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                    if aces_enabled:
+                        # Check for existing InverseViewTransform downstream
+                        deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
+                        has_inverse = False
+                        for d in deps:
+                            if "InverseViewTransform" in d.name():
+                                has_inverse = True
+                                break
+                        
+                        if not has_inverse:
+                            print("[CHARON] Applying Inverse View Transform for ACES...")
+                            import os
+                            temp_dir = os.environ.get('NUKE_TEMP_DIR') or os.environ.get('TEMP') or '/tmp'
+                            temp_inv = os.path.join(temp_dir, 'charon_inverse.nk')
+                            
+                            with open(temp_inv, 'w') as f:
+                                f.write(INVERSE_VIEW_TRANSFORM_GROUP)
+                            
+                            for n in nuke.allNodes():
+                                n.setSelected(False)
+                            
+                            read_node.setSelected(True)
+                            nuke.nodePaste(temp_inv)
+                            inv_node = nuke.selectedNode()
+                            
+                            if inv_node:
+                                inv_node.setInput(0, read_node)
+                                try:
+                                    inv_node.setXYpos(read_node.xpos(), read_node.ypos() + 50)
+                                except: pass
+                                
+                                # Reconnect original dependents to the new inverse node
+                                # We collected 'deps' before pasting, but pasting might have changed selection/focus
+                                # Re-evaluate deps of Read node (excluding the new inv_node)
+                                current_deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
+                                for dep in current_deps:
+                                    if dep == inv_node:
+                                        continue
+                                    for i in range(dep.inputs()):
+                                        if dep.input(i) == read_node:
+                                            dep.setInput(i, inv_node)
+                                            
+                            try:
+                                os.remove(temp_inv)
+                            except: pass
+                except Exception as aces_err:
+                     print(f"[CHARON] ACES Inverse Transform failed: {aces_err}")
+
             else:
                 print(f"[CHARON] Read node {read_name} could not be created or is invalid.")
     except Exception as e:
@@ -1438,7 +1491,7 @@ def _handle_recursive_updates(node, last_output):
         pass
 
 
-def process_charonop_node(is_recursive_call=False):
+def process_charonop_node(is_recursive_call=False, node_override=None):
     try:
         import nuke  # type: ignore
     except ImportError as exc:  # pragma: no cover - guarded for testing
@@ -1446,7 +1499,7 @@ def process_charonop_node(is_recursive_call=False):
 
     try:
         log_debug(f'Starting CharonOp node processing (recursive={is_recursive_call})...')
-        node = nuke.thisNode()
+        node = node_override or nuke.thisNode()
 
         # Handle recursive state reset
         if not is_recursive_call:
@@ -4610,7 +4663,7 @@ def process_charonop_node(is_recursive_call=False):
                                             time.sleep(0.5)
                                             
                                             # Trigger next iteration
-                                            process_charonop_node(is_recursive_call=True)
+                                            process_charonop_node(is_recursive_call=True, node_override=node)
                                         elif is_recursive:
                                             print("[CHARON] Recursive Mode: All iterations completed.")
                                             try:
@@ -4811,7 +4864,7 @@ def _create_generic_result_group(charon_node, image_paths):
         n.setSelected(False)
         
     safe_name = "".join(c if c.isalnum() else "_" for c in charon_node.name())
-    group = nuke.createNode("Group")
+    group = nuke.createNode("Group", inpanel=False)
     group.setName(f"Charon_ContactSheet_{safe_name}")
     group['tile_color'].setValue(0xFFFF00FF)
     group.setXYpos(charon_node.xpos() + 200, charon_node.ypos() + 100)
