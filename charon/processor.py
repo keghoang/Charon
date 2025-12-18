@@ -1305,7 +1305,7 @@ def _create_step2_result_group(charon_node, image_paths):
     
     for i, r in enumerate(reads):
         # Create Text node for label
-        txt = nuke.createNode("Text2")
+        txt = nuke.createNode("Text2", inpanel=False)
         txt.setInput(0, r)
         try:
             filename = os.path.basename(r['file'].value())
@@ -1313,6 +1313,10 @@ def _create_step2_result_group(charon_node, image_paths):
             txt['box'].setValue([0, 0, 1000, 100]) # Bottom left box
             txt['yjustify'].setValue("bottom")
             txt['global_font_scale'].setValue(0.5)
+            try:
+                txt['font'].setValue("Myanmar Text", "Regular")
+            except:
+                pass
         except Exception:
             pass
         txt.setXYpos(r.xpos(), r.ypos() + 100)
@@ -1390,12 +1394,13 @@ def _handle_recursive_updates(node, last_output):
         print(f"[CHARON] Failed to increment recursive attribute: {e}")
         log_debug(f"Failed to increment recursive attribute: {e}", "WARNING")
 
-    # 2. Update Read Node
+    # 2. Update Read Node & Connections
     try:
         loop_start = node.knob('charon_recursive_loop_start').value()
         if loop_start and last_output:
             read_name = 'Read_Recursive_' + loop_start
             read_node = nuke.toNode(read_name)
+            final_source_node = None
             
             # Create if missing
             if read_node is None:
@@ -1410,17 +1415,11 @@ def _handle_recursive_updates(node, last_output):
                         try:
                             read_node.setXYpos(int(target_node.xpos()), int(target_node.ypos()) + 50)
                         except: pass
-                        
-                        # Connect downstream
-                        deps = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
-                        for dep in deps:
-                            for i in range(dep.inputs()):
-                                if dep.input(i) == target_node:
-                                    dep.setInput(i, read_node)
             
             if read_node and 'file' in read_node.knobs():
                 print(f"[CHARON] Updating Read node {read_name} with {last_output}")
                 read_node['file'].setValue(last_output)
+                final_source_node = read_node
                 
                 # ACES Handling
                 try:
@@ -1428,51 +1427,87 @@ def _handle_recursive_updates(node, last_output):
                     aces_enabled = preferences.get_preference("aces_mode_enabled", False)
                     if aces_enabled:
                         # Check for existing InverseViewTransform downstream
-                        deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
+                        deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
                         has_inverse = False
+                        inv_node = None
                         for d in deps:
                             if "InverseViewTransform" in d.name():
                                 has_inverse = True
+                                inv_node = d
                                 break
                         
                         if not has_inverse:
                             print("[CHARON] Applying Inverse View Transform for ACES...")
-                            import os
                             temp_dir = os.environ.get('NUKE_TEMP_DIR') or os.environ.get('TEMP') or '/tmp'
                             temp_inv = os.path.join(temp_dir, 'charon_inverse.nk')
                             
                             with open(temp_inv, 'w') as f:
                                 f.write(INVERSE_VIEW_TRANSFORM_GROUP)
                             
-                            for n in nuke.allNodes():
-                                n.setSelected(False)
-                            
-                            read_node.setSelected(True)
-                            nuke.nodePaste(temp_inv)
-                            inv_node = nuke.selectedNode()
-                            
-                            if inv_node:
-                                inv_node.setInput(0, read_node)
-                                try:
-                                    inv_node.setXYpos(read_node.xpos(), read_node.ypos() + 50)
-                                except: pass
+                            # Ensure we operate in the correct context
+                            parent_ctx = read_node.parent() or nuke.root()
+                            with parent_ctx:
+                                for n in nuke.allNodes():
+                                    n.setSelected(False)
                                 
-                                # Reconnect original dependents to the new inverse node
-                                # We collected 'deps' before pasting, but pasting might have changed selection/focus
-                                # Re-evaluate deps of Read node (excluding the new inv_node)
-                                current_deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
-                                for dep in current_deps:
-                                    if dep == inv_node:
-                                        continue
-                                    for i in range(dep.inputs()):
-                                        if dep.input(i) == read_node:
-                                            dep.setInput(i, inv_node)
+                                read_node.setSelected(True)
+                                nuke.nodePaste(temp_inv)
+                                inv_node = nuke.selectedNode()
+                                
+                                if inv_node:
+                                    inv_node.setInput(0, read_node)
+                                    try:
+                                        inv_node.setXYpos(read_node.xpos(), read_node.ypos() + 50)
+                                    except: pass
                                             
                             try:
                                 os.remove(temp_inv)
                             except: pass
+                        
+                        if inv_node:
+                            final_source_node = inv_node
                 except Exception as aces_err:
                      print(f"[CHARON] ACES Inverse Transform failed: {aces_err}")
+
+                # RECONNECT DOWNSTREAM
+                # Find nodes connected to Loop Start OR Read node, and move them to final_source_node
+                target_node = nuke.toNode(loop_start)
+                if target_node and final_source_node:
+                    nodes_to_reconnect = []
+                    
+                    # 1. Dependents of Loop Start (Original Flow)
+                    deps_start = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                    nodes_to_reconnect.extend(deps_start)
+                    
+                    # 2. Dependents of Read (Previous Iteration Flow - potentially missing IVT)
+                    deps_read = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                    nodes_to_reconnect.extend(deps_read)
+                    
+                    for dep in nodes_to_reconnect:
+                        if dep == read_node or dep == final_source_node:
+                            continue
+                        # Don't reconnect the IVT itself (if it was found in deps_read)
+                        if "InverseViewTransform" in dep.name():
+                            continue
+                            
+                        for i in range(dep.inputs()):
+                            inp = dep.input(i)
+                            if inp == target_node or inp == read_node:
+                                print(f"[CHARON] Reconnecting {dep.name()} input {i} to {final_source_node.name()}")
+                                dep.setInput(i, final_source_node)
+                                # Verify
+                                if dep.input(i) != final_source_node:
+                                    print(f"[CHARON] WARNING: Reconnection failed! {dep.name()} input {i} is {dep.input(i).name() if dep.input(i) else 'None'}")
+                                else:
+                                    print(f"[CHARON] SUCCESS: {dep.name()} input {i} is now {final_source_node.name()}")
+                    
+                    # 3. Explicitly check CharonOp (node) inputs
+                    # This ensures the processor itself is updated even if dependency cache is stale
+                    for i in range(node.inputs()):
+                        inp = node.input(i)
+                        if inp == target_node or inp == read_node:
+                            print(f"[CHARON] Explicitly reconnecting CharonOp input {i} to {final_source_node.name()}")
+                            node.setInput(i, final_source_node)
 
             else:
                 print(f"[CHARON] Read node {read_name} could not be created or is invalid.")
@@ -2622,9 +2657,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         initialize_status('Preparing node')
 
-        workflow_data_str = node.knob('workflow_data').value()
-        input_mapping_str = node.knob('input_mapping').value()
-        temp_root = node.knob('charon_temp_dir').value()
+        def _get_val(k):
+            try:
+                return node.knob(k).value()
+            except:
+                return None
+
+        workflow_data_str = _get_val('workflow_data')
+        input_mapping_str = _get_val('input_mapping')
+        temp_root = _get_val('charon_temp_dir')
+        
+        if not temp_root:
+             # Try default or fail gracefully
+             temp_root = os.environ.get('NUKE_TEMP_DIR') or os.environ.get('TEMP') or '/tmp'
+
         normalized_root = _normalize_charon_root(temp_root)
         if normalized_root != temp_root:
             temp_root = normalized_root
@@ -2759,6 +2805,9 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             input_node = node.input(index)
             if input_node is not None:
                 connected_inputs[index] = input_node
+                log_debug(f"Input {index} connected to: {input_node.name()}")
+            else:
+                log_debug(f"Input {index} is disconnected")
 
         crop_box = resolve_crop_settings()
         render_jobs = []
@@ -3675,6 +3724,102 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     except Exception:
                         pass
 
+                    # --- Recursive Mode: Pre-spawn Read Node & IVT (Iteration 1) ---
+                    try:
+                        is_recursive_mode = False
+                        try:
+                            is_recursive_mode = bool(node.knob('charon_recursive_enable').value())
+                        except: pass
+                        
+                        current_iter = 0
+                        try:
+                            current_iter = int(node.knob('charon_recursive_current').value())
+                        except: pass
+
+                        if is_recursive_mode and current_iter == 0 and batch_index == 0:
+                            def _spawn_recursive_placeholders():
+                                import nuke
+                                import os
+                                import uuid
+                                
+                                loop_start_name = ""
+                                try:
+                                    loop_start_name = node.knob('charon_recursive_loop_start').value()
+                                except: pass
+                                
+                                if not loop_start_name:
+                                    return
+
+                                read_name = 'Read_Recursive_' + loop_start_name
+                                read_node = nuke.toNode(read_name)
+                                
+                                if read_node is None:
+                                    target_node = nuke.toNode(loop_start_name)
+                                    if target_node:
+                                        parent = target_node.parent() or nuke.root()
+                                        with parent:
+                                            read_node = nuke.createNode('Read', inpanel=False)
+                                            read_node.setName(read_name)
+                                            read_node.setSelected(False)
+                                            try:
+                                                read_node.setXYpos(int(target_node.xpos()), int(target_node.ypos()) + 50)
+                                            except: pass
+                                            
+                                            from . import preferences
+                                            aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                                            final_source_node = read_node
+                                            
+                                            if aces_enabled:
+                                                # Check IVT
+                                                deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                                                has_inverse = False
+                                                for d in deps:
+                                                    if "InverseViewTransform" in d.name():
+                                                        has_inverse = True
+                                                        break
+                                                
+                                                if not has_inverse:
+                                                    ivt_temp = os.path.join(temp_root, f"ivt_rec_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
+                                                    try:
+                                                        with open(ivt_temp, "w") as f:
+                                                            f.write(INVERSE_VIEW_TRANSFORM_GROUP)
+                                                        
+                                                        read_node.setSelected(True)
+                                                        nuke.nodePaste(ivt_temp)
+                                                        inv_node = nuke.selectedNode()
+                                                        
+                                                        if inv_node:
+                                                            inv_node.setInput(0, read_node)
+                                                            try:
+                                                                inv_node.setXYpos(read_node.xpos(), read_node.ypos() + 50)
+                                                            except: pass
+                                                            final_source_node = inv_node
+                                                    except Exception as e:
+                                                        log_debug(f"Failed to spawn recursive IVT: {e}", "WARNING")
+                                                    finally:
+                                                        if os.path.exists(ivt_temp):
+                                                            try: os.remove(ivt_temp)
+                                                            except: pass
+                                            
+                                            # Connect downstream
+                                            deps_start = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
+                                            for dep in deps_start:
+                                                if dep == read_node or dep == final_source_node: continue
+                                                if "InverseViewTransform" in dep.name(): continue
+                                                for i in range(dep.inputs()):
+                                                    inp = dep.input(i)
+                                                    if inp == target_node:
+                                                        dep.setInput(i, final_source_node)
+                                            
+                                            for i in range(node.inputs()):
+                                                inp = node.input(i)
+                                                if inp == target_node:
+                                                    node.setInput(i, final_source_node)
+                                                    
+                            nuke.executeInMainThread(_spawn_recursive_placeholders)
+                    except Exception as e:
+                        log_debug(f"Failed to pre-spawn recursive nodes: {e}", "WARNING")
+
                     start_time = time.time()
                     update_progress(
                         _progress_for(batch_index, 0.1),
@@ -3931,8 +4076,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 try:
                                     for temp_path in list(rendered_files.values()):
                                         if os.path.exists(temp_path):
-                                            os.remove(temp_path)
-                                            log_debug(f'Cleaned up temp file: {temp_path}')
+                                            # os.remove(temp_path)
+                                            log_debug(f'Preserved temp file for debugging: {temp_path}')
                                 except Exception as cleanup_error:
                                     log_debug(f'Could not clean up files: {cleanup_error}', 'WARNING')
 
@@ -4660,7 +4805,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             
                                             # Short wait to allow Nuke to refresh the graph
                                             import time
-                                            time.sleep(0.5)
+                                            time.sleep(2.0)
                                             
                                             # Trigger next iteration
                                             process_charonop_node(is_recursive_call=True, node_override=node)
@@ -4693,8 +4838,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             try:
                                 for temp_path in list(rendered_files.values()):
                                     if os.path.exists(temp_path):
-                                        os.remove(temp_path)
-                                        log_debug(f'Cleaned up temp file: {temp_path}')
+                                        # os.remove(temp_path)
+                                        log_debug(f'Preserved temp file for debugging: {temp_path}')
                             except Exception as cleanup_error:
                                 log_debug(f'Could not clean up files after failure: {cleanup_error}', 'WARNING')
                     except Exception as exc:
@@ -4930,7 +5075,7 @@ def _create_generic_result_group(charon_node, image_paths):
         r.setXYpos(i * 150, -300) # Spacing adjustment
         
         # Create Text node for label
-        txt = nuke.createNode("Text2")
+        txt = nuke.createNode("Text2", inpanel=False)
         txt.setInput(0, r)
         try:
             filename = os.path.basename(path)
@@ -4938,6 +5083,10 @@ def _create_generic_result_group(charon_node, image_paths):
             txt['box'].setValue([0, 0, 1000, 100])
             txt['yjustify'].setValue("bottom")
             txt['global_font_scale'].setValue(0.5)
+            try:
+                txt['font'].setValue("Myanmar Text", "Regular")
+            except:
+                pass
         except Exception:
             pass
         txt.setXYpos(r.xpos(), r.ypos() + 150)

@@ -347,10 +347,12 @@ def create_charon_group_node(
     node.addKnob(recursive_current)
 
     recursive_attr = nuke.String_Knob("charon_recursive_attribute", "Attribute to Increment")
+    recursive_attr.setValue("Projection_Final_Prep.whichCam")
     recursive_attr.setFlag(nuke.STARTLINE)
     node.addKnob(recursive_attr)
 
     recursive_loop_start = nuke.String_Knob("charon_recursive_loop_start", "Loop Starting point")
+    recursive_loop_start.setValue("CharonLoop_Start")
     recursive_loop_start.setFlag(nuke.STARTLINE)
     node.addKnob(recursive_loop_start)
 
