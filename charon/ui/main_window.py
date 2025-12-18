@@ -492,6 +492,8 @@ class CharonWindow(QtWidgets.QWidget):
             self.create_camera_button.setVisible(checked)
         if hasattr(self, 'generate_cameras_button'):
             self.generate_cameras_button.setVisible(checked)
+        if hasattr(self, 'final_prep_button'):
+            self.final_prep_button.setVisible(checked)
 
             
         from .. import preferences
@@ -1178,6 +1180,134 @@ end_group
         
         group.end()
         group.setSelected(True)
+
+    def _on_final_prep_clicked(self):
+        host = str(self.host).lower()
+        if host == "nuke":
+            self._generate_final_prep_nuke()
+        else:
+            QtWidgets.QMessageBox.information(
+                self, "Not Supported", 
+                f"Final Prep is not yet implemented for {self.host}."
+            )
+
+    def _generate_final_prep_nuke(self):
+        try:
+            import nuke
+            import tempfile
+        except ImportError:
+            return
+
+        # 1. Validate Selection
+        selection = nuke.selectedNodes()
+        if not selection or len(selection) != 1:
+            QtWidgets.QMessageBox.warning(self, "Selection Required", "Please select the Charon Coverage Rig group.")
+            return
+        
+        rig_group = selection[0]
+        if rig_group.Class() != "Group":
+            QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Selected node must be a Group (Charon Coverage Rig).")
+            return
+
+        # 2. Extract Camera Data
+        # Expected camera names in the rig
+        cam_names = ["CamInit", "Cam45", "Cam90", "Cam135", "Cam180", "Cam225", "Cam270", "Cam315"]
+        cam_data = {}
+        
+        with rig_group:
+            for name in cam_names:
+                cam = nuke.toNode(name)
+                if not cam:
+                    QtWidgets.QMessageBox.warning(self, "Invalid Rig", f"Could not find camera '{name}' inside the group.")
+                    return
+                
+                # Store the raw translate value (list/tuple)
+                cam_data[name] = cam['translate'].value()
+
+        # 3. Find Geometry Source
+        geo_source = None
+        # Check 'geo' input of the rig group
+        for i in range(rig_group.inputs()):
+            inp_node = rig_group.input(i)
+            # We assume the rig has an input named 'geo' connected to input 0 or similar
+            if i == 0:
+                geo_source = inp_node
+        
+        if not geo_source:
+             QtWidgets.QMessageBox.warning(self, "Missing Geometry", 
+                 "Could not identify geometry source connected to the rig.")
+             return
+
+        # 4. Read Template from File
+        try:
+            # Construct path relative to this file
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            template_path = os.path.join(current_dir, "..", "resources", "nuke_template", "projection_final_prep.nk")
+            template_path = os.path.normpath(template_path)
+            
+            if not os.path.exists(template_path):
+                 QtWidgets.QMessageBox.warning(self, "Error", f"Template file not found: {template_path}")
+                 return
+                 
+            with open(template_path, 'r') as f:
+                content = f.read()
+                
+            # Extract the Group block
+            # We look for the first "Group {" at the start of a line
+            start_idx = content.find("\nGroup {")
+            if start_idx == -1:
+                # Try finding it at the very start of the file
+                if content.startswith("Group {"):
+                    start_idx = 0
+                else:
+                     QtWidgets.QMessageBox.warning(self, "Error", "Could not find Group definition in template file.")
+                     return
+            else:
+                start_idx += 1 # Skip the newline
+            
+            script_content = content[start_idx:]
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", f"Failed to read template file: {str(e)}")
+            return
+
+        # 5. Paste Script via Temp File
+        # Deselect everything to paste cleanly
+        for n in nuke.allNodes(): n.setSelected(False)
+        
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as f:
+                f.write(script_content)
+                temp_path = f.name
+            
+            nuke.nodePaste(temp_path)
+            final_prep_group = nuke.selectedNode()
+            
+            # 6. Apply Camera Data
+            with final_prep_group:
+                for name, translate_val in cam_data.items():
+                    cam = nuke.toNode(name)
+                    if cam:
+                        cam['translate'].setValue(translate_val)
+                    else:
+                        print(f"Warning: Could not find camera '{name}' in pasted group to update.")
+            
+            # 7. Connect Geometry
+            final_prep_group.setInput(0, geo_source)
+            
+            # Position near the rig
+            final_prep_group.setXYpos(rig_group.xpos() + 200, rig_group.ypos() + 200)
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", f"Failed to generate Final Prep: {str(e)}")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+
     def _setup_normal_ui(self, parent):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
@@ -1254,7 +1384,7 @@ end_group
         self.create_camera_button.setVisible(False)
         info_layout.addWidget(self.create_camera_button)
 
-        self.generate_cameras_button = QtWidgets.QPushButton("🌐", info_container)
+        self.generate_cameras_button = QtWidgets.QPushButton("⭐", info_container)
         self.generate_cameras_button.setToolTip("Generate Coverage Cameras")
         self.generate_cameras_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.generate_cameras_button.setFixedSize(28, 24)
@@ -1262,6 +1392,15 @@ end_group
         self.generate_cameras_button.clicked.connect(self._on_generate_cameras_clicked)
         self.generate_cameras_button.setVisible(False)
         info_layout.addWidget(self.generate_cameras_button)
+
+        self.final_prep_button = QtWidgets.QPushButton("✨", info_container)
+        self.final_prep_button.setToolTip("Final Prep")
+        self.final_prep_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.final_prep_button.setFixedSize(28, 24)
+        self.final_prep_button.setStyleSheet(btn_style)
+        self.final_prep_button.clicked.connect(self._on_final_prep_clicked)
+        self.final_prep_button.setVisible(False)
+        info_layout.addWidget(self.final_prep_button)
         
         # Right side: 3D Mode Toggle
         self.mode_3d_button = QtWidgets.QPushButton("3D Mode", info_container)
