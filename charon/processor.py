@@ -1536,6 +1536,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         log_debug(f'Starting CharonOp node processing (recursive={is_recursive_call})...')
         node = node_override or nuke.thisNode()
 
+        # Capture recursive config in main thread safely
+        rec_enabled_captured = False
+        rec_current_captured = 0
+        rec_loop_start_captured = ""
+        try:
+            rec_enabled_captured = bool(node.knob('charon_recursive_enable').value())
+            rec_current_captured = int(node.knob('charon_recursive_current').value())
+            rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
+        except: pass
+
         # Handle recursive state reset
         if not is_recursive_call:
             try:
@@ -3726,26 +3736,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                     # --- Recursive Mode: Pre-spawn Read Node & IVT (Iteration 1) ---
                     try:
-                        is_recursive_mode = False
-                        try:
-                            is_recursive_mode = bool(node.knob('charon_recursive_enable').value())
-                        except: pass
-                        
-                        current_iter = 0
-                        try:
-                            current_iter = int(node.knob('charon_recursive_current').value())
-                        except: pass
-
-                        if is_recursive_mode and current_iter == 0 and batch_index == 0:
+                        if rec_enabled_captured and rec_current_captured == 0 and batch_index == 0:
                             def _spawn_recursive_placeholders():
                                 import nuke
                                 import os
                                 import uuid
                                 
-                                loop_start_name = ""
-                                try:
-                                    loop_start_name = node.knob('charon_recursive_loop_start').value()
-                                except: pass
+                                loop_start_name = rec_loop_start_captured
                                 
                                 if not loop_start_name:
                                     return
