@@ -494,6 +494,8 @@ class CharonWindow(QtWidgets.QWidget):
             self.generate_cameras_button.setVisible(checked)
         if hasattr(self, 'final_prep_button'):
             self.final_prep_button.setVisible(checked)
+        if hasattr(self, 'texture_bake_button'):
+            self.texture_bake_button.setVisible(checked)
 
             
         from .. import preferences
@@ -1334,6 +1336,180 @@ end_group
                 except:
                     pass
 
+    def _on_texture_bake_clicked(self):
+        host = str(self.host).lower()
+        if host == "nuke":
+            self._generate_texture_bake_nuke()
+        else:
+            QtWidgets.QMessageBox.information(
+                self, "Not Supported", 
+                f"Texture Bake is not yet implemented for {self.host}."
+            )
+
+    def _generate_texture_bake_nuke(self):
+        try:
+            import nuke
+            import tempfile
+            import os
+        except ImportError:
+            return
+
+        # 1. Validate Selection
+        selection = nuke.selectedNodes()
+        if len(selection) != 2:
+            QtWidgets.QMessageBox.warning(self, "Selection Required", "Please select exactly 2 nodes: Projection_renders and Charon_Coverage_Rig.")
+            return
+
+        # 2. Identify Nodes
+        proj_renders = None
+        coverage_rig = None
+
+        for node in selection:
+            if "Projection_renders" in node.name():
+                proj_renders = node
+            elif "Charon_Coverage_Rig" in node.name() or "Coverage_Rig" in node.name():
+                coverage_rig = node
+            # Fallback if names are changed: check content
+            elif node.Class() == "Group":
+                # Check for cameras inside
+                with node:
+                    if nuke.toNode("CamInit"):
+                        coverage_rig = node
+                    # Check for reads inside
+                    elif len(nuke.allNodes("Read")) > 4:
+                        proj_renders = node
+        
+        if not proj_renders or not coverage_rig:
+             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Could not identify Projection_renders (Group with Reads) and Charon_Coverage_Rig (Group with Cameras).")
+             return
+
+        # 3. Extract File Paths from Projection_renders
+        file_paths = []
+        with proj_renders:
+            reads = nuke.allNodes("Read")
+            # Sort by X position to match the left-to-right order
+            reads.sort(key=lambda n: n.xpos())
+            for r in reads:
+                file_paths.append(r["file"].value())
+        
+        if len(file_paths) < 8:
+             QtWidgets.QMessageBox.warning(self, "Error", f"Found {len(file_paths)} reads in Projection_renders. Expected at least 8.")
+             return
+
+        # 4. Extract Camera Data from Coverage Rig
+        cam_names = ["CamInit", "Cam45", "Cam90", "Cam135", "Cam180", "Cam225", "Cam270", "Cam315"]
+        cam_data = {}
+        target_pos = None
+
+        with coverage_rig:
+            for name in cam_names:
+                cam = nuke.toNode(name)
+                if cam:
+                    cam_data[name] = cam['translate'].value()
+            
+            tgt = nuke.toNode("Target")
+            if tgt:
+                target_pos = tgt['translate'].value()
+
+        # 5. Load Template
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            template_path = os.path.join(current_dir, "..", "resources", "nuke_template", "projection_texture_bake.nk")
+            template_path = os.path.normpath(template_path)
+            
+            if not os.path.exists(template_path):
+                 QtWidgets.QMessageBox.warning(self, "Error", f"Template not found: {template_path}")
+                 return
+
+            with open(template_path, 'r') as f:
+                content = f.read()
+
+            # Extract Group block
+            start_idx = content.find("\\nGroup {")
+            if start_idx == -1:
+                if content.startswith("Group {"): start_idx = 0
+                else: 
+                     # Try more robust search
+                     import re
+                     match = re.search(r"^Group \{", content, re.MULTILINE)
+                     if match:
+                         start_idx = match.start()
+                     else:
+                         raise ValueError("No Group definition found in template")
+            else:
+                start_idx += 1
+            
+            script_content = content[start_idx:]
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", f"Failed to load template: {str(e)}")
+            return
+
+        # 6. Paste Template
+        for n in nuke.allNodes(): n.setSelected(False)
+        
+        try:
+            temp_path = ""
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as f:
+                f.write(script_content)
+                temp_path = f.name
+            
+            nuke.nodePaste(temp_path)
+            
+            bake_group = nuke.selectedNode()
+            if not bake_group or bake_group.Class() != "Group":
+                # Fallback search if selection logic failed
+                for n in nuke.selectedNodes():
+                    if n.Class() == "Group":
+                        bake_group = n
+                        break
+            
+            if not bake_group:
+                raise RuntimeError("Pasted node is not a Group")
+
+            # 7. Update Internals
+            # Mapping based on angle order 0, 45, 90 ... 315 corresponding to sorted source reads
+            target_read_names = ["Read11", "Read8", "Read14", "Read15", "Read9", "Read13", "Read12", "Read10"]
+
+            bake_group.begin()
+            
+            # Update Reads
+            for i, read_name in enumerate(target_read_names):
+                if i < len(file_paths):
+                    node = nuke.toNode(read_name)
+                    if node:
+                        node["file"].setValue(file_paths[i])
+                    else:
+                        print(f"Warning: Could not find {read_name} in bake group.")
+            
+            # Update Cameras
+            for name, val in cam_data.items():
+                node = nuke.toNode(name)
+                if node:
+                    node['translate'].setValue(val)
+                else:
+                    print(f"Warning: Could not find camera {name} in bake group.")
+            
+            # Update Target
+            if target_pos:
+                tgt = nuke.toNode("Target")
+                if tgt:
+                    tgt['translate'].setValue(target_pos)
+            
+            bake_group.end()
+            
+            # Position near original
+            bake_group.setXYpos(coverage_rig.xpos() + 200, coverage_rig.ypos() + 200)
+
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", f"Failed to process bake group: {str(e)}")
+        finally:
+             if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+
     def _setup_normal_ui(self, parent):
         """Setup the normal mode UI."""
         # Use a QVBoxLayout with minimal margins
@@ -1427,6 +1603,15 @@ end_group
         self.final_prep_button.clicked.connect(self._on_final_prep_clicked)
         self.final_prep_button.setVisible(False)
         info_layout.addWidget(self.final_prep_button)
+
+        self.texture_bake_button = QtWidgets.QPushButton("🍰", info_container)
+        self.texture_bake_button.setToolTip("Texture Bake")
+        self.texture_bake_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.texture_bake_button.setFixedSize(28, 24)
+        self.texture_bake_button.setStyleSheet(btn_style)
+        self.texture_bake_button.clicked.connect(self._on_texture_bake_clicked)
+        self.texture_bake_button.setVisible(False)
+        info_layout.addWidget(self.texture_bake_button)
         
         # Right side: 3D Mode Toggle
         self.mode_3d_button = QtWidgets.QPushButton("3D Mode", info_container)
