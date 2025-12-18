@@ -4060,10 +4060,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     
                                     if target_knob:
                                         start_val = str(target_knob.value())
-                                        if hasattr(node, 'setMetaData'):
-                                            node.setMetaData('charon/recursive_attr_start', start_val)
-                                        elif hasattr(node, 'setMetadata'):
-                                            node.setMetadata('charon/recursive_attr_start', start_val)
+                                        store_knob = node.knob('charon_recursive_attr_start')
+                                        if store_knob is None:
+                                            store_knob = nuke.String_Knob('charon_recursive_attr_start', 'Recursive Attr Start', '')
+                                            store_knob.setFlag(nuke.INVISIBLE)
+                                            store_knob.setFlag(nuke.NO_ANIMATION)
+                                            node.addKnob(store_knob)
+                                        store_knob.setValue(start_val)
                             except Exception as e:
                                 log_debug(f"Failed to store recursive start value: {e}", "WARNING")
             except Exception as e:
@@ -4871,8 +4874,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 
                                                 # Reset Attribute
                                                 try:
-                                                    attr_start = node.metadata('charon/recursive_attr_start')
-                                                    if attr_start is not None:
+                                                    store_knob = node.knob('charon_recursive_attr_start')
+                                                    attr_start = store_knob.value() if store_knob else None
+                                                    
+                                                    if attr_start is not None and attr_start != "":
                                                         attr_name = node.knob('charon_recursive_attribute').value()
                                                         if attr_name:
                                                             target_knob = None
