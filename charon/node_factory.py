@@ -330,6 +330,126 @@ def create_charon_group_node(
         pass
     node.addKnob(reuse_knob)
 
+    recursive_tab = nuke.Tab_Knob("charon_recursive_tab", "Recursive Mode")
+    node.addKnob(recursive_tab)
+
+    recursive_enable = nuke.Boolean_Knob("charon_recursive_enable", "Enable Recursive Mode")
+    recursive_enable.setFlag(nuke.STARTLINE)
+    node.addKnob(recursive_enable)
+
+    recursive_attr = nuke.String_Knob("charon_recursive_attribute", "Attribute to Increment")
+    recursive_attr.setFlag(nuke.STARTLINE)
+    node.addKnob(recursive_attr)
+
+    recursive_loop_start = nuke.String_Knob("charon_recursive_loop_start", "Loop Starting point")
+    recursive_loop_start.setFlag(nuke.STARTLINE)
+    node.addKnob(recursive_loop_start)
+
+    jump_script = "\n".join((
+        "import nuke",
+        "n = nuke.thisNode()",
+        "target_name = n['charon_recursive_loop_start'].value()",
+        "target = nuke.toNode(target_name)",
+        "if target:",
+        "    for node in nuke.allNodes():",
+        "        node.setSelected(False)",
+        "    target.setSelected(True)",
+        "    nuke.zoom(1.0, [target.xpos() + target.screenWidth()/2, target.ypos() + target.screenHeight()/2])",
+        "else:",
+        "    nuke.message('Node not found: {}'.format(target_name))"
+    ))
+
+    jump_btn = nuke.PyScript_Knob("charon_recursive_jump", "Jump to Start", jump_script)
+    jump_btn.setFlag(nuke.STARTLINE)
+    node.addKnob(jump_btn)
+
+    read_test_script = "\n".join((
+        "import nuke",
+        "n = nuke.thisNode()",
+        "target_name = n['charon_recursive_loop_start'].value()",
+        "target_node = nuke.toNode(target_name)",
+        "if target_node:",
+        "    # Ensure we create the node in the same context (Root or Group) as the target",
+        "    parent = target_node.parent() or nuke.root()",
+        "    with parent:",
+        "        read_name = 'Read_Recursive_' + target_name",
+        "        read_node = nuke.toNode(read_name)",
+        "        if read_node is None:",
+        "            read_node = nuke.nodes.Read()",
+        "            read_node.setName(read_name)",
+        "        ",
+        "        try:",
+        "            x = int(target_node.xpos())",
+        "            y = int(target_node.ypos())",
+        "            read_node.setXYpos(x, y + 50)",
+        "        except:",
+        "            pass",
+        "        ",
+        "        deps = target_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)",
+        "        for dep in deps:",
+        "            for i in range(dep.inputs()):",
+        "                if dep.input(i) == target_node:",
+        "                    dep.setInput(i, read_node)",
+        "else:",
+        "    nuke.message('Loop Starting Point node not found.')"
+    ))
+
+    read_test_btn = nuke.PyScript_Knob("charon_recursive_test_read", "Add Read at Loop Start", read_test_script)
+    node.addKnob(read_test_btn)
+
+    inc_script = "\n".join((
+        "import nuke",
+        "n = nuke.thisNode()",
+        "attr = n['charon_recursive_attribute'].value()",
+        "k = None",
+        "if '.' in attr:",
+        "    parts = attr.split('.', 1)",
+        "    node = nuke.toNode(parts[0])",
+        "    if node and parts[1] in node.knobs():",
+        "        k = node[parts[1]]",
+        "elif attr in n.knobs():",
+        "    k = n[attr]",
+        "if k:",
+        "    try:",
+        "        v = k.value()",
+        "        if isinstance(v, (int, float)):",
+        "            k.setValue(v + 1)",
+        "        elif isinstance(v, str) and v.isdigit():",
+        "            k.setValue(str(int(v) + 1))",
+        "    except:",
+        "        pass"
+    ))
+
+    dec_script = "\n".join((
+        "import nuke",
+        "n = nuke.thisNode()",
+        "attr = n['charon_recursive_attribute'].value()",
+        "k = None",
+        "if '.' in attr:",
+        "    parts = attr.split('.', 1)",
+        "    node = nuke.toNode(parts[0])",
+        "    if node and parts[1] in node.knobs():",
+        "        k = node[parts[1]]",
+        "elif attr in n.knobs():",
+        "    k = n[attr]",
+        "if k:",
+        "    try:",
+        "        v = k.value()",
+        "        if isinstance(v, (int, float)):",
+        "            k.setValue(v - 1)",
+        "        elif isinstance(v, str) and v.isdigit():",
+        "            k.setValue(str(int(v) - 1))",
+        "    except:",
+        "        pass"
+    ))
+
+    inc_btn = nuke.PyScript_Knob("charon_recursive_inc", "+", inc_script)
+    inc_btn.setFlag(nuke.STARTLINE)
+    node.addKnob(inc_btn)
+
+    dec_btn = nuke.PyScript_Knob("charon_recursive_dec", "-", dec_script)
+    node.addKnob(dec_btn)
+
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)
 
