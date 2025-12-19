@@ -1353,32 +1353,8 @@ end_group
             import os
         except ImportError:
             return
-
-        # 1. Validate Selection
-        selection = nuke.selectedNodes()
-        # Optional: We can proceed even if nothing is selected, but connecting inputs is better
         
-        # 2. Identify Nodes (for auto-connection)
-        proj_renders = None
-        coverage_rig = None
-
-        for node in selection:
-            # Check name patterns
-            if "Projection_render" in node.name():
-                proj_renders = node
-            elif "Charon_Coverage_Rig" in node.name() or "Coverage_Rig" in node.name():
-                coverage_rig = node
-            # Fallback if names are changed: check content for Groups
-            elif node.Class() == "Group":
-                # Check for cameras inside (using with context for scope)
-                with node:
-                    if nuke.toNode("CamInit"):
-                        coverage_rig = node
-                    # Check for reads inside
-                    elif len(nuke.allNodes("Read")) >= 8:
-                        proj_renders = node
-        
-        # 3. Load Template
+        # Load Template
         try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             template_path = os.path.join(current_dir, "..", "resources", "nuke_template", "projection_texture_bake.nk")
@@ -1412,9 +1388,7 @@ end_group
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to load template: {str(e)}")
             return
 
-        # 4. Paste Template
-        for n in nuke.allNodes(): n.setSelected(False)
-        
+        # Paste Template
         try:
             temp_path = ""
             with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as f:
@@ -1422,28 +1396,6 @@ end_group
                 temp_path = f.name
             
             nuke.nodePaste(temp_path)
-            
-            bake_group = nuke.selectedNode()
-            if not bake_group or bake_group.Class() != "Group":
-                # Fallback search if selection logic failed
-                for n in nuke.selectedNodes():
-                    if n.Class() == "Group":
-                        bake_group = n
-                        break
-            
-            if not bake_group:
-                raise RuntimeError("Pasted node is not a Group")
-
-            # 5. Connect Inputs
-            if proj_renders:
-                bake_group.setInput(0, proj_renders)
-            if coverage_rig:
-                bake_group.setInput(1, coverage_rig)
-            
-            # Position near original selection or rig
-            target_node = coverage_rig or proj_renders
-            if target_node:
-                bake_group.setXYpos(target_node.xpos() + 200, target_node.ypos() + 200)
 
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to process bake group: {str(e)}")
