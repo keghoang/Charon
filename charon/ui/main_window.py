@@ -1357,7 +1357,7 @@ end_group
         # 1. Validate Selection
         selection = nuke.selectedNodes()
         if len(selection) != 2:
-            QtWidgets.QMessageBox.warning(self, "Selection Required", "Please select exactly 2 nodes: Projection_renders and Charon_Coverage_Rig.")
+            QtWidgets.QMessageBox.warning(self, "Selection Required", "Please select exactly 2 nodes: Projection_render and Charon_Coverage_Rig.")
             return
 
         # 2. Identify Nodes
@@ -1365,7 +1365,7 @@ end_group
         coverage_rig = None
 
         for node in selection:
-            if "Projection_renders" in node.name():
+            if "Projection_render" in node.name():
                 proj_renders = node
             elif "Charon_Coverage_Rig" in node.name() or "Coverage_Rig" in node.name():
                 coverage_rig = node
@@ -1380,7 +1380,7 @@ end_group
                         proj_renders = node
         
         if not proj_renders or not coverage_rig:
-             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Could not identify Projection_renders (Group with Reads) and Charon_Coverage_Rig (Group with Cameras).")
+             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Could not identify Projection_render (Group with Reads) and Charon_Coverage_Rig (Group with Cameras).")
              return
 
         # 3. Extract File Paths from Projection_renders
