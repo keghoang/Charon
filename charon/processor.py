@@ -2912,7 +2912,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             prompt_data, workflow_folder
                         )
                     except Exception as exc:
-                        log_debug(f"Failed to apply cached model replacements: {exc}", "WARNING")
+                        msg = str(exc)
+                        level = "WARNING"
+                        if "outside the configured repository root" in msg:
+                            level = "INFO"
+                        log_debug(f"Failed to apply cached model replacements: {msg}", level)
                     else:
                         if model_replacements:
                             verb = "Applied" if replacements_applied else "Loaded"
