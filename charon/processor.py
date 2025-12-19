@@ -1040,125 +1040,7 @@ def _apply_aces_pre_write_transform(node_to_render, aces_enabled: bool):
 
     return ocm_display
 
-def _run_3d_texturing_step2_logic(
-    node,
-    workflow_data: Dict[str, Any],
-    comfy_client: ComfyUIClient,
-    update_progress,
-    temp_dir: str,
-    connected_inputs: Dict[int, Any],
-):
-    try:
-        import nuke
-    except ImportError:
-        raise RuntimeError('Nuke is required for 3D Texturing Step 2.')
 
-    log_debug('Starting 3D Texturing - Step 2 logic...')
-    
-    # 1. Locate Resources
-    rig_group = nuke.toNode("Charon_Coverage_Rig")
-    if not rig_group:
-        raise RuntimeError("Charon_Coverage_Rig not found. Please run Step 1 (Generate Coverage) first.")
-        
-    contact_sheet = None
-    with rig_group:
-        contact_sheet = nuke.toNode("ContactSheet1")
-        if not contact_sheet:
-            for n in nuke.allNodes("ContactSheet"):
-                contact_sheet = n
-                break
-    
-    if not contact_sheet:
-        raise RuntimeError("ContactSheet not found inside Charon_Coverage_Rig.")
-        
-    camera_views = []
-    for i in range(contact_sheet.inputs()):
-        inp = contact_sheet.input(i)
-        if inp:
-            camera_views.append((i, inp))
-            
-    if not camera_views:
-        raise RuntimeError("No camera views found connected to ContactSheet in rig.")
-        
-    # 2. Identify Init Image
-    init_image_node = connected_inputs.get(0)
-    if not init_image_node:
-        raise RuntimeError("Input 0 (Init Image) must be connected for Step 2.")
-        
-    update_progress(0.1, "Rendering init image")
-    init_image_path = os.path.join(temp_dir, f'step2_init_{str(uuid.uuid4())[:8]}.png').replace('\\', '/')
-    _render_nuke_node(init_image_node, init_image_path)
-    init_image_upload = comfy_client.upload_image(init_image_path)
-    
-    # 3. Identify Workflow Targets
-    set_targets = build_set_targets(workflow_data)
-    target_init = set_targets.get('charoninput_init_image')
-    target_coverage = set_targets.get('charoninput_coverage_rig')
-    
-    # Fallback to LoadImage nodes if SetNodes not found (simplified heuristic)
-    load_images = []
-    if not target_init or not target_coverage:
-        for nid, ndata in workflow_data.items():
-            if ndata.get('class_type') == 'LoadImage':
-                load_images.append(nid)
-        if len(load_images) >= 2:
-            if not target_init: target_init = (load_images[0], 'image')
-            if not target_coverage: target_coverage = (load_images[1], 'image')
-
-    if not target_init or not target_coverage:
-        raise RuntimeError("Could not identify CharonInput_init_image or CharonInput_coverage_rig targets in workflow.")
-
-    results = []
-    
-    for idx, (cam_index, view_node) in enumerate(camera_views):
-        progress_base = 0.2 + (0.8 * (idx / len(camera_views)))
-        update_progress(progress_base, f"Processing view {idx+1}/{len(camera_views)}")
-        log_debug(f"Starting execution for camera view {idx}...")
-        
-        # Render View
-        view_path = os.path.join(temp_dir, f'step2_view_{idx}_{str(uuid.uuid4())[:8]}.png').replace('\\', '/')
-        with rig_group:
-            _render_nuke_node(view_node, view_path)
-        view_upload = comfy_client.upload_image(view_path)
-        
-        # Prepare Workflow
-        prompt = copy.deepcopy(workflow_data)
-        _assign_to_workflow(prompt, target_init[0], init_image_upload)
-        _assign_to_workflow(prompt, target_coverage[0], view_upload)
-        
-        # Execute
-        prompt_id = comfy_client.submit_workflow(prompt)
-        if not prompt_id:
-            raise Exception("Failed to submit workflow to ComfyUI")
-        log_debug(f"Submitted view {idx}, prompt_id: {prompt_id}")
-            
-        # Wait for result (Simplified wait loop)
-        output_file = _wait_for_single_image(comfy_client, prompt_id, timeout=300)
-        if output_file:
-            # Download/Copy result
-            ext = os.path.splitext(output_file)[1]
-            local_out = allocate_charon_output_path(
-                _normalize_node_id(_safe_knob_value(node, "charon_node_id")),
-                "step2",
-                ext,
-                "user",
-                "TexturingStep2",
-                "2D",
-                f"View_{idx}"
-            )
-            success = comfy_client.download_file(output_file, local_out)
-            if success:
-                results.append(local_out)
-            else:
-                log_debug(f"Failed to download result for view {idx}", "WARNING")
-        else:
-            log_debug(f"No output for view {idx}", "WARNING")
-
-    if results:
-        update_progress(1.0, "Creating Contact Sheet", extra={'batch_outputs': results}) # Store results in extra for potential use
-        nuke.executeInMainThread(lambda: _create_step2_result_group(node, results))
-    else:
-        raise Exception("No results generated from Step 2 execution.")
 
 def _render_nuke_node(node_to_render, path):
     import nuke
@@ -1204,164 +1086,7 @@ def _wait_for_single_image(client, prompt_id, timeout=300):
         time.sleep(1.0)
     return None
 
-def _create_step2_result_group(charon_node, image_paths):
-    import nuke
-    
-    # Deselect all to prevent auto-connection
-    for n in nuke.selectedNodes():
-        n.setSelected(False)
-    
-    start_x = charon_node.xpos()
-    start_y = charon_node.ypos() + 200
-    
-    safe_name = "".join(c if c.isalnum() else "_" for c in charon_node.name())
-    group_name = f"Charon_Step2_Output_{safe_name}"
-    
-    group = nuke.createNode("Group")
-    group.setName(group_name)
-    group.setInput(0, None)
-    group.setXYpos(start_x, start_y)
-    
-    # Link to parent CharonOp
-    charon_node_id = ""
-    try:
-        knob = charon_node.knob('charon_node_id')
-        if knob:
-            charon_node_id = knob.value()
-    except Exception: pass
-    
-    if not charon_node_id:
-        try:
-            charon_node_id = charon_node.metadata('charon/node_id')
-        except Exception: pass
-        
-    import uuid
-    read_id = uuid.uuid4().hex[:12].lower()
-    
-    parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', charon_node_id or "")
-    parent_knob.setFlag(nuke.NO_ANIMATION)
-    parent_knob.setFlag(nuke.INVISIBLE)
-    group.addKnob(parent_knob)
-    
-    read_id_knob = nuke.String_Knob('charon_read_id', 'Charon Read ID', read_id)
-    read_id_knob.setFlag(nuke.NO_ANIMATION)
-    read_id_knob.setFlag(nuke.INVISIBLE)
-    group.addKnob(read_id_knob)
-    
-    info_tab = nuke.Tab_Knob('charon_info_tab', 'Charon Info')
-    group.addKnob(info_tab)
-    
-    info_text = nuke.Text_Knob('charon_info_text', 'Metadata', '')
-    group.addKnob(info_text)
-    
-    summary = [
-        f"Parent ID: {charon_node_id or 'N/A'}",
-        f"Read Node ID: {read_id or 'N/A'}",
-        f"Status: Completed",
-    ]
-    info_text.setValue("\n".join(summary))
-    
-    anchor_knob = nuke.Double_Knob('charon_link_anchor', 'Charon Link Anchor')
-    anchor_knob.setFlag(nuke.NO_ANIMATION)
-    anchor_knob.setFlag(nuke.INVISIBLE)
-    group.addKnob(anchor_knob)
-    
-    try:
-        parent_name = charon_node.fullName()
-        anchor_knob.setExpression(f"{parent_name}.charon_link_anchor")
-    except Exception:
-        pass
-    
-    try:
-        group.setMetaData('charon/parent_id', charon_node_id or "")
-        group.setMetaData('charon/read_id', read_id)
-    except: pass
-    
-    group.begin()
-    
-    reads = []
-    inner_x = 0
-    inner_y = 0
-    
-    for idx, path in enumerate(image_paths):
-        r = nuke.createNode("Read")
-        r['file'].setValue(path.replace('\\', '/'))
-        r.setXYpos(inner_x + (idx * 150), inner_y)
-        reads.append(r)
-        r.setSelected(False)
-        
-    for n in nuke.selectedNodes():
-        n.setSelected(False)
-        
-    cs = nuke.createNode("ContactSheet")
-    cs.setInput(0, None)
-    cs.setXYpos(inner_x, inner_y + 200)
-    cs['width'].setValue(3072)
-    cs['height'].setValue(2048)
-    cs['rows'].setValue(2)
-    cs['columns'].setValue(3)
-    cs['gap'].setValue(10)
-    cs['roworder'].setValue("TopBottom")
-    
-    for i, r in enumerate(reads):
-        # Create Text node for label
-        txt = nuke.createNode("Text2", inpanel=False)
-        txt.setInput(0, r)
-        try:
-            filename = os.path.basename(r['file'].value())
-            txt['message'].setValue(filename)
-            txt['box'].setValue([0, 0, 1000, 100]) # Bottom left box
-            txt['yjustify'].setValue("bottom")
-            txt['global_font_scale'].setValue(0.5)
-            try:
-                txt['font'].setValue("Myanmar Text", "Regular")
-            except:
-                pass
-        except Exception:
-            pass
-        txt.setXYpos(r.xpos(), r.ypos() + 100)
-        
-        cs.setInput(i, txt)
-    
-    for n in nuke.selectedNodes():
-        n.setSelected(False)
-        
-    output = nuke.createNode("Output")
-    output.setInput(0, cs)
-    output.setXYpos(cs.xpos(), cs.ypos() + 100)
-    
-    group.end()
-    
-    from . import preferences
-    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
-    
-    if aces_enabled:
-        # Use existing helper or reimplement safely? 
-        # INVERSE_VIEW_TRANSFORM_GROUP is available globally
-        from .paths import get_charon_temp_dir
-        ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_step2_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
-        try:
-            with open(ivt_temp, "w") as f:
-                f.write(INVERSE_VIEW_TRANSFORM_GROUP)
-            
-            # Deselect group so paste doesn't auto-connect wrong or something?
-            # nodePaste connects to selected?
-            # We want to connect to 'group'.
-            # If we select 'group', nodePaste might connect input 0 to it.
-            group.setSelected(True)
-            
-            nuke.nodePaste(ivt_temp)
-            ivt_node = nuke.selectedNode()
-            ivt_node.setInput(0, group)
-            ivt_node.setXpos(group.xpos())
-            ivt_node.setYpos(group.ypos() + 200)
-            
-        except Exception as e:
-            log_debug(f"Failed to create Step 2 IVT node: {e}", "WARNING")
-        finally:
-            if os.path.exists(ivt_temp):
-                try: os.remove(ivt_temp)
-                except: pass
+
 
 
 
@@ -2704,20 +2429,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         workflow_data = json.loads(workflow_data_str)
 
-        is_step2 = False
-        try:
-            from .metadata_manager import get_charon_config
-            source_path = _safe_knob_value(node, 'charon_source_workflow_path')
-            check_path = source_path or workflow_path or node.metadata('charon/workflow_path')
-            
-            log_debug(f"Checking Step 2 status for path: {check_path}")
-            if check_path and os.path.exists(check_path):
-                target_dir = os.path.dirname(check_path) if os.path.isfile(check_path) else check_path
-                conf = get_charon_config(target_dir)
-                is_step2 = bool(conf and conf.get('is_3d_texturing_step2'))
-                log_debug(f"Step 2 detected: {is_step2} (from {target_dir})")
-        except Exception as step2_err:
-            log_debug(f"Step 2 check failed: {step2_err}", "WARNING")
+
 
 
 
@@ -3326,73 +3038,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 assign_to_node(target_id, filename)
                                 break
 
-                step2_views = []
-                target_coverage_node_id = None
-                
-                if is_step2:
-                    setup_result = {}
-                    import threading
-                    setup_event = threading.Event()
 
-                    def _step2_setup_task():
-                        try:
-                            import nuke
-                            rig = nuke.toNode("Charon_Coverage_Rig")
-                            if not rig:
-                                log_debug("Step 2: Charon_Coverage_Rig node not found.", "WARNING")
-                                return
-                            sheet = None
-                            with rig:
-                                sheet = nuke.toNode("ContactSheet1")
-                                if not sheet:
-                                    for n in nuke.allNodes("ContactSheet"):
-                                        sheet = n
-                                        break
-                            if not sheet:
-                                log_debug("Step 2: ContactSheet node not found inside rig.", "WARNING")
-                                return
-                                
-                            views = []
-                            log_debug(f"Step 2: ContactSheet inputs count: {sheet.inputs()}")
-                            for i in range(sheet.inputs()):
-                                inp = sheet.input(i)
-                                if inp:
-                                    views.append({'index': i, 'node': inp, 'group': rig})
-                                else:
-                                    log_debug(f"Step 2: ContactSheet input {i} is None.", "WARNING")
-                            setup_result['views'] = views
-                        except Exception as e:
-                            log_debug(f"Step 2 setup task error: {e}", "WARNING")
-                        finally:
-                            setup_event.set()
-
-                    try:
-                        import nuke
-                        nuke.executeInMainThread(_step2_setup_task)
-                        setup_event.wait()
-                        step2_views = setup_result.get('views', [])
-                        
-                        if step2_views:
-                            batch_count = len(step2_views)
-                            log_debug(f"Step 2: Found {batch_count} camera views. Overriding batch count.")
-                            
-                            set_targets_local = build_set_targets(workflow_copy)
-                            target_info = set_targets_local.get('charoninput_coverage_rig')
-                            
-                            if not target_info:
-                                load_images = []
-                                for nid, ndata in workflow_copy.items():
-                                    if ndata.get('class_type') == 'LoadImage':
-                                        load_images.append(nid)
-                                if len(load_images) >= 2:
-                                    target_coverage_node_id = load_images[1]
-                            else:
-                                target_coverage_node_id = target_info[0]
-                                
-                            if not target_coverage_node_id:
-                                log_debug("Step 2: Could not identify Coverage Rig input node.", "WARNING")
-                    except Exception as exc:
-                        log_debug(f"Step 2 setup failed: {exc}", "WARNING")
 
                 base_prompt = copy.deepcopy(workflow_copy)
                 seed_records = _capture_seed_inputs(base_prompt)
@@ -3609,109 +3255,14 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     seed_offset = batch_index * 9973
                     prompt_payload = copy.deepcopy(base_prompt)
                     
-                    if is_step2 and target_coverage_node_id:
-                        if batch_index >= len(step2_views):
-                            log_debug(f"Step 2: batch_index {batch_index} out of range ({len(step2_views)}). Stopping.", "ERROR")
-                            break
 
-                        view_info = step2_views[batch_index]
-                        view_node = view_info['node']
-                        rig_group_ref = view_info['group']
-                        
-                        view_filename = f'step2_view_{batch_index}_{str(uuid.uuid4())[:8]}.png'
-                        view_path = os.path.join(temp_root, view_filename).replace('\\', '/')
-                        
-                        try:
-                            render_event = threading.Event()
-                            def _step2_render_task():
-                                try:
-                                    with rig_group_ref:
-                                        _render_nuke_node(view_node, view_path)
-                                finally:
-                                    render_event.set()
-                            
-                            import nuke
-                            nuke.executeInMainThread(_step2_render_task)
-                            render_event.wait()
-                            
-                            view_upload = comfy_client.upload_image(view_path)
-                            if view_upload:
-                                t_node = prompt_payload.get(str(target_coverage_node_id))
-                                if t_node:
-                                    t_inputs = t_node.setdefault('inputs', {})
-                                    t_inputs['image'] = view_upload
-                                    log_debug(f"Step 2: Injected view {batch_index} into node {target_coverage_node_id}")
-                                    
-                                angle_desc = ""
-                                override_prompt = ""
-                                if batch_index == 0: 
-                                    angle_desc = "0 degrees"
-                                    override_prompt = "Align features. Keep everything else the same"
-                                elif batch_index == 1: angle_desc = "90 degrees to the right"
-                                elif batch_index == 2: angle_desc = "180 degrees"
-                                elif batch_index == 3: angle_desc = "90 degrees to the left"
-                                elif batch_index == 4: angle_desc = "to view from top"
-                                elif batch_index == 5: angle_desc = "to view from bottom"
-                                
-                                if angle_desc or override_prompt:
-                                    # Try to get template from knob
-                                    prompt_template = ""
-                                    target_spec = None
-                                    for spec in parameter_specs_local:
-                                        if spec.get('attribute') == 'prompt':
-                                            target_spec = spec
-                                            knob_name = spec.get('knob')
-                                            if knob_name:
-                                                try:
-                                                    prompt_template = node.knob(knob_name).value()
-                                                except: pass
-                                            break
-                                    
-                                    injected_via_template = False
-                                    if prompt_template and "*charon_angle*" in prompt_template:
-                                        if override_prompt:
-                                            final_prompt = override_prompt
-                                        else:
-                                            final_prompt = prompt_template.replace("*charon_angle*", angle_desc)
-                                        log_debug(f"Step 2: Using prompt template: {final_prompt}")
-                                        
-                                        if target_spec:
-                                            binding = target_spec.get('binding')
-                                            if binding and binding.get('api_node') and binding.get('api_input'):
-                                                api_node_id = str(binding['api_node'])
-                                                api_input = binding['api_input']
-                                                target_node = prompt_payload.get(api_node_id)
-                                                if target_node:
-                                                    inputs = target_node.setdefault('inputs', {})
-                                                    inputs[api_input] = final_prompt
-                                                    injected_via_template = True
-                                                    log_debug(f"Step 2: Injected prompt into node {api_node_id} input '{api_input}'")
-                                    
-                                    if not injected_via_template:
-                                        log_debug(f"Step 2: Attempting to inject angle '{angle_desc}' via token replacement (fallback)...")
-                                        for nid, ndata in prompt_payload.items():
-                                            inputs = ndata.get('inputs', {})
-                                            if isinstance(inputs, dict):
-                                                keys = list(inputs.keys())
-                                                
-                                                for key in keys:
-                                                    val = inputs[key]
-                                                    if isinstance(val, str) and "*charon_angle*" in val:
-                                                        if override_prompt:
-                                                            inputs[key] = override_prompt
-                                                        else:
-                                                            inputs[key] = val.replace("*charon_angle*", angle_desc)
-                                                        log_debug(f"Step 2: Injected prompt into node {nid} input {key} (fallback)")
-
-                        except Exception as render_err:
-                            log_debug(f"Step 2 Render failed for view {batch_index}: {render_err}", "ERROR")
 
                     if seed_records:
                         _apply_seed_offset(prompt_payload, seed_records, seed_offset)
 
                     batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
                     
-                    debug_file = os.path.join(temp_root, 'debug', f'prompt_step2_batch_{batch_index}.json').replace('\\', '/')
+                    debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{batch_index}.json').replace('\\', '/')
                     try:
                         os.makedirs(os.path.dirname(debug_file), exist_ok=True)
                         with open(debug_file, 'w', encoding='utf-8') as df:
@@ -3927,18 +3478,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     else:
                         raise Exception('Processing timed out')
 
-                if not batch_outputs and not is_step2:
+                if not batch_outputs:
                     raise Exception('No outputs were generated by ComfyUI')
-
-                if is_step2 and batch_outputs:
-                    image_paths = [e.get('download_path') for e in batch_outputs if e.get('download_path')]
-                    if image_paths:
-                        try:
-                            import nuke
-                            nuke.executeInMainThread(lambda: _create_step2_result_group(node, image_paths))
-                        except Exception as cs_err:
-                            log_debug(f"Step 2 Result Group failed: {cs_err}", "WARNING")
-                    batch_outputs = []
 
                 node_x, node_y = _safe_node_coords()
                 
@@ -4281,15 +3822,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         cleanup_files()
                                         return
                                         
-                                    if is_step2 and image_entries:
-                                        image_paths = [e.get('output_path') for e in image_entries if e.get('output_path')]
-                                        if image_paths:
-                                            try:
-                                                _create_step2_result_group(node, image_paths)
-                                            except Exception as cs_err:
-                                                log_debug(f"Step 2 Result Group creation failed: {cs_err}", "ERROR")
-                                        cleanup_files()
-                                        return
+
 
                                     if camera_entries:
                                         for camera_entry in camera_entries:

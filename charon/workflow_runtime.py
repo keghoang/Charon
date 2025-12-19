@@ -210,12 +210,7 @@ def spawn_charon_node(
     except Exception:
         pass
 
-    if metadata.get('is_3d_texturing_step2') or charon_meta.get('is_3d_texturing_step2'):
-        try:
-            footer_knob = nuke.Text_Knob("charon_step2_footer", "", "<b>3D Texturing - Step 2</b>")
-            node.addKnob(footer_knob)
-        except Exception:
-            pass
+
 
     return node
 
