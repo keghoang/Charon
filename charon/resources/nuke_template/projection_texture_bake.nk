@@ -2972,21 +2972,6 @@ set Na5855900 [stack 0]
   xpos 3007
   ypos 1146
  }
-clone $C9ec5f400 {
-  inputs 0
-  xpos -780
-  ypos -67
-  selected false
- }
-push $Na5855900
- Viewer {
-  frame_range 1-100
-  monitorOutNDISenderName "Nuke - projection_texture_bake - Viewer1"
-  monitorOutOutputTransform rec709
-  name Viewer1
-  xpos -780
-  ypos -31
- }
  Input {
   inputs 0
   name Projection_renders
