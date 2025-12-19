@@ -1356,62 +1356,29 @@ end_group
 
         # 1. Validate Selection
         selection = nuke.selectedNodes()
-        if len(selection) != 2:
-            QtWidgets.QMessageBox.warning(self, "Selection Required", "Please select exactly 2 nodes: Projection_render and Charon_Coverage_Rig.")
-            return
-
-        # 2. Identify Nodes
+        # Optional: We can proceed even if nothing is selected, but connecting inputs is better
+        
+        # 2. Identify Nodes (for auto-connection)
         proj_renders = None
         coverage_rig = None
 
         for node in selection:
+            # Check name patterns
             if "Projection_render" in node.name():
                 proj_renders = node
             elif "Charon_Coverage_Rig" in node.name() or "Coverage_Rig" in node.name():
                 coverage_rig = node
-            # Fallback if names are changed: check content
+            # Fallback if names are changed: check content for Groups
             elif node.Class() == "Group":
-                # Check for cameras inside
+                # Check for cameras inside (using with context for scope)
                 with node:
                     if nuke.toNode("CamInit"):
                         coverage_rig = node
                     # Check for reads inside
-                    elif len(nuke.allNodes("Read")) > 4:
+                    elif len(nuke.allNodes("Read")) >= 8:
                         proj_renders = node
         
-        if not proj_renders or not coverage_rig:
-             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Could not identify Projection_render (Group with Reads) and Charon_Coverage_Rig (Group with Cameras).")
-             return
-
-        # 3. Extract File Paths from Projection_renders
-        file_paths = []
-        with proj_renders:
-            reads = nuke.allNodes("Read")
-            # Sort by X position to match the left-to-right order
-            reads.sort(key=lambda n: n.xpos())
-            for r in reads:
-                file_paths.append(r["file"].value())
-        
-        if len(file_paths) < 8:
-             QtWidgets.QMessageBox.warning(self, "Error", f"Found {len(file_paths)} reads in Projection_renders. Expected at least 8.")
-             return
-
-        # 4. Extract Camera Data from Coverage Rig
-        cam_names = ["CamInit", "Cam45", "Cam90", "Cam135", "Cam180", "Cam225", "Cam270", "Cam315"]
-        cam_data = {}
-        target_pos = None
-
-        with coverage_rig:
-            for name in cam_names:
-                cam = nuke.toNode(name)
-                if cam:
-                    cam_data[name] = cam['translate'].value()
-            
-            tgt = nuke.toNode("Target")
-            if tgt:
-                target_pos = tgt['translate'].value()
-
-        # 5. Load Template
+        # 3. Load Template
         try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             template_path = os.path.join(current_dir, "..", "resources", "nuke_template", "projection_texture_bake.nk")
@@ -1445,7 +1412,7 @@ end_group
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to load template: {str(e)}")
             return
 
-        # 6. Paste Template
+        # 4. Paste Template
         for n in nuke.allNodes(): n.setSelected(False)
         
         try:
@@ -1467,39 +1434,16 @@ end_group
             if not bake_group:
                 raise RuntimeError("Pasted node is not a Group")
 
-            # 7. Update Internals
-            # Mapping based on angle order 0, 45, 90 ... 315 corresponding to sorted source reads
-            target_read_names = ["Read11", "Read8", "Read14", "Read15", "Read9", "Read13", "Read12", "Read10"]
-
-            bake_group.begin()
+            # 5. Connect Inputs
+            if proj_renders:
+                bake_group.setInput(0, proj_renders)
+            if coverage_rig:
+                bake_group.setInput(1, coverage_rig)
             
-            # Update Reads
-            for i, read_name in enumerate(target_read_names):
-                if i < len(file_paths):
-                    node = nuke.toNode(read_name)
-                    if node:
-                        node["file"].setValue(file_paths[i])
-                    else:
-                        print(f"Warning: Could not find {read_name} in bake group.")
-            
-            # Update Cameras
-            for name, val in cam_data.items():
-                node = nuke.toNode(name)
-                if node:
-                    node['translate'].setValue(val)
-                else:
-                    print(f"Warning: Could not find camera {name} in bake group.")
-            
-            # Update Target
-            if target_pos:
-                tgt = nuke.toNode("Target")
-                if tgt:
-                    tgt['translate'].setValue(target_pos)
-            
-            bake_group.end()
-            
-            # Position near original
-            bake_group.setXYpos(coverage_rig.xpos() + 200, coverage_rig.ypos() + 200)
+            # Position near original selection or rig
+            target_node = coverage_rig or proj_renders
+            if target_node:
+                bake_group.setXYpos(target_node.xpos() + 200, target_node.ypos() + 200)
 
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to process bake group: {str(e)}")
