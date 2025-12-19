@@ -1093,7 +1093,7 @@ def _wait_for_single_image(client, prompt_id, timeout=300):
 
 def _handle_recursive_updates(node, last_output):
     import nuke
-    print(f"[CHARON] Recursive Update Triggered for {node.name()}")
+    log_debug(f"Recursive Update Triggered for {node.name()}")
     
     # 1. Increment Attribute
     try:
@@ -1110,13 +1110,12 @@ def _handle_recursive_updates(node, last_output):
             
             if k:
                 v = k.value()
-                print(f"[CHARON] Incrementing attribute {attr} from {v}")
+                log_debug(f"Incrementing attribute {attr} from {v}")
                 if isinstance(v, (int, float)):
                     k.setValue(v + 1)
                 elif isinstance(v, str) and v.isdigit():
                     k.setValue(str(int(v) + 1))
     except Exception as e:
-        print(f"[CHARON] Failed to increment recursive attribute: {e}")
         log_debug(f"Failed to increment recursive attribute: {e}", "WARNING")
 
     # 2. Update Read Node & Connections
@@ -1129,7 +1128,7 @@ def _handle_recursive_updates(node, last_output):
             
             # Create if missing
             if read_node is None:
-                print(f"[CHARON] Creating missing Read node: {read_name}")
+                log_debug(f"Creating missing Read node: {read_name}")
                 target_node = nuke.toNode(loop_start)
                 if target_node:
                     parent = target_node.parent() or nuke.root()
@@ -1142,7 +1141,7 @@ def _handle_recursive_updates(node, last_output):
                         except: pass
             
             if read_node and 'file' in read_node.knobs():
-                print(f"[CHARON] Updating Read node {read_name} with {last_output}")
+                log_debug(f"Updating Read node {read_name} with {last_output}")
                 read_node['file'].setValue(last_output)
                 final_source_node = read_node
                 
@@ -1162,7 +1161,7 @@ def _handle_recursive_updates(node, last_output):
                                 break
                         
                         if not has_inverse:
-                            print("[CHARON] Applying Inverse View Transform for ACES...")
+                            log_debug("Applying Inverse View Transform for ACES...")
                             temp_dir = os.environ.get('NUKE_TEMP_DIR') or os.environ.get('TEMP') or '/tmp'
                             temp_inv = os.path.join(temp_dir, 'charon_inverse.nk')
                             
@@ -1192,7 +1191,7 @@ def _handle_recursive_updates(node, last_output):
                         if inv_node:
                             final_source_node = inv_node
                 except Exception as aces_err:
-                     print(f"[CHARON] ACES Inverse Transform failed: {aces_err}")
+                     log_debug(f"ACES Inverse Transform failed: {aces_err}", "WARNING")
 
                 # RECONNECT DOWNSTREAM
                 # Find nodes connected to Loop Start OR Read node, and move them to final_source_node
@@ -1218,26 +1217,25 @@ def _handle_recursive_updates(node, last_output):
                         for i in range(dep.inputs()):
                             inp = dep.input(i)
                             if inp == target_node or inp == read_node:
-                                print(f"[CHARON] Reconnecting {dep.name()} input {i} to {final_source_node.name()}")
+                                log_debug(f"Reconnecting {dep.name()} input {i} to {final_source_node.name()}")
                                 dep.setInput(i, final_source_node)
                                 # Verify
                                 if dep.input(i) != final_source_node:
-                                    print(f"[CHARON] WARNING: Reconnection failed! {dep.name()} input {i} is {dep.input(i).name() if dep.input(i) else 'None'}")
+                                    log_debug(f"Reconnection failed! {dep.name()} input {i} is {dep.input(i).name() if dep.input(i) else 'None'}", "WARNING")
                                 else:
-                                    print(f"[CHARON] SUCCESS: {dep.name()} input {i} is now {final_source_node.name()}")
+                                    log_debug(f"SUCCESS: {dep.name()} input {i} is now {final_source_node.name()}")
                     
                     # 3. Explicitly check CharonOp (node) inputs
                     # This ensures the processor itself is updated even if dependency cache is stale
                     for i in range(node.inputs()):
                         inp = node.input(i)
                         if inp == target_node or inp == read_node:
-                            print(f"[CHARON] Explicitly reconnecting CharonOp input {i} to {final_source_node.name()}")
+                            log_debug(f"Explicitly reconnecting CharonOp input {i} to {final_source_node.name()}")
                             node.setInput(i, final_source_node)
 
             else:
-                print(f"[CHARON] Read node {read_name} could not be created or is invalid.")
+                log_debug(f"Read node {read_name} could not be created or is invalid.", "WARNING")
     except Exception as e:
-        print(f"[CHARON] Failed to update recursive read node: {e}")
         log_debug(f"Failed to update recursive read node: {e}", "WARNING")
 
     # 3. Increment Counter
@@ -1245,7 +1243,7 @@ def _handle_recursive_updates(node, last_output):
         curr_knob = node.knob('charon_recursive_current')
         if curr_knob:
             new_val = int(curr_knob.value()) + 1
-            print(f"[CHARON] Incrementing iteration counter to {new_val}")
+            log_debug(f"Incrementing iteration counter to {new_val}")
             curr_knob.setValue(new_val)
     except:
         pass
@@ -4353,7 +4351,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         
                                         if is_recursive and current < iterations - 1:
                                             last_output = result_data.get('output_path')
-                                            print(f"[CHARON] Recursive Mode: Iteration {current + 1}/{iterations} finished. Starting next...")
+                                            log_debug(f"Recursive Mode: Iteration {current + 1}/{iterations} finished. Starting next...")
                                             _handle_recursive_updates(node, last_output)
                                             
                                             # Short wait to allow Nuke to refresh the graph
@@ -4363,7 +4361,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             # Trigger next iteration
                                             process_charonop_node(is_recursive_call=True, node_override=node)
                                         elif is_recursive:
-                                            print("[CHARON] Recursive Mode: All iterations completed.")
+                                            log_debug("Recursive Mode: All iterations completed.")
                                             try:
                                                 # Cleanup Recursive Nodes & Reset Attribute
                                                 loop_start = node.knob('charon_recursive_loop_start').value()
@@ -4438,7 +4436,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                                                 node.knob('charon_recursive_current').setValue(0)
                                             except Exception as cleanup_err:
-                                                print(f"[CHARON] Cleanup failed: {cleanup_err}")
                                                 log_debug(f"Cleanup failed: {cleanup_err}", "ERROR")
                                     except Exception as rec_err:
                                         import traceback
