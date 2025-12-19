@@ -1549,41 +1549,49 @@ def _validate_models(
                 found_paths.append(resolved_path)
             continue
 
-        located, resolved = _find_model_file(models_root, comfy_dir, reference)
-        if not located and index_cache is None and os.path.isdir(models_root):
-            index_cache = _build_model_index(models_root)
-            located, resolved = _lookup_model_in_index(index_cache, reference)
-        if located and resolved:
-            if resolved not in found_set:
-                found_set.add(resolved)
-                found_paths.append(resolved)
-        else:
-            resolver_info = missing_by_index.get(idx)
-            if resolver_info:
-                resolver_category = resolver_info.get("category")
-                if resolver_category:
-                    reference["category"] = resolver_category
-                attempted = resolver_info.get("attempted") or []
-                if attempted:
-                    # Preserve order while removing duplicates
-                    unique_attempted = []
-                    for value in attempted:
-                        if value and value not in unique_attempted:
-                            unique_attempted.append(value)
-                    if unique_attempted:
-                        reference["attempted_categories"] = unique_attempted
-                searched_dirs = resolver_info.get("searched") or []
-                if searched_dirs:
-                    normalized_dirs: List[str] = []
-                    for directory in searched_dirs:
-                        if not isinstance(directory, str):
-                            continue
-                        abs_dir = os.path.abspath(directory)
-                        if abs_dir not in normalized_dirs:
-                            normalized_dirs.append(abs_dir)
-                    if normalized_dirs:
-                        reference["attempted_directories"] = normalized_dirs
-            missing.append(reference)
+        # Check if resolver already flagged this as having a mismatched path
+        # If so, don't try fallback searches that would find the wrong file again
+        resolver_info = missing_by_index.get(idx)
+        is_path_mismatch = resolver_info and resolver_info.get("reason") == "mismatched_path"
+        
+        if not is_path_mismatch:
+            # Only try fallback searches if resolver didn't already find a mismatched file
+            located, resolved = _find_model_file(models_root, comfy_dir, reference)
+            if not located and index_cache is None and os.path.isdir(models_root):
+                index_cache = _build_model_index(models_root)
+                located, resolved = _lookup_model_in_index(index_cache, reference, models_root)
+            if located and resolved:
+                if resolved not in found_set:
+                    found_set.add(resolved)
+                    found_paths.append(resolved)
+                continue
+        
+        # Model is missing or has path mismatch
+        if resolver_info:
+            resolver_category = resolver_info.get("category")
+            if resolver_category:
+                reference["category"] = resolver_category
+            attempted = resolver_info.get("attempted") or []
+            if attempted:
+                # Preserve order while removing duplicates
+                unique_attempted = []
+                for value in attempted:
+                    if value and value not in unique_attempted:
+                        unique_attempted.append(value)
+                if unique_attempted:
+                    reference["attempted_categories"] = unique_attempted
+            searched_dirs = resolver_info.get("searched") or []
+            if searched_dirs:
+                normalized_dirs: List[str] = []
+                for directory in searched_dirs:
+                    if not isinstance(directory, str):
+                        continue
+                    abs_dir = os.path.abspath(directory)
+                    if abs_dir not in normalized_dirs:
+                        normalized_dirs.append(abs_dir)
+                if normalized_dirs:
+                    reference["attempted_directories"] = normalized_dirs
+        missing.append(reference)
 
     if cached_resolved_entries:
         missing = _filter_missing_with_resolved_cache(missing, cached_resolved_entries)
@@ -2564,6 +2572,7 @@ def _build_model_index(models_root: str) -> Dict[str, List[str]]:
 def _lookup_model_in_index(
     index: Optional[Dict[str, List[str]]],
     reference: Dict[str, str],
+    models_root: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
     if not index:
         return False, None
@@ -2575,7 +2584,14 @@ def _lookup_model_in_index(
     lowered = base_name.lower()
     matches = index.get(lowered)
     if matches:
-        return True, os.path.abspath(matches[0])
+        # If models_root is provided, verify the path matches the reference's requirements
+        first_match = os.path.abspath(matches[0])
+        if models_root:
+            # Check if the resolved path matches what the workflow specified
+            if not _resolved_path_matches_reference(name, first_match, models_root):
+                # File exists but in wrong location - don't return it
+                return False, None
+        return True, first_match
     return False, None
 
 
@@ -2715,10 +2731,6 @@ def _resolved_path_matches_reference(
     if normalized.lower().startswith("models/"):
         normalized = normalized[7:].strip("/")
 
-    # Only enforce subdirectory matches when the reference includes a slash.
-    if "/" not in normalized:
-        return True
-
     if not models_root:
         return True
 
@@ -2731,6 +2743,22 @@ def _resolved_path_matches_reference(
         reference_rel = resolved_path
 
     reference_rel = reference_rel.replace("\\", "/").strip("/")
+    
+    # If reference has no slash, it means the file should be directly in the category folder.
+    # Check that resolved path doesn't have additional subdirectories beyond the category.
+    if "/" not in normalized:
+        # Extract just the filename from the resolved path (relative to category folder)
+        # The reference_rel should be in format: "category/filename" or "category/subfolder/filename"
+        path_parts = reference_rel.split("/")
+        if len(path_parts) > 2:
+            # File is in a subfolder (e.g., vae/qwen-image/file.safetensors)
+            # but reference says it should be directly in category (e.g., vae/file.safetensors)
+            return False
+        # Check filename matches
+        resolved_filename = os.path.basename(resolved_path)
+        return resolved_filename.lower() == normalized.lower()
+    
+    # Reference includes subdirectory - check full relative path
     return reference_rel.lower().endswith(normalized.lower())
 
 
