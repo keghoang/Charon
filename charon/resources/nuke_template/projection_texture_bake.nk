@@ -13,12 +13,14 @@ define_window_layout_xml {<?xml version="1.0" encoding="UTF-8"?>
                 <split size="773"/>
                 <dock id="" activePageId="Viewer.1">
                     <page id="Viewer.1"/>
+                    <page id="Viewer.2"/>
                 </dock>
                 <split size="543"/>
                 <dock id="" activePageId="DAG.1" focus="true">
                     <page id="DAG.1"/>
                     <page id="Curve Editor.1"/>
                     <page id="DopeSheet.1"/>
+                    <page id="DAG.2"/>
                 </dock>
             </splitter>
             <split size="615"/>
@@ -46,14 +48,14 @@ Root {
  floatLut linear
 }
 Group {
- inputs 2
+ inputs 0
  name Projection_Texture_Bake
- knobChanged "n=nuke.thisNode()\nk=nuke.thisKnob()\nif k.name() in ('asset_name', 'subname', 'showPanel'):\n import os, getpass\n p=os.environ.get('BUCK_PROJECT_PATH')\n u=getpass.getuser()\n a=n\['asset_name'\].value()\n s=n\['subname'\].value()\n if not p:\n  r=n.node('Read11')\n  if r:\n   f=r\['file'\].value().replace('\\\\', '/')\n   if '/Production/' in f:\n    p=f.split('/Production/')\[0\]\n msg = os.path.join(p, 'Production/MAYA/sourceimages/work.'+u+'/_CHARON', a, s).replace('\\\\', '/') if p else 'Path Not Found'\n n\['path_preview'\].setValue(msg)\n"
- xpos -356
- ypos -97
+ knobChanged "n=nuke.thisNode()\nk=nuke.thisKnob()\nif k.name() in ('asset_name', 'subname', 'showPanel'):\n import os, getpass\n p=os.environ.get('BUCK_PROJECT_PATH')\n u=getpass.getuser()\n a=n\['asset_name'].value()\n s=n\['subname'].value()\n if not p:\n  r=n.node('Read11')\n  if r:\n   f=r\['file'].value().replace('\\\\', '/')\n   if '/Production/' in f:\n    p=f.split('/Production/')\[0]\n msg = os.path.join(p, 'Production/MAYA/sourceimages/work.'+u+'/_CHARON', a, s).replace('\\\\', '/') if p else 'Path Not Found'\n n\['path_preview'].setValue(msg)\n"
+ xpos -120
+ ypos 70
  addUserKnob {20 User}
  addUserKnob {30 uvsize l "UV size"}
- uvsize {0 3}
+ uvsize {3 0}
  addUserKnob {30 UVcoord l "UV coord"}
  addUserKnob {26 ""}
  addUserKnob {26 output_setting l "OUTPUT SETTINGS"}
@@ -62,63 +64,50 @@ Group {
  addUserKnob {1 subname l "Sub Name"}
  subname body
  addUserKnob {6 aces_mode l "ACES Mode" +STARTLINE}
- addUserKnob {26 path_preview l "Preview Path" R 3 T "Interact to update..."}
- addUserKnob {22 project_texture l "Project Texture" T "n=nuke.thisNode()\np=n.input(0)\nc=n.input(1)\nif not p or not c:\n  nuke.message('Please connect Projection_renders (Input 1) and Charon_Coverage_Rig (Input 2)')\nelse:\n  fp=\[\]\n  with p:\n    rs=nuke.allNodes('Read')\n    rs.sort(key=lambda x:x.xpos())\n    fp=\[r\['file'\].value() for r in rs\]\n  if len(fp)<8:\n    nuke.message('Found '+str(len(fp))+' reads. Expected 8.')\n  else:\n    cd=\{\}\n    tp=None\n    cn=\['CamInit','Cam45','Cam90','Cam135','Cam180','Cam225','Cam270','Cam315'\]\n    with c:\n      for m in cn:\n        o=nuke.toNode(m)\n        if o:cd\[m\]=o\['translate'\].value()\n      t=nuke.toNode('Target')\n      if t:tp=t\['translate'\].value()\n    rn=\['Read11','Read8','Read14','Read15','Read9','Read13','Read12','Read10'\]\n    with n:\n      for i,m in enumerate(rn):\n        if i<len(fp):\n          o=nuke.toNode(m)\n          if o:o\['file'\].setValue(fp\[i\])\n      for m,v in cd.items():\n        o=nuke.toNode(m)\n        if o:o\['translate'\].setValue(v)\n      if tp:\n        t=nuke.toNode('Target')\n        if t:t\['translate'\].setValue(tp)"}
- addUserKnob {22 write l "Bake Texture" T "n=nuke.thisNode()\nimport os\nimport getpass\n\n# CONFIG\nasset = n['asset_name'].value()\nsub = n['subname'].value()\naces = n['aces_mode'].value()\n\n# Interpret UV size as START and END index (inclusive)\nuvs = n['uvsize'].value()\nstart_idx = int(uvs[0])\nend_idx = int(uvs[1])\n\n# PATH RESOLUTION\n# Prioritize BUCK_PROJECT_PATH as requested\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\n\nif not project_path:\n    # Fallback to guessing if env var is missing\n    ref = n.node('Read11')\n    if ref:\n        path = ref['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')[0]\n\nif not project_path:\n    nuke.message(\"Could not determine BUCK_PROJECT_PATH.\")\nelse:\n    # TARGET STRUCTURE: project_path\\Production\\MAYA\\sourceimages\\work.{user}\\_CHARON\\asset_name\\sub_name\\\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.{}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    \n    if not os.path.exists(out_dir):\n        try:\n            os.makedirs(out_dir)\n        except:\n            pass\n\n    # BAKE\n    with nuke.root():\n        input_node = n\n        aces_node = None\n        \n        if aces:\n            aces_node = nuke.createNode('OCIODisplay', inpanel=False)\n            aces_node.setInput(0, n)\n            aces_node['colorspace'].setValue('scene_linear')\n            aces_node['display'].setValue('sRGB Display')\n            aces_node['view'].setValue('ACES 1.0 SDR-video')\n            input_node = aces_node\n            \n        w = nuke.createNode('Write', inpanel=False)\n        w.setInput(0, input_node)\n        w['file_type'].setValue('png')\n        w['channels'].setValue('rgba')\n        \n        if aces:\n            w['raw'].setValue(True)\n\n        w_exr = nuke.createNode('Write', inpanel=False)\n        w_exr.setInput(0, n)\n        w_exr['file_type'].setValue('exr')\n        w_exr['channels'].setValue('rgba')\n        \n        try:\n            for i in range(start_idx, end_idx + 1):\n                u = i % 10\n                v = i // 10\n                udim = 1001 + u + (v * 10)\n                \n                n['UVcoord'].setValue([u, v])\n                \n                fname = \"{}_{}_{}.png\".format(asset, sub, udim)\n                w['file'].setValue(out_dir + \"/\" + fname)\n                \n                fname_exr = \"{}_{}_{}.exr\".format(asset, sub, udim)\n                w_exr['file'].setValue(out_dir + \"/\" + fname_exr)\n                \n                nuke.execute(w, nuke.frame(), nuke.frame())\n                nuke.execute(w_exr, nuke.frame(), nuke.frame())\n            \n            nuke.message(\"Bake Complete!\\nSaved to: \" + out_dir)\n        except Exception as e:\n            nuke.message(\"Error during bake: \" + str(e))\n        finally:\n            nuke.delete(w)\n            nuke.delete(w_exr)\n            if aces_node:\n                nuke.delete(aces_node)\n            n['UVcoord'].setValue([0, 0])\n" +STARTLINE}
- addUserKnob {22 open_folder l "Open Output Location" -STARTLINE T "n=nuke.thisNode()\nimport os, getpass, subprocess\nasset = n['asset_name'].value()\nsub = n['subname'].value()\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\nif not project_path:\n    ref = n.node('Read11')\n    if ref:\n        path = ref['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')[0]\nif project_path:\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.{}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    if os.path.exists(out_dir):\n        if os.name == 'nt':\n            os.startfile(out_dir)\n        elif os.name == 'posix':\n            subprocess.Popen(['open', out_dir])\n        else:\n            subprocess.Popen(['xdg-open', out_dir])\n    else:\n        nuke.message('Folder does not exist yet: ' + out_dir)\nelse:\n    nuke.message('Could not determine project path.')"}
+ addUserKnob {26 path_preview l "Preview Path" T //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/MAYA/sourceimages/work.kien/_CHARON/char_lobsterman/body}
+ addUserKnob {22 project_texture l "Project Texture" -STARTLINE T "n=nuke.thisNode()\np=n.input(0)\nc=n.input(1)\nif not p or not c:\n  nuke.message('Please connect Projection_renders (Input 1) and Charon_Coverage_Rig (Input 2)')\nelse:\n  fp=\[]\n  with p:\n    rs=nuke.allNodes('Read')\n    rs.sort(key=lambda x:x.xpos())\n    fp=\[r\['file'].value() for r in rs]\n  if len(fp)<8:\n    nuke.message('Found '+str(len(fp))+' reads. Expected 8.')\n  else:\n    cd=\{\}\n    tp=None\n    cn=\['CamInit','Cam45','Cam90','Cam135','Cam180','Cam225','Cam270','Cam315']\n    with c:\n      for m in cn:\n        o=nuke.toNode(m)\n        if o:cd\[m]=o\['translate'].value()\n      t=nuke.toNode('Target')\n      if t:tp=t\['translate'].value()\n    rn=\['Read11','Read8','Read14','Read15','Read9','Read13','Read12','Read10']\n    with n:\n      for i,m in enumerate(rn):\n        if i<len(fp):\n          o=nuke.toNode(m)\n          if o:o\['file'].setValue(fp\[i])\n      for m,v in cd.items():\n        o=nuke.toNode(m)\n        if o:o\['translate'].setValue(v)\n      if tp:\n        t=nuke.toNode('Target')\n        if t:t\['translate'].setValue(tp)"}
+ addUserKnob {22 write l "Bake Texture" T "n=nuke.thisNode()\nimport os\nimport getpass\n\n# CONFIG\nasset = n\['asset_name'].value()\nsub = n\['subname'].value()\naces = n\['aces_mode'].value()\n\n# Interpret UV size as START and END index (inclusive)\nuvs = n\['uvsize'].value()\nstart_idx = int(uvs\[0])\nend_idx = int(uvs\[1])\n\n# PATH RESOLUTION\n# Prioritize BUCK_PROJECT_PATH as requested\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\n\nif not project_path:\n    # Fallback to guessing if env var is missing\n    ref = n.node('Read11')\n    if ref:\n        path = ref\['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')\[0]\n\nif not project_path:\n    nuke.message(\"Could not determine BUCK_PROJECT_PATH.\")\nelse:\n    # TARGET STRUCTURE: project_path\\Production\\MAYA\\sourceimages\\work.\{user\}\\_CHARON\\asset_name\\sub_name\\\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.\{\}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    \n    if not os.path.exists(out_dir):\n        try:\n            os.makedirs(out_dir)\n        except:\n            pass\n\n    # BAKE\n    with nuke.root():\n        input_node = n\n        aces_node = None\n        \n        if aces:\n            aces_node = nuke.createNode('OCIODisplay', inpanel=False)\n            aces_node.setInput(0, n)\n            aces_node\['colorspace'].setValue('scene_linear')\n            aces_node\['display'].setValue('sRGB Display')\n            aces_node\['view'].setValue('ACES 1.0 SDR-video')\n            input_node = aces_node\n            \n        w = nuke.createNode('Write', inpanel=False)\n        w.setInput(0, input_node)\n        w\['file_type'].setValue('png')\n        w\['channels'].setValue('rgba')\n        \n        if aces:\n            w\['raw'].setValue(True)\n\n        w_exr = nuke.createNode('Write', inpanel=False)\n        w_exr.setInput(0, n)\n        w_exr\['file_type'].setValue('exr')\n        w_exr\['channels'].setValue('rgba')\n        \n        try:\n            for i in range(start_idx, end_idx + 1):\n                u = i % 10\n                v = i // 10\n                udim = 1001 + u + (v * 10)\n                \n                n\['UVcoord'].setValue(\[u, v])\n                \n                fname = \"\{\}_\{\}_\{\}.png\".format(asset, sub, udim)\n                w\['file'].setValue(out_dir + \"/\" + fname)\n                \n                fname_exr = \"\{\}_\{\}_\{\}.exr\".format(asset, sub, udim)\n                w_exr\['file'].setValue(out_dir + \"/\" + fname_exr)\n                \n                nuke.execute(w, nuke.frame(), nuke.frame())\n                nuke.execute(w_exr, nuke.frame(), nuke.frame())\n            \n            nuke.message(\"Bake Complete!\\nSaved to: \" + out_dir)\n        except Exception as e:\n            nuke.message(\"Error during bake: \" + str(e))\n        finally:\n            nuke.delete(w)\n            nuke.delete(w_exr)\n            if aces_node:\n                nuke.delete(aces_node)\n            n\['UVcoord'].setValue(\[0, 0])\n" +STARTLINE}
+ addUserKnob {22 open_folder l "Open Output Location" -STARTLINE T "n=nuke.thisNode()\nimport os, getpass, subprocess\nasset = n\['asset_name'].value()\nsub = n\['subname'].value()\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\nif not project_path:\n    ref = n.node('Read11')\n    if ref:\n        path = ref\['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')\[0]\nif project_path:\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.\{\}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    if os.path.exists(out_dir):\n        if os.name == 'nt':\n            os.startfile(out_dir)\n        elif os.name == 'posix':\n            subprocess.Popen(\['open', out_dir])\n        else:\n            subprocess.Popen(\['xdg-open', out_dir])\n    else:\n        nuke.message('Folder does not exist yet: ' + out_dir)\nelse:\n    nuke.message('Could not determine project path.')"}
 }
- Input {
-  inputs 0
-  name Projection_renders
-  xpos -482
-  ypos 57
- }
- Input {
-  inputs 0
-  name Charon_Coverage_Rig
-  xpos -337
-  ypos 54
-  number 1
- }
  BackdropNode {
   inputs 0
   name BackdropNode1
   tile_color 0x8e388e00
   label GEO
   note_font_size 42
-  xpos 165
-  ypos 124
+  xpos -795
+  ypos -132
   bdheight 120
  }
  Axis3 {
   inputs 0
   translate {0 150 0}
   name Target
-  xpos 410
-  ypos 414
+  xpos -550
+  ypos 158
  }
-set N55e91200 [stack 0]
+set N9c523200 [stack 0]
 push 0
  Camera3 {
   inputs 2
   translate {0 151.3999939 138.6000061}
   focal 100
   name CamInit
-  xpos 410
-  ypos 614
+  xpos -550
+  ypos 358
  }
-set N55e91700 [stack 0]
+set N9c523700 [stack 0]
  Dot {
   name Dot1
-  xpos 532
-  ypos 638
+  xpos -428
+  ypos 382
  }
  Dot {
   name Dot2
-  xpos 532
-  ypos 955
+  xpos -428
+  ypos 699
  }
-push $N55e91700
+push $N9c523700
  Read {
   inputs 0
   file_type png
@@ -127,15 +116,15 @@ push $N55e91700
   origset true
   name Read11
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 277
-  ypos 639
+  xpos -683
+  ypos 383
  }
  Group {
   name InverseViewTransform6
   tile_color 0xffff
   gl_color 0xffff
-  xpos 277
-  ypos 780
+  xpos -683
+  ypos 524
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -178,17 +167,17 @@ push $N55e91700
   project_on front
   occlusion_mode world
   name Project3D1
-  xpos 400
-  ypos 780
+  xpos -560
+  ypos 524
  }
  UVTile2 {
   tile_u {{parent.UVcoord.u}}
   tile_v {{parent.UVcoord.v}}
   name UVTile1
-  xpos 400
-  ypos 804
+  xpos -560
+  ypos 548
  }
- set C9689b400 [stack 0]
+ set C9ec5ef00 [stack 0]
  ReadGeo2 {
   file //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/MAYA/sourceimages/work.kien/_99_CHARON/_TEXTURING/char_lobsterman/geo/body.abc
   version 3
@@ -206,10 +195,10 @@ push $N55e91700
    /root/eye_L_geo/eye_L_geoShape
   }
   name ReadGeo2
-  xpos 400
-  ypos 858
+  xpos -560
+  ypos 602
  }
- set C9689b900 [stack 0]
+ set C9ec5f400 [stack 0]
 push 0
 add_layer {P P.red P.green P.blue P.alpha P.X P.Y P.Z P.x P.y P.z}
 add_layer {N N.red N.green N.blue}
@@ -222,21 +211,21 @@ add_layer {N N.red N.green N.blue}
   P_channel P
   N_channel N
   name ScanlineRender1
-  xpos 400
-  ypos 952
+  xpos -560
+  ypos 696
  }
  Dot {
   name Dot6
-  xpos 434
-  ypos 1030
+  xpos -526
+  ypos 774
  }
-set N96893400 [stack 0]
+set Na4fb0000 [stack 0]
  Group {
   name NormalsRotate2
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 507
-  ypos 1027
+  xpos -453
+  ypos 771
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -334,13 +323,13 @@ set N96893400 [stack 0]
    xpos 0
    ypos -347
   }
-set N9689d700 [stack 0]
+set N9ec61200 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N9689d700
+push $N9ec61200
   Unpremult {
    name Unpremult1
    xpos 0
@@ -468,34 +457,28 @@ push 0
    ypos 623
   }
  end_group
-clone $C9689b900 {
-  inputs 0
-  xpos 180
-  ypos 189
-  selected false
- }
-push $N55e91200
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {98.00500419 151.3999939 98.00500419}
   focal 100
   name Cam315
-  xpos 3910
-  ypos 592
+  xpos 2950
+  ypos 336
  }
-set N9698cd00 [stack 0]
+set Na5046800 [stack 0]
  Dot {
   name Dot17
-  xpos 4031
-  ypos 616
+  xpos 3071
+  ypos 360
  }
  Dot {
   name Dot18
-  xpos 4031
-  ypos 933
+  xpos 3071
+  ypos 677
  }
-push $N9698cd00
+push $Na5046800
  Read {
   inputs 0
   file_type png
@@ -504,15 +487,15 @@ push $N9698cd00
   origset true
   name Read10
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 3777
-  ypos 633
+  xpos 2817
+  ypos 377
  }
  Group {
   name InverseViewTransform5
   tile_color 0xffff
   gl_color 0xffff
-  xpos 3777
-  ypos 756
+  xpos 2817
+  ypos 500
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -555,17 +538,17 @@ push $N9698cd00
   project_on front
   occlusion_mode world
   name Project3D6
-  xpos 3900
-  ypos 756
+  xpos 2940
+  ypos 500
  }
-clone $C9689b400 {
-  xpos 3900
-  ypos 780
+clone $C9ec5ef00 {
+  xpos 2940
+  ypos 524
   selected false
  }
-clone $C9689b900 {
-  xpos 3900
-  ypos 847
+clone $C9ec5f400 {
+  xpos 2940
+  ypos 591
   selected false
  }
 push 0
@@ -578,21 +561,21 @@ push 0
   P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender6
-  xpos 3899
-  ypos 930
+  xpos 2939
+  ypos 674
  }
  Dot {
   name Dot19
-  xpos 3933
-  ypos 1011
+  xpos 2973
+  ypos 755
  }
-set N969a7c00 [stack 0]
+set Na50a8800 [stack 0]
  Group {
   name NormalsRotate6
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 3993
-  ypos 1008
+  xpos 3033
+  ypos 752
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -690,13 +673,13 @@ set N969a7c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N969e8d00 [stack 0]
+set Na50ae800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N969e8d00
+push $Na50ae800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -824,29 +807,29 @@ push 0
    ypos 623
   }
  end_group
-push $N969a7c00
-push $N55e91200
+push $Na50a8800
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {138.6000061 151.3999939 -2.546040808e-14}
   focal 100
   name Cam270
-  xpos 3518
-  ypos 605
+  xpos 2558
+  ypos 349
  }
-set N96aafe00 [stack 0]
+set Na5173900 [stack 0]
  Dot {
   name Dot20
-  xpos 3639
-  ypos 629
+  xpos 2679
+  ypos 373
  }
  Dot {
   name Dot21
-  xpos 3639
-  ypos 946
+  xpos 2679
+  ypos 690
  }
-push $N96aafe00
+push $Na5173900
  Read {
   inputs 0
   file_type png
@@ -855,15 +838,15 @@ push $N96aafe00
   origset true
   name Read12
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 3385
-  ypos 661
+  xpos 2425
+  ypos 405
  }
  Group {
   name InverseViewTransform7
   tile_color 0xffff
   gl_color 0xffff
-  xpos 3385
-  ypos 769
+  xpos 2425
+  ypos 513
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -906,17 +889,17 @@ push $N96aafe00
   project_on front
   occlusion_mode world
   name Project3D7
-  xpos 3508
-  ypos 769
+  xpos 2548
+  ypos 513
  }
-clone $C9689b400 {
-  xpos 3508
-  ypos 793
+clone $C9ec5ef00 {
+  xpos 2548
+  ypos 537
   selected false
  }
-clone $C9689b900 {
-  xpos 3508
-  ypos 858
+clone $C9ec5f400 {
+  xpos 2548
+  ypos 602
   selected false
  }
 push 0
@@ -929,21 +912,21 @@ push 0
   P_channel P
   N_channel N
   name ScanlineRender7
-  xpos 3507
-  ypos 943
+  xpos 2547
+  ypos 687
  }
  Dot {
   name Dot22
-  xpos 3541
-  ypos 1024
+  xpos 2581
+  ypos 768
  }
-set N96b3e000 [stack 0]
+set Na51c0c00 [stack 0]
  Group {
   name NormalsRotate7
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 3597
-  ypos 1021
+  xpos 2637
+  ypos 765
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -1042,13 +1025,13 @@ set N96b3e000 [stack 0]
    xpos 0
    ypos -347
   }
-set N96b1fe00 [stack 0]
+set Na51ed900 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N96b1fe00
+push $Na51ed900
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1176,29 +1159,29 @@ push 0
    ypos 623
   }
  end_group
-push $N96b3e000
-push $N55e91200
+push $Na51c0c00
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {98.00500419 151.3999939 -98.00500419}
   focal 100
   name Cam225
-  xpos 3033
-  ypos 607
+  xpos 2073
+  ypos 351
  }
-set N96bc8f00 [stack 0]
+set Na5292a00 [stack 0]
  Dot {
   name Dot23
-  xpos 3154
-  ypos 631
+  xpos 2194
+  ypos 375
  }
  Dot {
   name Dot24
-  xpos 3154
-  ypos 948
+  xpos 2194
+  ypos 692
  }
-push $N96bc8f00
+push $Na5292a00
  Read {
   inputs 0
   file_type png
@@ -1207,15 +1190,15 @@ push $N96bc8f00
   origset true
   name Read13
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 2900
-  ypos 650
+  xpos 1940
+  ypos 394
  }
  Group {
   name InverseViewTransform8
   tile_color 0xffff
   gl_color 0xffff
-  xpos 2900
-  ypos 771
+  xpos 1940
+  ypos 515
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -1258,17 +1241,17 @@ push $N96bc8f00
   project_on front
   occlusion_mode world
   name Project3D8
-  xpos 3023
-  ypos 771
+  xpos 2063
+  ypos 515
  }
-clone $C9689b400 {
-  xpos 3023
-  ypos 795
+clone $C9ec5ef00 {
+  xpos 2063
+  ypos 539
   selected false
  }
-clone $C9689b900 {
-  xpos 3023
-  ypos 859
+clone $C9ec5f400 {
+  xpos 2063
+  ypos 603
   selected false
  }
 push 0
@@ -1281,21 +1264,21 @@ push 0
   P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender8
-  xpos 3022
-  ypos 945
+  xpos 2062
+  ypos 689
  }
  Dot {
   name Dot25
-  xpos 3056
-  ypos 1026
+  xpos 2096
+  ypos 770
  }
-set N96c3c400 [stack 0]
+set Na52bf000 [stack 0]
  Group {
   name NormalsRotate8
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 3112
-  ypos 1023
+  xpos 2152
+  ypos 767
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -1394,13 +1377,13 @@ set N96c3c400 [stack 0]
    xpos 0
    ypos -347
   }
-set N96c64f00 [stack 0]
+set Na532ea00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N96c64f00
+push $Na532ea00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1528,29 +1511,29 @@ push 0
    ypos 623
   }
  end_group
-push $N96c3c400
-push $N55e91200
+push $Na52bf000
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {-1.697360538e-14 151.3999939 -138.6000061}
   focal 100
   name Cam180
-  xpos 2532
-  ypos 594
+  xpos 1572
+  ypos 338
  }
-set N96d04000 [stack 0]
+set Na539f700 [stack 0]
  Dot {
   name Dot14
-  xpos 2653
-  ypos 618
+  xpos 1693
+  ypos 362
  }
  Dot {
   name Dot15
-  xpos 2653
-  ypos 935
+  xpos 1693
+  ypos 679
  }
-push $N96d04000
+push $Na539f700
  Read {
   inputs 0
   file_type png
@@ -1559,15 +1542,15 @@ push $N96d04000
   origset true
   name Read9
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 2399
-  ypos 650
+  xpos 1439
+  ypos 394
  }
  Group {
   name InverseViewTransform4
   tile_color 0xffff
   gl_color 0xffff
-  xpos 2399
-  ypos 758
+  xpos 1439
+  ypos 502
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -1610,17 +1593,17 @@ push $N96d04000
   project_on front
   occlusion_mode world
   name Project3D5
-  xpos 2522
-  ypos 758
+  xpos 1562
+  ypos 502
  }
-clone $C9689b400 {
-  xpos 2522
-  ypos 795
+clone $C9ec5ef00 {
+  xpos 1562
+  ypos 539
   selected false
  }
-clone $C9689b900 {
-  xpos 2521
-  ypos 848
+clone $C9ec5f400 {
+  xpos 1561
+  ypos 592
   selected false
  }
 push 0
@@ -1633,21 +1616,21 @@ push 0
   P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender5
-  xpos 2521
-  ypos 932
+  xpos 1561
+  ypos 676
  }
  Dot {
   name Dot16
-  xpos 2555
-  ypos 1013
+  xpos 1595
+  ypos 757
  }
-set N96d52800 [stack 0]
+set Na53d7400 [stack 0]
  Group {
   name NormalsRotate5
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 2614
-  ypos 1010
+  xpos 1654
+  ypos 754
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -1745,13 +1728,13 @@ set N96d52800 [stack 0]
    xpos 0
    ypos -347
   }
-set N96db2000 [stack 0]
+set Na53e7700 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N96db2000
+push $Na53e7700
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1879,29 +1862,29 @@ push 0
    ypos 623
   }
  end_group
-push $N96d52800
-push $N55e91200
+push $Na53d7400
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {-98.00500419 151.3999939 -98.00500419}
   focal 100
   name Cam135
-  xpos 2024
-  ypos 594
+  xpos 1064
+  ypos 338
  }
-set N96e0ed00 [stack 0]
+set Na54ca800 [stack 0]
  Dot {
   name Dot11
-  xpos 2145
-  ypos 618
+  xpos 1185
+  ypos 362
  }
  Dot {
   name Dot12
-  xpos 2145
-  ypos 935
+  xpos 1185
+  ypos 679
  }
-push $N96e0ed00
+push $Na54ca800
  Read {
   inputs 0
   file_type png
@@ -1910,15 +1893,15 @@ push $N96e0ed00
   origset true
   name Read15
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 1891
-  ypos 628
+  xpos 931
+  ypos 372
  }
  Group {
   name InverseViewTransform3
   tile_color 0xffff
   gl_color 0xffff
-  xpos 1891
-  ypos 758
+  xpos 931
+  ypos 502
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -1961,17 +1944,17 @@ push $N96e0ed00
   project_on front
   occlusion_mode world
   name Project3D4
-  xpos 2014
-  ypos 758
+  xpos 1054
+  ypos 502
  }
-clone $C9689b400 {
-  xpos 2014
-  ypos 794
+clone $C9ec5ef00 {
+  xpos 1054
+  ypos 538
   selected false
  }
-clone $C9689b900 {
-  xpos 2014
-  ypos 855
+clone $C9ec5f400 {
+  xpos 1054
+  ypos 599
   selected false
  }
 push 0
@@ -1984,21 +1967,21 @@ push 0
   P_channel P
   N_channel N
   name ScanlineRender4
-  xpos 2013
-  ypos 932
+  xpos 1053
+  ypos 676
  }
  Dot {
   name Dot13
-  xpos 2047
-  ypos 1013
+  xpos 1087
+  ypos 757
  }
-set N96e64c00 [stack 0]
+set Na54e7800 [stack 0]
  Group {
   name NormalsRotate3
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 2107
-  ypos 1010
+  xpos 1147
+  ypos 754
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -2096,13 +2079,13 @@ set N96e64c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N96e62d00 [stack 0]
+set Na5528800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N96e62d00
+push $Na5528800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2230,29 +2213,29 @@ push 0
    ypos 623
   }
  end_group
-push $N96e64c00
-push $N55e91200
+push $Na54e7800
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {-138.6000061 151.3999939 8.486802692e-15}
   focal 100
   name Cam90
-  xpos 1472
-  ypos 607
+  xpos 512
+  ypos 351
  }
-set N96f29e00 [stack 0]
+set Na55f3900 [stack 0]
  Dot {
   name Dot8
-  xpos 1593
-  ypos 631
+  xpos 633
+  ypos 375
  }
  Dot {
   name Dot9
-  xpos 1593
-  ypos 948
+  xpos 633
+  ypos 692
  }
-push $N96f29e00
+push $Na55f3900
  Read {
   inputs 0
   file_type png
@@ -2261,15 +2244,15 @@ push $N96f29e00
   origset true
   name Read14
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 1339
-  ypos 648
+  xpos 379
+  ypos 392
  }
  Group {
   name InverseViewTransform2
   tile_color 0xffff
   gl_color 0xffff
-  xpos 1339
-  ypos 771
+  xpos 379
+  ypos 515
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -2312,17 +2295,17 @@ push $N96f29e00
   project_on front
   occlusion_mode world
   name Project3D3
-  xpos 1462
-  ypos 771
+  xpos 502
+  ypos 515
  }
-clone $C9689b400 {
-  xpos 1462
-  ypos 795
+clone $C9ec5ef00 {
+  xpos 502
+  ypos 539
   selected false
  }
-clone $C9689b900 {
-  xpos 1462
-  ypos 852
+clone $C9ec5f400 {
+  xpos 502
+  ypos 596
   selected false
  }
 push 0
@@ -2335,21 +2318,21 @@ push 0
   P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender3
-  xpos 1461
-  ypos 945
+  xpos 501
+  ypos 689
  }
  Dot {
   name Dot10
-  xpos 1495
-  ypos 1026
+  xpos 535
+  ypos 770
  }
-set N96f59000 [stack 0]
+set Na55a5c00 [stack 0]
  Group {
   name NormalsRotate4
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 1551
-  ypos 1023
+  xpos 591
+  ypos 767
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -2448,13 +2431,13 @@ set N96f59000 [stack 0]
    xpos 0
    ypos -347
   }
-set N97f65e00 [stack 0]
+set Na5669900 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N97f65e00
+push $Na5669900
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2582,29 +2565,29 @@ push 0
    ypos 623
   }
  end_group
-push $N96f59000
-push $N55e91200
+push $Na55a5c00
+push $N9c523200
 push 0
  Camera3 {
   inputs 2
   translate {-98.00500419 151.3999939 98.00500419}
   focal 100
   name Cam45
-  xpos 929
-  ypos 609
+  xpos -31
+  ypos 353
  }
-set N98014f00 [stack 0]
+set Na5714a00 [stack 0]
  Dot {
   name Dot3
-  xpos 1050
-  ypos 633
+  xpos 90
+  ypos 377
  }
  Dot {
   name Dot4
-  xpos 1050
-  ypos 950
+  xpos 90
+  ypos 694
  }
-push $N98014f00
+push $Na5714a00
  Read {
   inputs 0
   file_type png
@@ -2613,15 +2596,15 @@ push $N98014f00
   origset true
   name Read8
   label "\[if \{\[regexp \{_v\\d\{2,3\}\} \[filename] b]\} \{ return \[string range \$b 1 end] \} \{return \"Version Not Found\"\}]"
-  xpos 796
-  ypos 652
+  xpos -164
+  ypos 396
  }
  Group {
   name InverseViewTransform1
   tile_color 0xffff
   gl_color 0xffff
-  xpos 796
-  ypos 773
+  xpos -164
+  ypos 517
   addUserKnob {20 User}
   addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\n\nAutomatic alpha channel detection"}
   addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
@@ -2664,17 +2647,17 @@ push $N98014f00
   project_on front
   occlusion_mode world
   name Project3D2
-  xpos 919
-  ypos 773
+  xpos -41
+  ypos 517
  }
-clone $C9689b400 {
-  xpos 919
-  ypos 797
+clone $C9ec5ef00 {
+  xpos -41
+  ypos 541
   selected false
  }
-clone $C9689b900 {
-  xpos 919
-  ypos 856
+clone $C9ec5f400 {
+  xpos -41
+  ypos 600
   selected false
  }
 push 0
@@ -2687,21 +2670,21 @@ push 0
   P_channel P
   N_channel N
   name ScanlineRender2
-  xpos 918
-  ypos 947
+  xpos -42
+  ypos 691
  }
  Dot {
   name Dot7
-  xpos 952
-  ypos 1028
+  xpos -8
+  ypos 772
  }
-set N98041400 [stack 0]
+set Na5796000 [stack 0]
  Group {
   name NormalsRotate1
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 1008
-  ypos 1025
+  xpos 48
+  ypos 769
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
   addUserKnob {41 pick l "Pick Plane" T Plane.pick}
@@ -2800,13 +2783,13 @@ set N98041400 [stack 0]
    xpos 0
    ypos -347
   }
-set N980b4f00 [stack 0]
+set Na57aca00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N980b4f00
+push $Na57aca00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2934,58 +2917,88 @@ push 0
    ypos 623
   }
  end_group
-push $N98041400
-push $N96893400
+push $Na5796000
+push $Na4fb0000
  Dot {
   name Dot5
-  xpos 434
-  ypos 1131
+  xpos -526
+  ypos 875
  }
  Merge2 {
   inputs 2+1
   name Merge1
-  xpos 918
-  ypos 1128
+  xpos -42
+  ypos 872
  }
  Merge2 {
   inputs 2+1
   name Merge2
-  xpos 1461
-  ypos 1126
+  xpos 501
+  ypos 870
  }
  Merge2 {
   inputs 2+1
   name Merge3
-  xpos 2041
-  ypos 1126
+  xpos 1081
+  ypos 870
  }
  Merge2 {
   inputs 2+1
   name Merge4
-  xpos 2549
-  ypos 1126
+  xpos 1589
+  ypos 870
  }
  Merge2 {
   inputs 2+1
   name Merge5
-  xpos 3022
-  ypos 1126
+  xpos 2062
+  ypos 870
  }
  Merge2 {
   inputs 2+1
   name Merge6
-  xpos 3507
-  ypos 1124
+  xpos 2547
+  ypos 868
  }
  Merge2 {
   inputs 2+1
   name Merge7
-  xpos 3927
-  ypos 1124
+  xpos 2967
+  ypos 868
  }
+set Na5855900 [stack 0]
  Output {
   name Output1
-  xpos 3967
-  ypos 1402
+  xpos 3007
+  ypos 1146
+ }
+clone $C9ec5f400 {
+  inputs 0
+  xpos -780
+  ypos -67
+  selected false
+ }
+push $Na5855900
+ Viewer {
+  frame_range 1-100
+  monitorOutNDISenderName "Nuke - projection_texture_bake - Viewer1"
+  monitorOutOutputTransform rec709
+  name Viewer1
+  xpos -780
+  ypos -31
+ }
+ Input {
+  inputs 0
+  name Projection_renders
+  xpos -401
+  ypos -86
+ }
+ Input {
+  inputs 0
+  name Charon_Coverage_Rig
+  xpos -277
+  ypos -79
+  number 1
  }
 end_group
+
