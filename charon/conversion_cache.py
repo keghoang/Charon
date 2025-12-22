@@ -9,6 +9,9 @@ from typing import Any, Dict, Optional, Tuple
 LOG_FILENAME = "conversion_log.md"
 CONVERTED_SUFFIX = "_converted.json"
 CACHE_FOLDER_NAME = ".charon_cache"
+
+# Legacy migration support (deprecated as of 2025-12-22)
+# TODO: Remove after Q1 2026 when all users have migrated
 LEGACY_CACHE_FOLDER_NAME = "_API_conversion"
 
 

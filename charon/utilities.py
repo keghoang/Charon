@@ -836,10 +836,6 @@ def get_metadata_with_fallbacks(script_path: str, current_host: str) -> dict:
         metadata["mirror_prints"] = file_metadata["intercept_prints"]
     # else use default from config.DEFAULT_METADATA
     
-    # Remove deprecated fields
-    metadata.pop("display", None)
-    metadata.pop("intercept_prints", None)
-    
     return metadata
 def get_current_user_slug() -> str:
     """Return normalized username used for per-user workflow folders."""

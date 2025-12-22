@@ -18,9 +18,13 @@ LOCAL_WORKFLOW_DIR = "workflow"
 VALIDATED_FILENAME = "workflow_validated.json"
 STATE_FILENAME = "workflow_state.json"
 CACHE_DIR_NAME = ".charon_cache"
+
+# Legacy migration support (deprecated as of 2025-12-22)
+# TODO: Remove after Q1 2026 when all users have migrated
 LEGACY_VALIDATION_CACHE_DIR = "validation_cache"
 LEGACY_WORKFLOW_CACHE_DIR = "workflow_cache"
 LEGACY_CACHE_SUBDIR = ".charon_cache"
+
 VALIDATION_LOG_FILENAME = "validation_log.json"
 RESOLVE_STATUS_FILENAME = "validation_resolve_status.json"
 

@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+*.nk~
+debug/
+packaging/*.rxt
+.charon_cache/
