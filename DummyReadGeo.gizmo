@@ -1,0 +1,228 @@
+Group {
+ inputs 2
+ name DummyReadGeo
+ help "DummyReadGeo\n\nInput 0: image/texture stream (connect your plate/texture)\nInput 1: reference ReadGeo2 (connect the ReadGeo2 you want to mirror)\n\nUse \"Sync From Ref\" to copy file + scenegraph selections into the internal ReadGeo2.\n\nNote: If you use the Scene Graph \"Create\" actions, do it while you are inside the gizmo (step into the group), otherwise Nuke will create nodes in the root context."
+ addUserKnob {20 DummyReadGeo}
+ addUserKnob {26 sync_status l "Status" T "Not synced yet."}
+ addUserKnob {22 sync_from_ref l "Sync From Ref" -STARTLINE T "import nuke\nexec(nuke.thisNode()['py_sync'].value(), {'nuke': nuke, '__builtins__': __builtins__})"}
+ addUserKnob {6 __syncing +INVISIBLE +HIDDEN}
+ __syncing 0
+ addUserKnob {43 py_sync +INVISIBLE +HIDDEN}
+ py_sync "
+import nuke, traceback
+
+def _set_status(group_node, message):
+    try:
+        group_node['sync_status'].setValue(message)
+    except Exception:
+        pass
+    try:
+        nuke.tprint(message)
+    except Exception:
+        try:
+            print(message)
+        except Exception:
+            pass
+
+def _is_readgeo(node):
+    try:
+        return node is not None and node.Class() in ('ReadGeo2', 'ReadGeo')
+    except Exception:
+        return False
+
+def _walk_upstream_to_readgeo(start_node, max_hops=64):
+    current = start_node
+    visited = set()
+    for _ in range(max_hops):
+        if current is None:
+            return None
+        try:
+            key = current.fullName()
+        except Exception:
+            key = str(current)
+        if key in visited:
+            return None
+        visited.add(key)
+        if _is_readgeo(current):
+            return current
+        try:
+            current = current.input(0)
+        except Exception:
+            return None
+    return None
+
+def _reload_if_possible(node):
+    for knob_name in ('reload', 'update', 'refresh'):
+        if knob_name not in node.knobs():
+            continue
+        try:
+            node[knob_name].execute()
+            return True
+        except Exception:
+            continue
+    return False
+
+def _copy_simple_knob(dst_node, src_node, knob_name):
+    if knob_name not in dst_node.knobs() or knob_name not in src_node.knobs():
+        return False
+    try:
+        dst_node[knob_name].setValue(src_node[knob_name].value())
+        return True
+    except Exception:
+        return False
+
+def _copy_file_knob(dst_node, src_node):
+    if 'file' not in dst_node.knobs() or 'file' not in src_node.knobs():
+        return False
+    path = ''
+    try:
+        path = src_node['file'].value()
+    except Exception:
+        path = ''
+    try:
+        dst_node['file'].fromUserText(path)
+        return True
+    except Exception:
+        try:
+            dst_node['file'].setValue(path)
+            return True
+        except Exception:
+            return False
+
+def _copy_scene_view(dst_node, src_node):
+    if 'scene_view' not in dst_node.knobs() or 'scene_view' not in src_node.knobs():
+        return False
+
+    try:
+        script = src_node['scene_view'].toScript()
+    except Exception:
+        return False
+
+    if not script:
+        return False
+
+    try:
+        if not script.lstrip().startswith('scene_view'):
+            script = 'scene_view ' + script
+    except Exception:
+        pass
+
+    try:
+        dst_node.readKnobs(script + '\\n')
+        return True
+    except Exception:
+        pass
+
+    dst_knob = dst_node['scene_view']
+
+    try:
+        dst_knob.fromScript(script)
+        return True
+    except Exception:
+        pass
+
+    try:
+        parts = script.split(None, 1)
+        if len(parts) == 2 and parts[0] == 'scene_view':
+            dst_knob.fromScript(parts[1])
+            return True
+    except Exception:
+        pass
+
+    return False
+
+group = nuke.thisNode()
+
+if '__syncing' in group.knobs() and group['__syncing'].value():
+    _set_status(group, 'Sync blocked: already syncing')
+else:
+    if '__syncing' in group.knobs():
+        group['__syncing'].setValue(True)
+
+    ok_scene = False
+    ok_file = False
+    try:
+        ref_input = group.input(1)
+        ref = _walk_upstream_to_readgeo(ref_input)
+        if ref is None:
+            raise RuntimeError('No ReadGeo2 found upstream of input 1')
+
+        group.begin()
+        try:
+            clone = nuke.toNode('CloneReadGeo')
+            if clone is None:
+                raise RuntimeError('Internal node not found (expected CloneReadGeo)')
+
+            # Force full import while syncing, then restore the user setting.
+            if 'all_objects' in clone.knobs():
+                try:
+                    clone['all_objects'].setValue(True)
+                except Exception:
+                    pass
+
+            ok_file = _copy_file_knob(clone, ref)
+
+            for knob_name in ('version', 'read_on_each_frame', 'use_geometry_colors', 'range_first', 'range_last'):
+                _copy_simple_knob(clone, ref, knob_name)
+
+            _reload_if_possible(clone)
+
+            ok_scene = _copy_scene_view(clone, ref)
+
+            _copy_simple_knob(clone, ref, 'all_objects')
+
+            _reload_if_possible(clone)
+
+        finally:
+            group.end()
+
+        status = 'Sync OK'
+        if not ok_file:
+            status += ' (file not applied)'
+        if not ok_scene:
+            status += ' (scenegraph selection not applied)'
+        _set_status(group, status)
+
+    except Exception as exc:
+        _set_status(group, 'Sync failed: %s' % exc)
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+    finally:
+        if '__syncing' in group.knobs():
+            try:
+                group['__syncing'].setValue(False)
+            except Exception:
+                pass
+"
+}
+Input {
+ inputs 0
+ name ImgStream
+ number 0
+ xpos -120
+ ypos 0
+}
+set N_IMGSTREAM [stack 0]
+Input {
+ inputs 0
+ name RefGeo
+ number 1
+ xpos -120
+ ypos 80
+}
+set N_REFGEO [stack 0]
+push $N_IMGSTREAM
+ReadGeo2 {
+ inputs 1
+ name CloneReadGeo
+ xpos 20
+ ypos 0
+}
+Output {
+ name Output1
+ xpos 180
+ ypos 0
+}
+end_group
