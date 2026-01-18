@@ -214,26 +214,52 @@ class ComfyUIClient:
     def download_image(self, filename, output_path):
         return self.download_file(filename, output_path)
 
-    def download_file(self, filename, output_path, subfolder: str = "", file_type: str = "output"):
-        try:
-            params = urllib.parse.urlencode(
-                {
-                    "filename": filename,
-                    "subfolder": subfolder or "",
-                    "type": file_type or "output",
-                }
-            )
-            request = urllib.request.Request(f"{self.base_url}/view?{params}")
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
-                if response.getcode() == 200:
-                    with open(output_path, "wb") as handle:
-                        handle.write(response.read())
-                    return True
-                logger.error("Failed to download file: %s", response.getcode())
-                return False
-        except Exception as exc:
-            logger.error("Failed to download file: %s", exc)
-            return False
+    def download_file(
+        self,
+        filename,
+        output_path,
+        subfolder: str = "",
+        file_type: str = "output",
+        retries: int = 0,
+        retry_delay: float = 0.5,
+        min_bytes: int = 1,
+    ):
+        attempts = max(1, int(retries) + 1)
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                params = urllib.parse.urlencode(
+                    {
+                        "filename": filename,
+                        "subfolder": subfolder or "",
+                        "type": file_type or "output",
+                    }
+                )
+                request = urllib.request.Request(f"{self.base_url}/view?{params}")
+                with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+                    if response.getcode() == 200:
+                        with open(output_path, "wb") as handle:
+                            handle.write(response.read())
+                        if min_bytes and os.path.exists(output_path):
+                            size = os.path.getsize(output_path)
+                            if size < min_bytes:
+                                raise IOError(f"Downloaded file too small ({size} bytes)")
+                        return True
+                    last_error = f"HTTP {response.getcode()}"
+                    logger.error("Failed to download file: %s", last_error)
+            except Exception as exc:
+                last_error = exc
+                logger.error("Failed to download file: %s", exc)
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except Exception:
+                pass
+            if attempt < attempts - 1:
+                time.sleep(retry_delay)
+        if last_error:
+            logger.error("Download failed after retries: %s", last_error)
+        return False
 
     def process_workflow_with_image(self, workflow, image_path, output_dir=None):
         upload_name = self.upload_image(image_path)

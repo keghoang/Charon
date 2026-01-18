@@ -53,6 +53,7 @@ IMAGE_OUTPUT_EXTENSIONS = {
     ".tga",
     ".webp",
 }
+MODEL_FILE_EXTENSIONS = (".ckpt", ".safetensors", ".pth", ".pt", ".bin", ".onnx", ".yaml")
 
 INVERSE_VIEW_TRANSFORM_GROUP = """set cut_paste_input [stack 0]
 version 16.0 v3
@@ -199,6 +200,50 @@ def _coerce_parameter_value(value_type: str, value: Any) -> Any:
     if value is None:
         return ""
     return str(value)
+
+
+def _collapse_model_backslashes(value: str) -> str:
+    if "\\" not in value:
+        return value
+    prefix = ""
+    rest = value
+    if value.startswith("\\\\"):
+        prefix = "\\\\"
+        rest = value.lstrip("\\")
+    while "\\\\" in rest:
+        rest = rest.replace("\\\\", "\\")
+    return prefix + rest
+
+
+def _normalize_prompt_model_paths(payload: Any) -> int:
+    """
+    Normalize model path strings that were double-escaped by Nuke serialization.
+    Returns the number of adjustments applied.
+    """
+    adjusted = 0
+
+    def _walk(value: Any) -> Any:
+        nonlocal adjusted
+        if isinstance(value, dict):
+            for key, entry in list(value.items()):
+                value[key] = _walk(entry)
+            return value
+        if isinstance(value, list):
+            for index, entry in enumerate(list(value)):
+                value[index] = _walk(entry)
+            return value
+        if isinstance(value, str):
+            if "\\" in value:
+                ext = os.path.splitext(value.strip().lower())[1]
+                if ext in MODEL_FILE_EXTENSIONS:
+                    collapsed = _collapse_model_backslashes(value)
+                    if collapsed != value:
+                        adjusted += 1
+                        return collapsed
+        return value
+
+    _walk(payload)
+    return adjusted
 
 
 def _ensure_trimesh():
@@ -1737,6 +1782,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         link_anchor_value = ensure_link_anchor_value()
         current_node_state = 'Ready'
+        last_status_color_state = current_node_state
+        last_status_color_time = 0.0
 
         def iter_candidate_read_nodes():
             candidates: List[Any] = []
@@ -2690,12 +2737,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 pass
             raise RuntimeError('ComfyUI client is not available')
 
+        comfy_env = resolve_comfy_environment(comfy_path) if comfy_path else {}
+        comfy_dir = comfy_env.get("comfy_dir") if isinstance(comfy_env, dict) else None
+        comfy_output_root = ""
+        if comfy_dir:
+            candidate_root = os.path.join(comfy_dir, "output")
+            if os.path.isdir(candidate_root):
+                comfy_output_root = candidate_root
+
         results_dir = os.path.join(temp_root, 'results')
         os.makedirs(results_dir, exist_ok=True)
         result_file = os.path.join(results_dir, f"charon_result_{int(time.time())}_{str(uuid.uuid4())[:8]}.json")
 
         def update_progress(progress, status='Processing', error=None, extra=None):
-            nonlocal current_node_state
+            nonlocal current_node_state, last_status_color_state, last_status_color_time
             try:
                 numeric_progress = float(progress)
             except Exception:
@@ -2718,9 +2773,15 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 lifecycle = 'Completed'
 
             current_node_state = lifecycle
-            apply_status_color(current_node_state)
-            for candidate in _collect_target_reads():
-                apply_status_color(current_node_state, candidate)
+            now_tick = time.time()
+            interval = getattr(config, "STATUS_COLOR_UPDATE_INTERVAL_SEC", 0.5)
+            should_apply = lifecycle != last_status_color_state or (now_tick - last_status_color_time) >= interval
+            if should_apply:
+                last_status_color_state = lifecycle
+                last_status_color_time = now_tick
+                apply_status_color(current_node_state)
+                for candidate in _collect_target_reads():
+                    apply_status_color(current_node_state, candidate)
 
             payload = load_status_payload()
             runs = ensure_history(payload)
@@ -2800,6 +2861,18 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         def background_process():
             nonlocal batch_count
+            def _write_result_file(payload: Dict[str, Any]) -> None:
+                temp_path = f"{result_file}.tmp"
+                try:
+                    with open(temp_path, "w") as fp:
+                        json.dump(payload, fp)
+                    os.replace(temp_path, result_file)
+                finally:
+                    try:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                    except Exception:
+                        pass
             try:
                 update_progress(0.05, 'Starting processing')
                 conversion_extra = {}
@@ -3045,8 +3118,100 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 base_prompt = copy.deepcopy(workflow_copy)
                 seed_records = _capture_seed_inputs(base_prompt)
                 batch_outputs: List[Dict[str, Any]] = []
-                timeout = 300
                 per_batch_progress = 0.5 / max(1, batch_count)
+
+                def _resolve_batch_timeout() -> float:
+                    base_timeout = getattr(config, "COMFY_BATCH_TIMEOUT_SEC", 300)
+                    grace_per_job = getattr(config, "COMFY_QUEUE_GRACE_SEC", 15)
+                    extra = 0.0
+                    try:
+                        queue_data = comfy_client.get_queue_status()
+                    except Exception:
+                        queue_data = None
+                    if isinstance(queue_data, dict):
+                        pending = len(queue_data.get("queue_pending", []) or [])
+                        running = len(queue_data.get("queue_running", []) or [])
+                        extra = float((pending + running) * grace_per_job)
+                    return float(base_timeout) + extra
+
+                download_retries = int(getattr(config, "COMFY_DOWNLOAD_RETRIES", 4))
+                download_retry_delay = float(getattr(config, "COMFY_DOWNLOAD_RETRY_DELAY_SEC", 0.75))
+                download_min_bytes = int(getattr(config, "COMFY_DOWNLOAD_MIN_BYTES", 1))
+
+                def _normalize_download_target(filename: Optional[str], subfolder: Optional[str]) -> Tuple[str, str]:
+                    if not filename:
+                        return "", (subfolder or "").strip().strip("/\\")
+                    name = str(filename)
+                    cleaned = name.replace("\\", "/")
+                    subfolder_val = (subfolder or "").strip().strip("/\\")
+                    if os.path.isabs(name):
+                        return name, subfolder_val
+                    if "/" in cleaned:
+                        base = os.path.basename(cleaned)
+                        if not subfolder_val:
+                            rel_dir = os.path.dirname(cleaned).strip("/\\")
+                            subfolder_val = rel_dir
+                        return base, subfolder_val
+                    return name, subfolder_val
+
+                def _resolve_local_output_candidate(filename: str, subfolder: str) -> str:
+                    if not comfy_output_root or not filename:
+                        return ""
+                    parts = [comfy_output_root]
+                    if subfolder:
+                        parts.append(subfolder)
+                    parts.append(filename)
+                    return os.path.normpath(os.path.join(*parts))
+
+                def _recover_artifacts_from_output_dir(
+                    expected_prefixes: List[str],
+                    output_root: str,
+                    since_time: float,
+                ) -> List[Dict[str, Any]]:
+                    if not output_root or not os.path.isdir(output_root):
+                        return []
+                    prefixes = [p.lower() for p in expected_prefixes if p]
+                    if not prefixes:
+                        return []
+                    limit = int(getattr(config, "COMFY_OUTPUT_SCAN_LIMIT", 4000))
+                    found: List[Dict[str, Any]] = []
+                    scanned = 0
+                    for root_dir, _dirs, files in os.walk(output_root):
+                        for fname in files:
+                            scanned += 1
+                            if scanned > limit:
+                                return found
+                            if not fname or fname.startswith("."):
+                                continue
+                            lower = fname.lower()
+                            if not any(lower.startswith(prefix) for prefix in prefixes):
+                                continue
+                            full_path = os.path.join(root_dir, fname)
+                            try:
+                                if since_time and os.path.getmtime(full_path) < since_time:
+                                    continue
+                            except Exception:
+                                pass
+                            ext = os.path.splitext(fname)[1].lower()
+                            kind = "files"
+                            if ext in IMAGE_OUTPUT_EXTENSIONS:
+                                kind = "images"
+                            elif ext in CAMERA_OUTPUT_EXTENSIONS:
+                                kind = "camera"
+                            elif ext in MODEL_OUTPUT_EXTENSIONS:
+                                kind = "meshes"
+                            found.append(
+                                {
+                                    "filename": full_path,
+                                    "subfolder": "",
+                                    "type": "output",
+                                    "extension": ext,
+                                    "node_id": None,
+                                    "class_type": "",
+                                    "kind": kind,
+                                }
+                            )
+                    return found
 
                 def _progress_for(batch_index: int, local: float) -> float:
                     local_clamped = max(0.0, min(1.0, local))
@@ -3263,6 +3428,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         _apply_seed_offset(prompt_payload, seed_records, seed_offset)
 
                     batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
+                    normalized_paths = _normalize_prompt_model_paths(prompt_payload)
+                    if normalized_paths:
+                        log_debug(
+                            f"Normalized {normalized_paths} model path value(s) after Nuke reload."
+                        )
                     
                     debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{batch_index}.json').replace('\\', '/')
                     try:
@@ -3291,6 +3461,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         pass
 
                     start_time = time.time()
+                    timeout = _resolve_batch_timeout()
                     update_progress(
                         _progress_for(batch_index, 0.1),
                         f'{batch_label}: queued on ComfyUI',
@@ -3336,10 +3507,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 continue
                                             if (node_entry.get("class_type") or "").lower() == "saveimage":
                                                 prefix_val = node_entry.get("inputs", {}).get("filename_prefix")
-                                                if isinstance(prefix_val, str):
-                                                    prefixes.append(prefix_val)
+                                            if isinstance(prefix_val, str):
+                                                prefixes.append(prefix_val)
                                         if prefixes:
                                             artifacts = _recover_artifacts_by_prefix(prefixes)
+                                        if not artifacts and prefixes:
+                                            grace = float(getattr(config, "COMFY_OUTPUT_SCAN_GRACE_SEC", 30))
+                                            scan_since = max(0.0, start_time - grace)
+                                            artifacts = _recover_artifacts_from_output_dir(
+                                                prefixes, comfy_output_root, scan_since
+                                            )
+                                            if artifacts:
+                                                log_debug(
+                                                    f"Recovered {len(artifacts)} outputs from local ComfyUI output scan"
+                                                )
                                     if not artifacts:
                                         raise Exception('ComfyUI did not return an output file')
 
@@ -3386,6 +3567,12 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         source_filename = artifact.get("filename")
                                         source_is_abs = isinstance(source_filename, str) and os.path.isabs(source_filename)
                                         source_exists = source_is_abs and os.path.exists(source_filename)
+                                        download_name, download_subfolder = _normalize_download_target(
+                                            source_filename, artifact.get("subfolder", "")
+                                        )
+                                        if source_is_abs and download_name:
+                                            download_name = os.path.basename(download_name)
+                                        success = False
                                         if source_exists:
                                             try:
                                                 os.makedirs(os.path.dirname(allocated_output_path), exist_ok=True)
@@ -3393,15 +3580,57 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 success = True
                                                 log_debug(f'Copied absolute output {source_filename} -> {allocated_output_path}')
                                             except Exception as copy_error:
-                                                log_debug(f'Failed to copy absolute output {source_filename}: {copy_error}', 'WARNING')
+                                                log_debug(
+                                                    f'Failed to copy absolute output {source_filename}: {copy_error}',
+                                                    'WARNING',
+                                                )
                                                 success = False
                                         else:
-                                            success = comfy_client.download_file(
-                                                source_filename,
-                                                allocated_output_path,
-                                                subfolder=artifact.get("subfolder", ""),
-                                                file_type=artifact.get("type", "output"),
+                                            local_candidate = _resolve_local_output_candidate(
+                                                download_name, download_subfolder
                                             )
+                                            if local_candidate and os.path.exists(local_candidate):
+                                                try:
+                                                    os.makedirs(os.path.dirname(allocated_output_path), exist_ok=True)
+                                                    shutil.copyfile(local_candidate, allocated_output_path)
+                                                    success = True
+                                                    log_debug(
+                                                        f'Copied local output {local_candidate} -> {allocated_output_path}'
+                                                    )
+                                                except Exception as copy_error:
+                                                    log_debug(
+                                                        f'Failed to copy local output {local_candidate}: {copy_error}',
+                                                        'WARNING',
+                                                    )
+                                                    success = False
+                                            else:
+                                                if download_name:
+                                                    success = comfy_client.download_file(
+                                                        download_name,
+                                                        allocated_output_path,
+                                                        subfolder=download_subfolder,
+                                                        file_type=artifact.get("type", "output"),
+                                                        retries=download_retries,
+                                                        retry_delay=download_retry_delay,
+                                                        min_bytes=download_min_bytes,
+                                                    )
+                                                if not success and local_candidate and os.path.exists(local_candidate):
+                                                    try:
+                                                        os.makedirs(
+                                                            os.path.dirname(allocated_output_path),
+                                                            exist_ok=True,
+                                                        )
+                                                        shutil.copyfile(local_candidate, allocated_output_path)
+                                                        success = True
+                                                        log_debug(
+                                                            f'Copied local output {local_candidate} -> {allocated_output_path}'
+                                                        )
+                                                    except Exception as copy_error:
+                                                        log_debug(
+                                                            f'Failed to copy local output {local_candidate}: {copy_error}',
+                                                            'WARNING',
+                                                        )
+                                                        success = False
                                         if not success:
                                             raise Exception('Failed to download result file from ComfyUI')
 
@@ -3499,8 +3728,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     'elapsed_time': last_time,
                     'output_kind': last_kind,
                 }
-                with open(result_file, 'w') as fp:
-                    json.dump(result_data, fp)
+                _write_result_file(result_data)
                 return
 
             except Exception as exc:
@@ -3513,8 +3741,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     'node_x': node_x,
                     'node_y': node_y,
                 }
-                with open(result_file, 'w') as fp:
-                    json.dump(result_data, fp)
+                _write_result_file(result_data)
 
         # Early Spawn for Recursive Mode (Iteration 0) - Executed in Main Thread (After Input Resolution)
         if rec_enabled_captured and rec_current_captured == 0 and rec_loop_start_captured:
@@ -3619,9 +3846,24 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         bg_thread.daemon = True
         bg_thread.start()
 
+        def _resolve_result_watch_timeout() -> float:
+            base_timeout = float(getattr(config, "COMFY_RESULT_WATCH_TIMEOUT_SEC", 300))
+            grace = float(getattr(config, "COMFY_RESULT_WATCH_GRACE_SEC", 60))
+            return base_timeout * max(1, batch_count) + grace
+
         def result_watcher():
-            for _ in range(300):
+            watch_start = time.time()
+            watch_timeout = _resolve_result_watch_timeout()
+            last_read_error = 0.0
+            while time.time() - watch_start < watch_timeout:
                 if os.path.exists(result_file):
+                    try:
+                        if os.path.getsize(result_file) == 0:
+                            time.sleep(0.2)
+                            continue
+                    except Exception:
+                        time.sleep(0.2)
+                        continue
                     try:
                         with open(result_file, 'r') as fp:
                             result_data = json.load(fp)
@@ -4466,9 +4708,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             except Exception as cleanup_error:
                                 log_debug(f'Could not clean up files after failure: {cleanup_error}', 'WARNING')
                     except Exception as exc:
-                        log_debug(f'Error reading result: {exc}', 'ERROR')
+                        now_tick = time.time()
+                        if now_tick - last_read_error > 2.0:
+                            log_debug(f'Error reading result: {exc}', 'WARNING')
+                            last_read_error = now_tick
+                        time.sleep(0.2)
+                        continue
                     break
                 time.sleep(1.0)
+            else:
+                log_debug('Timed out waiting for result file.', 'WARNING')
 
         watcher_thread = threading.Thread(target=result_watcher)
         watcher_thread.daemon = True

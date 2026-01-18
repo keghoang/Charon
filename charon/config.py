@@ -5,6 +5,16 @@ import os
 # =============================================================================
 
 COMFY_URL_BASE = "http://127.0.0.1:8188"
+COMFY_BATCH_TIMEOUT_SEC = 300
+COMFY_QUEUE_GRACE_SEC = 15
+COMFY_RESULT_WATCH_TIMEOUT_SEC = 300
+COMFY_RESULT_WATCH_GRACE_SEC = 60
+COMFY_DOWNLOAD_RETRIES = 4
+COMFY_DOWNLOAD_RETRY_DELAY_SEC = 0.75
+COMFY_DOWNLOAD_MIN_BYTES = 1
+COMFY_OUTPUT_SCAN_LIMIT = 4000
+COMFY_OUTPUT_SCAN_GRACE_SEC = 30
+STATUS_COLOR_UPDATE_INTERVAL_SEC = 0.5
 
 # =============================================================================
 # UI SETTINGS

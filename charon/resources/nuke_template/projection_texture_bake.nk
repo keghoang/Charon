@@ -19,7 +19,6 @@ define_window_layout_xml {<?xml version="1.0" encoding="UTF-8"?>
                     <page id="DAG.1"/>
                     <page id="Curve Editor.1"/>
                     <page id="DopeSheet.1"/>
-                    <page id="DAG.2"/>
                 </dock>
             </splitter>
             <split size="615"/>
@@ -50,24 +49,23 @@ Group {
  inputs 0
  name Projection_Texture_Bake
  knobChanged "n=nuke.thisNode()\nk=nuke.thisKnob()\nif k.name() in ('asset_name', 'subname', 'showPanel'):\n import os, getpass\n p=os.environ.get('BUCK_PROJECT_PATH')\n u=getpass.getuser()\n a=n\['asset_name'].value()\n s=n\['subname'].value()\n if not p:\n  r=n.node('Read11')\n  if r:\n   f=r\['file'].value().replace('\\\\', '/')\n   if '/Production/' in f:\n    p=f.split('/Production/')\[0]\n msg = os.path.join(p, 'Production/MAYA/sourceimages/work.'+u+'/_CHARON', a, s).replace('\\\\', '/') if p else 'Path Not Found'\n n\['path_preview'].setValue(msg)\n"
- xpos -68
- ypos 95
+ xpos -106
+ ypos 147
  addUserKnob {20 User}
  addUserKnob {30 uvsize l "UV size"}
  uvsize {0 8}
  addUserKnob {30 UVcoord l "UV coord"}
- UVcoord {6 0}
  addUserKnob {26 ""}
  addUserKnob {26 output_setting l "OUTPUT SETTINGS"}
  addUserKnob {1 asset_name l "Asset Name"}
- asset_name char_lobsterman
  addUserKnob {1 subname l "Sub Name"}
- subname body
+ addUserKnob {3 output_res l "Output Resolution (px)"}
+ output_res 8000
  addUserKnob {6 aces_mode l "ACES Mode" +STARTLINE}
  aces_mode true
- addUserKnob {26 path_preview l "Preview Path" T //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/MAYA/sourceimages/work.kien/_CHARON/char_lobsterman/body}
+ addUserKnob {26 path_preview l "Preview Path" T //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/MAYA/sourceimages/work.kien/_CHARON/}
  addUserKnob {22 project_texture l "Project Texture" -STARTLINE T "n=nuke.thisNode()\nc=n.input(1)\nif not c:\n  nuke.message('Please connect Charon_Coverage_Rig (Input 2)')\nelse:\n  cam_names=\['CamInit','Cam45','Cam90','Cam135','Cam180','Cam225','Cam270','Cam315']\n  cam_knobs=\['projection_mode','focal','haperture','vaperture','near','far','win_translate','win_scale','winroll','focal_point','fstop','translate','rotate','scaling']\n  cam_data=\{\}\n  tgt_translate=None\n\n  if not hasattr(c, 'begin'):\n    nuke.message('Charon_Coverage_Rig must be a Group/Gizmo node')\n  else:\n    c.begin()\n    try:\n      for name in cam_names:\n        cam=nuke.toNode(name)\n        if not cam:\n          continue\n        values=\{\}\n        for k in cam_knobs:\n          if k in cam.knobs():\n            try:\n              values\[k]=cam\[k].value()\n            except:\n              pass\n        cam_data\[name]=values\n      tgt=nuke.toNode('Target')\n      if tgt and 'translate' in tgt.knobs():\n        try:\n          tgt_translate=tgt\['translate'].value()\n        except:\n          tgt_translate=None\n    finally:\n      c.end()\n\n  if cam_data and hasattr(n, 'begin'):\n    n.begin()\n    try:\n      for name,values in cam_data.items():\n        cam=nuke.toNode(name)\n        if not cam:\n          continue\n        for k,v in values.items():\n          if k in cam.knobs():\n            try:\n              cam\[k].setValue(v)\n            except:\n              pass\n      if tgt_translate is not None:\n        tgt=nuke.toNode('Target')\n        if tgt and 'translate' in tgt.knobs():\n          try:\n            tgt\['translate'].setValue(tgt_translate)\n          except:\n            pass\n    finally:\n      n.end()"}
- addUserKnob {22 write l "Bake Texture" T "n=nuke.thisNode()\nimport os\nimport getpass\n\n# CONFIG\nasset = n\['asset_name'].value()\nsub = n\['subname'].value()\naces = n\['aces_mode'].value()\n\n# Interpret UV size as START and END index (inclusive)\nuvs = n\['uvsize'].value()\nstart_idx = int(uvs\[0])\nend_idx = int(uvs\[1])\n\n# PATH RESOLUTION\n# Prioritize BUCK_PROJECT_PATH as requested\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\n\nif not project_path:\n    # Fallback to guessing if env var is missing\n    ref = n.node('Read11')\n    if ref:\n        path = ref\['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')\[0]\n\nif not project_path:\n    nuke.message(\"Could not determine BUCK_PROJECT_PATH.\")\nelse:\n    # TARGET STRUCTURE: project_path\\Production\\MAYA\\sourceimages\\work.\{user\}\\_CHARON\\asset_name\\sub_name\\\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.\{\}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    \n    if not os.path.exists(out_dir):\n        try:\n            os.makedirs(out_dir)\n        except:\n            pass\n\n    # BAKE\n    with nuke.root():\n        input_node = n\n        aces_node = None\n        \n        if aces:\n            aces_node = nuke.createNode('OCIODisplay', inpanel=False)\n            aces_node.setInput(0, n)\n            aces_node\['colorspace'].setValue('scene_linear')\n            aces_node\['display'].setValue('sRGB Display')\n            aces_node\['view'].setValue('ACES 1.0 SDR-video')\n            input_node = aces_node\n            \n        w = nuke.createNode('Write', inpanel=False)\n        w.setInput(0, input_node)\n        w\['file_type'].setValue('png')\n        w\['channels'].setValue('rgba')\n        \n        if aces:\n            w\['raw'].setValue(True)\n\n        w_exr = nuke.createNode('Write', inpanel=False)\n        w_exr.setInput(0, n)\n        w_exr\['file_type'].setValue('exr')\n        w_exr\['channels'].setValue('rgba')\n        \n        try:\n            for i in range(start_idx, end_idx + 1):\n                u = i % 10\n                v = i // 10\n                udim = 1001 + u + (v * 10)\n                \n                n\['UVcoord'].setValue(\[u, v])\n                \n                fname = \"\{\}_\{\}_\{\}.png\".format(asset, sub, udim)\n                w\['file'].setValue(out_dir + \"/\" + fname)\n                \n                fname_exr = \"\{\}_\{\}_\{\}.exr\".format(asset, sub, udim)\n                w_exr\['file'].setValue(out_dir + \"/\" + fname_exr)\n                \n                nuke.execute(w, nuke.frame(), nuke.frame())\n                nuke.execute(w_exr, nuke.frame(), nuke.frame())\n            \n            nuke.message(\"Bake Complete!\\nSaved to: \" + out_dir)\n        except Exception as e:\n            nuke.message(\"Error during bake: \" + str(e))\n        finally:\n            nuke.delete(w)\n            nuke.delete(w_exr)\n            if aces_node:\n                nuke.delete(aces_node)\n            n\['UVcoord'].setValue(\[0, 0])\n" +STARTLINE}
+ addUserKnob {22 write l "Bake Texture" T "n=nuke.thisNode()\nimport os\nimport getpass\n\n# CONFIG\nasset = n\['asset_name'].value()\nsub = n\['subname'].value()\naces = n\['aces_mode'].value()\noutput_res = int(n\['output_res'].value())\n\n# Interpret UV size as START and END index (inclusive)\nuvs = n\['uvsize'].value()\nstart_idx = int(uvs\[0])\nend_idx = int(uvs\[1])\n\n# PATH RESOLUTION\n# Prioritize BUCK_PROJECT_PATH as requested\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\n\nif not project_path:\n    # Fallback to guessing if env var is missing\n    ref = n.node('Read11')\n    if ref:\n        path = ref\['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')\[0]\n\nif not project_path:\n    nuke.message(\"Could not determine BUCK_PROJECT_PATH.\")\nelse:\n    # TARGET STRUCTURE: project_path\\Production\\MAYA\\sourceimages\\work.\{user\}\\_CHARON\\asset_name\\sub_name\\\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.\{\}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    \n    if not os.path.exists(out_dir):\n        try:\n            os.makedirs(out_dir)\n        except:\n            pass\n\n    # BAKE\n    with nuke.root():\n        root = nuke.root()\n        original_format = root\['format'].value()\n        if output_res > 0:\n            temp_name = "CharonBake_{}x{}".format(output_res, output_res)\n            try:\n                nuke.addFormat("{} {} 0 0 {} {} 1 {}".format(output_res, output_res, output_res, output_res, temp_name))\n                root\['format'].setValue(temp_name)\n            except Exception:\n                pass\n        input_node = n\n        aces_node = None\n        \n        if aces:\n            aces_node = nuke.createNode('OCIODisplay', inpanel=False)\n            aces_node.setInput(0, n)\n            aces_node\['colorspace'].setValue('scene_linear')\n            aces_node\['display'].setValue('sRGB Display')\n            aces_node\['view'].setValue('ACES 1.0 SDR-video')\n            input_node = aces_node\n            \n        w = nuke.createNode('Write', inpanel=False)\n        w.setInput(0, input_node)\n        w\['file_type'].setValue('png')\n        w\['channels'].setValue('rgba')\n        \n        if aces:\n            w\['raw'].setValue(True)\n\n        w_exr = nuke.createNode('Write', inpanel=False)\n        w_exr.setInput(0, n)\n        w_exr\['file_type'].setValue('exr')\n        w_exr\['channels'].setValue('rgba')\n        \n        try:\n            for i in range(start_idx, end_idx + 1):\n                u = i % 10\n                v = i // 10\n                udim = 1001 + u + (v * 10)\n                \n                n\['UVcoord'].setValue(\[u, v])\n                \n                fname = \"\{\}_\{\}_\{\}.png\".format(asset, sub, udim)\n                w\['file'].setValue(out_dir + \"/\" + fname)\n                \n                fname_exr = \"\{\}_\{\}_\{\}.exr\".format(asset, sub, udim)\n                w_exr\['file'].setValue(out_dir + \"/\" + fname_exr)\n                \n                nuke.execute(w, nuke.frame(), nuke.frame())\n                nuke.execute(w_exr, nuke.frame(), nuke.frame())\n            \n            nuke.message(\"Bake Complete!\\nSaved to: \" + out_dir)\n        except Exception as e:\n            nuke.message(\"Error during bake: \" + str(e))\n        finally:\n            nuke.delete(w)\n            nuke.delete(w_exr)\n            if aces_node:\n                nuke.delete(aces_node)\n            n\['UVcoord'].setValue(\[0, 0])\n            root\['format'].setValue(original_format)\n" +STARTLINE}
  addUserKnob {22 open_folder l "Open Output Location" -STARTLINE T "n=nuke.thisNode()\nimport os, getpass, subprocess\nasset = n\['asset_name'].value()\nsub = n\['subname'].value()\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\nif not project_path:\n    ref = n.node('Read11')\n    if ref:\n        path = ref\['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')\[0]\nif project_path:\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.\{\}\".format(user), \"_CHARON\", asset, sub).replace('\\\\', '/')\n    if os.path.exists(out_dir):\n        if os.name == 'nt':\n            os.startfile(out_dir)\n        elif os.name == 'posix':\n            subprocess.Popen(\['open', out_dir])\n        else:\n            subprocess.Popen(\['xdg-open', out_dir])\n    else:\n        nuke.message('Folder does not exist yet: ' + out_dir)\nelse:\n    nuke.message('Could not determine project path.')"}
 }
  BackdropNode {
@@ -80,24 +78,31 @@ Group {
   ypos -132
   bdheight 120
  }
+ Input {
+  inputs 0
+  name Charon_Coverage_Rig
+  xpos -566
+  ypos -29
+  number 1
+ }
  Axis3 {
   inputs 0
-  translate {0 150 0}
+  translate {0 132.3999939 0}
   name Target
   xpos -550
   ypos 158
  }
-set N1899b700 [stack 0]
+set Nee0a2000 [stack 0]
 push 0
  Camera3 {
   inputs 2
-  translate {0 151.3999939 138.6000061}
+  translate {0 132.3999939 161.1999969}
   focal 100
   name CamInit
   xpos -550
   ypos 358
  }
-set N18a46000 [stack 0]
+set Nee0a2500 [stack 0]
  Dot {
   name Dot1
   xpos -428
@@ -108,14 +113,14 @@ set N18a46000 [stack 0]
   xpos -428
   ypos 699
  }
-push $N18a46000
+push $Nee0a2500
  Input {
   inputs 0
   name Main
   xpos -744
   ypos 291
  }
-set N18792d00 [stack 0]
+set Nee098900 [stack 0]
 add_layer {projection_CamInit projection_CamInit.red projection_CamInit.green projection_CamInit.blue}
  Shuffle2 {
   fromInput1 {
@@ -135,6 +140,7 @@ add_layer {projection_CamInit projection_CamInit.red projection_CamInit.green pr
  Project3D2 {
   inputs 2
   project_on front
+  crop false
   occlusion_mode world
   name Project3D1
   xpos -560
@@ -146,88 +152,25 @@ add_layer {projection_CamInit projection_CamInit.red projection_CamInit.green pr
   name UVTile1
   xpos -560
   ypos 548
-  disable true
  }
- set C18a46f00 [stack 0]
+ set Cee0a3400 [stack 0]
  ReadGeo2 {
-  file //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/MAYA/sourceimages/work.kien/_99_CHARON/_TEXTURING/char_lobsterman/geo/all.abc
-  version 10
-  read_on_each_frame true
-  sub_frame false
-  use_geometry_colors false
+  version 13
   range_first 0
-  range_last 0
+  range_last 801
   cast_shadow false
   receive_shadow false
-  scene_view {
-   {0}
-   imported:
-   0
-   1
-   2
-   3
-   4
-   5
-   6
-   7
-   8
-   9
-   10
-   11
-   12
-   13
-   14
-   15
-   16
-   17
-   18
-   19
-   20
-   selected:
-   3
-   8
-   4
-   5
-   6
-   7
-   12
-   11
-   10
-   9
-   items:
-   /root/GEOgrp/eyebrows_geo/eyebrows_geoShape
-   /root/GEOgrp/stashe_geo/stashe_geoShape
-   /root/GEOgrp/hat_geo/hat_geoShape
-   /root/GEOgrp/body_geo/body_geoShape
-   /root/GEOgrp/clothing_grp/gloves_geo/gloves_geoShape
-   /root/GEOgrp/clothing_grp/shirt_geo/shirt_geoShape
-   /root/GEOgrp/clothing_grp/waderStraps_geo/waderStraps_geoShape
-   /root/GEOgrp/clothing_grp/wader_geo/wader_geoShape
-   /root/GEOgrp/clothing_grp/boots_geo/boots_geoShape
-   /root/GEOgrp/eyes_grp/eyes_geo/eye_R_grp/eye_R_geo/eye_R_geoShape
-   /root/GEOgrp/eyes_grp/eyes_geo/eye_R_grp/duct_R_geo/duct_R_geoShape
-   /root/GEOgrp/eyes_grp/eyes_geo/eye_L_grp/eye_L_geo/eye_L_geoShape
-   /root/GEOgrp/eyes_grp/eyes_geo/eye_L_grp/duct_L_geo/duct_L_geoShape
-   /root/GEOgrp/innerMouth_grp/tongue_geo/tongue_geoShape
-   /root/GEOgrp/innerMouth_grp/lowerTeeth_geo/lowerTeeth_geoShape
-   /root/GEOgrp/innerMouth_grp/upperTeeth_geo/upperTeeth_geoShape
-   /root/GEOgrp/innerMouth_grp/upperGums_geo/upperGums_geoShape
-   /root/GEOgrp/innerMouth_grp/lowerGums_geo/lowerGums_geoShape
-   /root/GEOgrp/head_geo/head_geoShape
-   /root/GEOgrp/eyelashes_geo/eyelashes_geoShape
-   /root/GEOgrp/hair_grp/hair_geo/hair_geoShape
-  }
   name ReadGeo2
   xpos -560
   ypos 602
  }
- set C18a47400 [stack 0]
+ set Cee0a3900 [stack 0]
 push 0
 add_layer {N N.red N.green N.blue}
  ScanlineRender {
   inputs 3
   conservative_shader_sampling false
-  antialiasing medium
+  antialiasing high
   projection_mode uv
   motion_vectors_type off
   output_shader_vectors true
@@ -236,13 +179,13 @@ add_layer {N N.red N.green N.blue}
   xpos -560
   ypos 696
  }
- set C18a47900 [stack 0]
+ set Cee0a3e00 [stack 0]
  Dot {
   name Dot38
   xpos -526
   ypos 765
  }
-set N189abc00 [stack 0]
+set Nee0cac00 [stack 0]
  Group {
   name NormalsRotate12
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -348,13 +291,13 @@ set N189abc00 [stack 0]
    xpos 0
    ypos -347
   }
-set N18a49200 [stack 0]
+set Nee0a5700 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N18a49200
+push $Nee0a5700
   Unpremult {
    name Unpremult1
    xpos 0
@@ -495,17 +438,17 @@ push 0
   xpos 3240
   ypos 1101
  }
-push $N1899b700
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {-1.697360538e-14 151.3999939 -138.6000061}
+  translate {-1.974130603e-14 132.3999939 -161.1999969}
   focal 100
   name Cam180
   xpos 3044
   ypos 338
  }
-set N18b28d00 [stack 0]
+set N1d3e9200 [stack 0]
  Dot {
   name Dot14
   xpos 3165
@@ -516,8 +459,8 @@ set N18b28d00 [stack 0]
   xpos 3165
   ypos 679
  }
-push $N18b28d00
-push $N18792d00
+push $N1d3e9200
+push $Nee098900
 add_layer {projection_Cam180 projection_Cam180.red projection_Cam180.green projection_Cam180.blue}
  Shuffle2 {
   fromInput1 {
@@ -542,18 +485,18 @@ add_layer {projection_Cam180 projection_Cam180.red projection_Cam180.green proje
   xpos 3034
   ypos 502
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos 3034
   ypos 539
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos 3033
   ypos 592
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos 3033
   ypos 676
@@ -564,7 +507,7 @@ clone $C18a47900 {
   xpos 3068
   ypos 1049
  }
-set N18ad7800 [stack 0]
+set N1d42c800 [stack 0]
  Group {
   name NormalsRotate5
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -670,13 +613,13 @@ set N18ad7800 [stack 0]
    xpos 0
    ypos -347
   }
-set N1b9e4300 [stack 0]
+set N1d43a800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1b9e4300
+push $N1d43a800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -812,18 +755,18 @@ push 0
   xpos 3130
   ypos 1107
  }
-push $N18ad7800
-push $N1899b700
+push $N1d42c800
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {98.00500419 151.3999939 -98.00500419}
+  translate {113.985611 132.3999939 -113.985611}
   focal 100
   name Cam225
   xpos 2628
   ypos 351
  }
-set N1bad0000 [stack 0]
+set N1d540500 [stack 0]
  Dot {
   name Dot23
   xpos 2749
@@ -834,8 +777,8 @@ set N1bad0000 [stack 0]
   xpos 2749
   ypos 692
  }
-push $N1bad0000
-push $N18792d00
+push $N1d540500
+push $Nee098900
 add_layer {projection_Cam225 projection_Cam225.red projection_Cam225.green projection_Cam225.blue}
  Shuffle2 {
   fromInput1 {
@@ -860,18 +803,18 @@ add_layer {projection_Cam225 projection_Cam225.red projection_Cam225.green proje
   xpos 2618
   ypos 515
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos 2618
   ypos 539
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos 2618
   ypos 603
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos 2618
   ypos 689
@@ -882,7 +825,7 @@ clone $C18a47900 {
   xpos 2652
   ypos 1062
  }
-set N1ba5f400 [stack 0]
+set N1d570400 [stack 0]
  Group {
   name NormalsRotate8
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -987,13 +930,13 @@ set N1ba5f400 [stack 0]
    xpos 0
    ypos -347
   }
-set N1bad3200 [stack 0]
+set N1d543700 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bad3200
+push $N1d543700
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1124,22 +1067,49 @@ push 0
  FilterErode {
   channels alpha
   size 4.5
-  name FilterErode6
+  name FilterErode2
   xpos 2708
-  ypos 1099
+  ypos 1083
+  disable true
  }
-push $N1ba5f400
-push $N1899b700
+ set C1d628800 [stack 0]
+push $N1d570400
+ Camera3 {
+  inputs 0
+  name Camera1
+  xpos -837
+  ypos 1061
+ }
+clone $Cee0a3900 {
+  inputs 0
+  xpos -695
+  ypos 985
+  selected false
+ }
+push 0
+clone $Cee0a3e00 {
+  inputs 3
+  xpos -695
+  ypos 1082
+  selected false
+ }
+ Invert {
+  name Invert5
+  xpos -478
+  ypos 1076
+ }
+set N1d664500 [stack 0]
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {98.00500419 151.3999939 98.00500419}
+  translate {113.985611 132.3999939 113.985611}
   focal 100
   name Cam315
   xpos 1665
   ypos 338
  }
-set N1bb9e800 [stack 0]
+set N1d664a00 [stack 0]
  Dot {
   name Dot17
   xpos 1786
@@ -1150,8 +1120,8 @@ set N1bb9e800 [stack 0]
   xpos 1786
   ypos 679
  }
-push $N1bb9e800
-push $N18792d00
+push $N1d664a00
+push $Nee098900
 add_layer {projection_Cam315 projection_Cam315.red projection_Cam315.green projection_Cam315.blue}
  Shuffle2 {
   fromInput1 {
@@ -1176,18 +1146,18 @@ add_layer {projection_Cam315 projection_Cam315.red projection_Cam315.green proje
   xpos 1655
   ypos 502
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos 1655
   ypos 526
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos 1655
   ypos 593
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos 1655
   ypos 676
@@ -1198,32 +1168,41 @@ clone $C18a47900 {
   xpos 1689
   ypos 917
  }
-set N1bbbb000 [stack 0]
+set N1d6ac400 [stack 0]
  Dot {
   name Dot45
   xpos 1689
   ypos 964
  }
-set N1bbbb400 [stack 0]
+set N1d6ac800 [stack 0]
  Invert {
   name Invert4
-  xpos 1730
+  xpos 1710
   ypos 955
  }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade12
+  xpos 1796
+  ypos 961
+ }
+ set C1d667200 [stack 0]
  Erode {
   channels all
   size -23
   blur 0.365
   name Erode4
-  xpos 1852
+  xpos 1876
   ypos 955
  }
-push $N1bbbb000
+push $N1d6ac400
  Group {
   name NormalsRotate11
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
   tile_color 0xff00ff
-  xpos 1833
+  xpos 1791
   ypos 914
   addUserKnob {20 User}
   addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
@@ -1323,13 +1302,13 @@ push $N1bbbb000
    xpos 0
    ypos -347
   }
-set N1bbf2800 [stack 0]
+set N1d6d7200 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bbf2800
+push $N1d6d7200
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1485,17 +1464,17 @@ push 0
   xpos 2401
   ypos 1131
  }
-push $N1899b700
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {138.6000061 151.3999939 -2.546040808e-14}
+  translate {161.1999969 132.3999939 -2.961195904e-14}
   focal 100
   name Cam270
   xpos 2208
   ypos 351
  }
-set N1bcde500 [stack 0]
+set N1d798f00 [stack 0]
  Dot {
   name Dot20
   xpos 2329
@@ -1506,8 +1485,8 @@ set N1bcde500 [stack 0]
   xpos 2329
   ypos 692
  }
-push $N1bcde500
-push $N18792d00
+push $N1d798f00
+push $Nee098900
 add_layer {projection_Cam270 projection_Cam270.red projection_Cam270.green projection_Cam270.blue}
  Shuffle2 {
   fromInput1 {
@@ -1532,18 +1511,18 @@ add_layer {projection_Cam270 projection_Cam270.red projection_Cam270.green proje
   xpos 2198
   ypos 515
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos 2198
   ypos 539
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos 2198
   ypos 604
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos 2197
   ypos 689
@@ -1554,7 +1533,7 @@ clone $C18a47900 {
   xpos 2232
   ypos 1050
  }
-set N1bd40000 [stack 0]
+set N1d7bb400 [stack 0]
  Group {
   name NormalsRotate7
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -1658,13 +1637,13 @@ set N1bd40000 [stack 0]
    xpos 0
    ypos -347
   }
-set N1bce1700 [stack 0]
+set N1d824500 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bce1700
+push $N1d824500
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1792,12 +1771,10 @@ push 0
    ypos 623
   }
  end_group
- FilterErode {
-  channels alpha
-  size 4.5
-  name FilterErode7
+clone $C1d628800 {
   xpos 2288
-  ypos 1092
+  ypos 1078
+  selected false
  }
  Grade {
   inputs 1+1
@@ -1807,28 +1784,35 @@ push 0
   xpos 2288
   ypos 1128
  }
-push $N1bd40000
-push $N189abc00
+push $N1d7bb400
+push $N1d664500
+push $Nee0cac00
  Dot {
   name Dot39
   xpos -526
   ypos 812
  }
-set N1bd41000 [stack 0]
+set N1d8b2400 [stack 0]
  Invert {
   name Invert3
   xpos -485
   ypos 803
+ }
+clone $C1d667200 {
+  inputs 1+1
+  xpos -418
+  ypos 809
+  selected false
  }
  Erode {
   channels all
   size -23
   blur 0.365
   name Erode3
-  xpos -363
+  xpos -341
   ypos 803
  }
-push $N189abc00
+push $Nee0cac00
  Group {
   name NormalsRotate9
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -1933,13 +1917,13 @@ push $N189abc00
    xpos 0
    ypos -347
   }
-set N1bdf9200 [stack 0]
+set N1d8da800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bdf9200
+push $N1d8da800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2095,13 +2079,13 @@ push 0
   xpos 1887
   ypos 1137
  }
-push $N1bbbb400
+push $N1d6ac800
  Dot {
   name Dot19
   xpos 1689
   ypos 1049
  }
-set N1bebd000 [stack 0]
+set N1d9b0400 [stack 0]
  Group {
   name NormalsRotate6
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -2205,13 +2189,13 @@ set N1bebd000 [stack 0]
    xpos 0
    ypos -347
   }
-set N1bec5e00 [stack 0]
+set N1d9a3400 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bec5e00
+push $N1d9a3400
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2339,12 +2323,10 @@ push 0
    ypos 623
   }
  end_group
- FilterErode {
-  channels alpha
-  size 4.5
-  name FilterErode8
+clone $C1d628800 {
   xpos 1749
-  ypos 1098
+  ypos 1084
+  selected false
  }
  Grade {
   inputs 1+1
@@ -2354,18 +2336,18 @@ push 0
   xpos 1749
   ypos 1134
  }
-push $N1bebd000
-push $N1899b700
+push $N1d9b0400
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {-98.00500419 151.3999939 -98.00500419}
+  translate {-113.985611 132.3999939 -113.985611}
   focal 100
   name Cam135
   xpos 1064
   ypos 338
  }
-set N1bf98000 [stack 0]
+set N1da55200 [stack 0]
  Dot {
   name Dot11
   xpos 1185
@@ -2376,8 +2358,8 @@ set N1bf98000 [stack 0]
   xpos 1185
   ypos 679
  }
-push $N1bf98000
-push $N18792d00
+push $N1da55200
+push $Nee098900
 add_layer {projection_Cam135 projection_Cam135.red projection_Cam135.green projection_Cam135.blue}
  Shuffle2 {
   fromInput1 {
@@ -2402,18 +2384,18 @@ add_layer {projection_Cam135 projection_Cam135.red projection_Cam135.green proje
   xpos 1054
   ypos 502
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos 1054
   ypos 538
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos 1054
   ypos 599
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos 1053
   ypos 676
@@ -2424,7 +2406,7 @@ clone $C18a47900 {
   xpos 1088
   ypos 1049
  }
-set N1cf76c00 [stack 0]
+set N1dab6000 [stack 0]
  Group {
   name NormalsRotate3
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -2528,13 +2510,13 @@ set N1cf76c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N1bf9b200 [stack 0]
+set N1da8e800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bf9b200
+push $N1da8e800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2662,25 +2644,24 @@ push 0
    ypos 623
   }
  end_group
- FilterErode {
-  channels alpha
-  size 4.5
-  name FilterErode4
+clone $C1d628800 {
   xpos 1148
-  ypos 1106
+  ypos 1088
+  selected false
  }
-push $N1cf76c00
-push $N1899b700
+push $N1dab6000
+push $N1d664500
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {-98.00500419 151.3999939 98.00500419}
+  translate {-113.985611 132.3999939 113.985611}
   focal 100
   name Cam45
   xpos -31
   ypos 353
  }
-set N1d03e800 [stack 0]
+set N1db45e00 [stack 0]
  Dot {
   name Dot3
   xpos 90
@@ -2691,8 +2672,8 @@ set N1d03e800 [stack 0]
   xpos 90
   ypos 694
  }
-push $N1d03e800
-push $N18792d00
+push $N1db45e00
+push $Nee098900
 add_layer {projection_Cam45 projection_Cam45.red projection_Cam45.green projection_Cam45.blue}
  Shuffle2 {
   fromInput1 {
@@ -2706,7 +2687,7 @@ add_layer {projection_Cam45 projection_Cam45.red projection_Cam45.green projecti
   }
   mappings "4 projection_Cam45.red 0 0 rgba.red 0 0 projection_Cam45.green 0 1 rgba.green 0 1 projection_Cam45.blue 0 2 rgba.blue 0 2 white -1 -1 rgba.alpha 0 3"
   name Shuffle2
-  xpos -171
+  xpos -170
   ypos 517
  }
  Project3D2 {
@@ -2717,18 +2698,18 @@ add_layer {projection_Cam45 projection_Cam45.red projection_Cam45.green projecti
   xpos -41
   ypos 517
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos -41
   ypos 541
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos -41
   ypos 600
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos -41
   ypos 691
@@ -2739,27 +2720,33 @@ clone $C18a47900 {
   xpos -6
   ypos 914
  }
-set N1d07c800 [stack 0]
+set N1dab7c00 [stack 0]
  Dot {
   name Dot33
   xpos -6
   ypos 961
  }
-set N1d07cc00 [stack 0]
+set N1dbba000 [stack 0]
  Invert {
   name Invert2
-  xpos 35
+  xpos 29
   ypos 952
+ }
+clone $C1d667200 {
+  inputs 1+1
+  xpos 122
+  ypos 958
+  selected false
  }
  Erode {
   channels all
   size -23
   blur 0.365
   name Erode2
-  xpos 157
+  xpos 199
   ypos 952
  }
-push $N1d07c800
+push $N1dab7c00
  Group {
   name NormalsRotate10
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -2864,13 +2851,13 @@ push $N1d07c800
    xpos 0
    ypos -347
   }
-set N1d096800 [stack 0]
+set N1dbf0a00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1d096800
+push $N1dbf0a00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3026,17 +3013,17 @@ push 0
   xpos 706
   ypos 1128
  }
-push $N1899b700
+push $Nee0a2000
 push 0
  Camera3 {
   inputs 2
-  translate {-138.6000061 151.3999939 8.486802692e-15}
+  translate {-161.1999969 132.3999939 9.870653014e-15}
   focal 100
   name Cam90
   xpos 512
   ypos 351
  }
-set N1d174500 [stack 0]
+set N1dc88300 [stack 0]
  Dot {
   name Dot8
   xpos 633
@@ -3047,8 +3034,8 @@ set N1d174500 [stack 0]
   xpos 633
   ypos 692
  }
-push $N1d174500
-push $N18792d00
+push $N1dc88300
+push $Nee098900
 add_layer {projection_Cam90 projection_Cam90.red projection_Cam90.green projection_Cam90.blue}
  Shuffle2 {
   fromInput1 {
@@ -3073,18 +3060,18 @@ add_layer {projection_Cam90 projection_Cam90.red projection_Cam90.green projecti
   xpos 502
   ypos 515
  }
-clone $C18a46f00 {
+clone $Cee0a3400 {
   xpos 502
   ypos 539
   selected false
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   xpos 502
   ypos 596
   selected false
  }
 push 0
-clone $C18a47900 {
+clone $Cee0a3e00 {
   inputs 3
   xpos 502
   ypos 689
@@ -3095,7 +3082,7 @@ clone $C18a47900 {
   xpos 536
   ypos 1062
  }
-set N1d17f800 [stack 0]
+set N1dcacc00 [stack 0]
  Group {
   name NormalsRotate4
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -3199,13 +3186,13 @@ set N1d17f800 [stack 0]
    xpos 0
    ypos -347
   }
-set N1d177700 [stack 0]
+set N1dcd9900 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1d177700
+push $N1dcd9900
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3333,12 +3320,10 @@ push 0
    ypos 623
   }
  end_group
- FilterErode {
-  channels alpha
-  size 4.5
-  name FilterErode3
+clone $C1d628800 {
   xpos 592
   ypos 1083
+  selected false
  }
  Grade {
   inputs 1+1
@@ -3348,34 +3333,41 @@ push 0
   xpos 592
   ypos 1125
  }
-push $N1d17f800
-push $N1bd41000
+push $N1dcacc00
+push $N1d664500
+push $N1d8b2400
  Dot {
   name Dot6
   xpos -525
   ypos 910
  }
-set N1d21c800 [stack 0]
+set N1dcadc00 [stack 0]
  Dot {
   name Dot26
   xpos -525
   ypos 957
  }
-set N1d21cc00 [stack 0]
+set N1ddb2000 [stack 0]
  Invert {
   name Invert1
-  xpos -484
+  xpos -501
   ypos 948
+ }
+clone $C1d667200 {
+  inputs 1+1
+  xpos -412
+  ypos 954
+  selected false
  }
  Erode {
   channels all
   size -23
   blur 0.365
   name Erode1
-  xpos -362
+  xpos -328
   ypos 948
  }
-push $N1d21c800
+push $N1dcadc00
  Group {
   name NormalsRotate2
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -3480,13 +3472,13 @@ push $N1d21c800
    xpos 0
    ypos -347
   }
-set N1d28f200 [stack 0]
+set N1de02000 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1d28f200
+push $N1de02000
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3642,13 +3634,13 @@ push 0
   xpos 187
   ypos 1124
  }
-push $N1d07cc00
+push $N1dbba000
  Dot {
   name Dot7
   xpos -7
   ypos 1064
  }
-set N1d368c00 [stack 0]
+set N1de94000 [stack 0]
  Group {
   name NormalsRotate1
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -3753,13 +3745,13 @@ set N1d368c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N1d35be00 [stack 0]
+set N1de82800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1d35be00
+push $N1de82800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3887,12 +3879,10 @@ push 0
    ypos 623
   }
  end_group
- FilterErode {
-  channels alpha
-  size 4.5
-  name FilterErode2
+clone $C1d628800 {
   xpos 49
   ypos 1085
+  selected false
  }
  Grade {
   inputs 1+1
@@ -3902,8 +3892,8 @@ push 0
   xpos 49
   ypos 1121
  }
-push $N1d368c00
-push $N1d21cc00
+push $N1de94000
+push $N1ddb2000
  Dot {
   name Dot5
   xpos -525
@@ -3925,7 +3915,7 @@ push $N1d21cc00
   inputs 2+1
   name Merge3
   xpos 1054
-  ypos 1156
+  ypos 1162
  }
  Merge2 {
   inputs 2+1
@@ -3961,40 +3951,56 @@ push $N1d21cc00
  Dot {
   name Dot27
   xpos 3068
-  ypos 1392
+  ypos 1372
  }
-set N1d5d8c00 [stack 0]
+set N1f15a000 [stack 0]
  Keyer {
   operation "luminance key"
   range {0.5988737658 1 1 1}
   name Keyer1
   xpos 3124
-  ypos 1383
+  ypos 1363
  }
-push $N1d5d8c00
+push $N1f15a000
  Grade {
   inputs 1+1
   white 0.72
+  mix 0.52
   name Grade1
   xpos 3034
-  ypos 1446
+  ypos 1426
+ }
+ Dot {
+  name Dot50
+  xpos 3068
+  ypos 1465
+ }
+set N1f15a400 [stack 0]
+ Keyer {
+  operation "luminance key"
+  range {0.6627105376 0.9503800409 1 1}
+  name Keyer2
+  xpos 3124
+  ypos 1456
+ }
+push $N1f15a400
+ Grade {
+  inputs 1+1
+  white 0.72
+  mix 0.67
+  name Grade11
+  xpos 3034
+  ypos 1519
  }
  Output {
   name Output1
   xpos 3034
-  ypos 1507
+  ypos 1603
  }
-clone $C18a47400 {
+clone $Cee0a3900 {
   inputs 0
   xpos -779
-  ypos -62
+  ypos -63
   selected false
- }
- Input {
-  inputs 0
-  name Charon_Coverage_Rig
-  xpos -566
-  ypos -29
-  number 1
  }
 end_group
