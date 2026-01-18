@@ -783,42 +783,66 @@ def _inject_png_text_chunk(image_path: str, key: str, text: str) -> None:
         log_debug('File is not a PNG; skipping metadata injection.', 'WARNING')
         return
 
+    def _extract_text_key(chunk_type: bytes, chunk_data: bytes) -> str:
+        if chunk_type not in (b'tEXt', b'zTXt', b'iTXt'):
+            return ""
+        try:
+            key_bytes = chunk_data.split(b'\x00', 1)[0]
+        except Exception:
+            return ""
+        try:
+            return key_bytes.decode('latin-1', errors='replace')
+        except Exception:
+            return ""
+
+    chunks = []
     cursor = 8
-    iend_index = None
+    found_iend = False
     while cursor + 8 <= len(data):
         length = int.from_bytes(data[cursor:cursor + 4], 'big')
         chunk_type = data[cursor + 4:cursor + 8]
         total_length = 12 + length
         if cursor + total_length > len(data):
             break
+        chunk_data = data[cursor + 8:cursor + 8 + length]
+        raw_chunk = data[cursor:cursor + total_length]
+        if _extract_text_key(chunk_type, chunk_data) != key:
+            chunks.append(raw_chunk)
         if chunk_type == b'IEND':
-            iend_index = cursor
+            found_iend = True
             break
         cursor += total_length
 
-    if iend_index is None:
+    if not found_iend:
         log_debug('Could not locate IEND chunk; skipping metadata injection.', 'WARNING')
         return
-
-    signature = data[:8]
-    before_iend = data[8:iend_index]
-    after_iend = data[iend_index:]
 
     try:
         payload = key.encode('latin-1') + b'\x00' + text.encode('latin-1')
     except UnicodeEncodeError:
         payload = key.encode('latin-1', errors='ignore') + b'\x00' + text.encode('utf-8', errors='ignore')
 
-    chunk = bytearray()
-    chunk.extend(len(payload).to_bytes(4, 'big'))
-    chunk.extend(b'tEXt')
-    chunk.extend(payload)
+    new_chunk = bytearray()
+    new_chunk.extend(len(payload).to_bytes(4, 'big'))
+    new_chunk.extend(b'tEXt')
+    new_chunk.extend(payload)
     crc = zlib.crc32(b'tEXt' + payload) & 0xFFFFFFFF
-    chunk.extend(crc.to_bytes(4, 'big'))
+    new_chunk.extend(crc.to_bytes(4, 'big'))
+
+    rebuilt = bytearray()
+    rebuilt.extend(data[:8])
+    inserted = False
+    for raw_chunk in chunks:
+        if not inserted and raw_chunk[4:8] == b'IEND':
+            rebuilt.extend(new_chunk)
+            inserted = True
+        rebuilt.extend(raw_chunk)
+    if not inserted:
+        rebuilt.extend(new_chunk)
 
     try:
         with open(image_path, 'wb') as handle:
-            handle.write(signature + before_iend + chunk + after_iend)
+            handle.write(rebuilt)
     except Exception as exc:
         log_debug(f'Failed to write PNG metadata: {exc}', 'WARNING')
 
@@ -843,6 +867,17 @@ def embed_png_workflow(image_path: str, workflow_payload: str) -> None:
         _inject_png_text_chunk(image_path, 'workflow', workflow_payload)
     except Exception as exc:
         log_debug(f'Failed to embed workflow metadata: {exc}', 'WARNING')
+
+
+def embed_png_prompt(image_path: str, prompt_payload: str) -> None:
+    if not image_path or not image_path.lower().endswith('.png'):
+        return
+    if not prompt_payload:
+        return
+    try:
+        _inject_png_text_chunk(image_path, 'prompt', prompt_payload)
+    except Exception as exc:
+        log_debug(f'Failed to embed prompt metadata: {exc}', 'WARNING')
 
 
 def _batch_nav_command(step: int) -> str:
@@ -3481,7 +3516,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         log_debug(
                             f"Normalized {normalized_paths} model path value(s) after Nuke reload."
                         )
-                    
+                    prompt_payload_str = ""
+                    workflow_payload_str = ""
+                    try:
+                        prompt_payload_str = json.dumps(
+                            prompt_payload, separators=(",", ":"), ensure_ascii=True
+                        )
+                    except Exception as exc:
+                        log_debug(f"Failed to serialize prompt payload for PNG embed: {exc}", "WARNING")
+                    workflow_payload_str = ""
+
                     debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{batch_index}.json').replace('\\', '/')
                     try:
                         os.makedirs(os.path.dirname(debug_file), exist_ok=True)
@@ -3709,8 +3753,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 'seed_offset': seed_offset,
                                             }
                                             embed_png_metadata(normalized_output_path, metadata_payload)
-                                            if workflow_data_str:
-                                                embed_png_workflow(normalized_output_path, workflow_data_str)
+                                            if prompt_payload_str:
+                                                embed_png_prompt(normalized_output_path, prompt_payload_str)
                                         batch_entry = {
                                             'batch_index': batch_index + 1,
                                             'batch_total': batch_count,
