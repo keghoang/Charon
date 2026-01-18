@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import os
 import re
 import sys
@@ -22,11 +23,82 @@ OUTPUT_CATEGORY_2D = "2D"
 OUTPUT_CATEGORY_3D = "3D"
 OUTPUT_PREFIX = "CharonOutput_v"
 OUTPUT_DIRECTORY_TEMPLATE = os.path.join("{category}", "{workflow}", "CharonOp_{node_id}")
+_NUKE_SCRIPT_VERSION_RE = re.compile(r"(?i)(?P<stem>.+?)(?:[._-])v\d+$")
 
 
 def get_default_comfy_launch_path():
     # Default to an empty value; users must supply a ComfyUI launch path in settings.
     return ""
+
+
+def _strip_nuke_script_version(filename: str) -> str:
+    if not filename:
+        return filename
+    stem, extension = os.path.splitext(filename)
+    match = _NUKE_SCRIPT_VERSION_RE.match(stem)
+    if match:
+        candidate = match.group("stem")
+        if candidate:
+            stem = candidate
+    return f"{stem}{extension}"
+
+
+def normalize_nuke_script_path(script_path: str) -> str:
+    """
+    Normalize a Nuke script path for stable hashing.
+    Strips version suffixes like _v001 from the filename.
+    """
+    if not script_path:
+        return ""
+    cleaned = str(script_path).strip().strip('"')
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    if lowered in {"root", NUKE_FALLBACK_NAME, f"{NUKE_FALLBACK_NAME}.nk"}:
+        return ""
+    normalized = os.path.normpath(cleaned)
+    folder = os.path.dirname(normalized)
+    basename = os.path.basename(normalized)
+    basename = _strip_nuke_script_version(basename)
+    normalized = os.path.normpath(os.path.join(folder, basename)) if folder else basename
+    return normalized.replace("\\", "/").lower()
+
+
+def compute_nuke_script_hash(script_path: str) -> str:
+    normalized = normalize_nuke_script_path(script_path)
+    if not normalized:
+        return ""
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+
+def get_nuke_script_hash(nuke_module=None) -> str:
+    module = nuke_module
+    if module is None:
+        try:
+            import nuke as module  # type: ignore
+        except Exception:
+            module = None
+    if module is None:
+        return ""
+    try:
+        root = module.root()
+    except Exception:
+        root = None
+    if root is None:
+        return ""
+    script_reference = ""
+    try:
+        script_reference = root.name()
+    except Exception:
+        script_reference = ""
+    if not script_reference:
+        try:
+            name_knob = root.knob("name")
+            if name_knob is not None:
+                script_reference = str(name_knob.value() or "")
+        except Exception:
+            script_reference = ""
+    return compute_nuke_script_hash(script_reference)
 
 
 def _normalize_charon_root(base_dir: Optional[str]) -> str:

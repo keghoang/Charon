@@ -20,6 +20,7 @@ from .conversion_cache import (
 from .paths import (
     allocate_charon_output_path,
     get_default_comfy_launch_path,
+    get_nuke_script_hash,
     get_placeholder_image_path,
     _normalize_charon_root,
     resolve_comfy_environment,
@@ -28,7 +29,7 @@ from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from .workflow_overrides import apply_validation_model_overrides
 from .comfy_client import ComfyUIClient
 from . import config, preferences
-from .node_factory import reset_charon_node_state
+from .node_factory import generate_charon_node_id, reset_charon_node_state, update_charon_node_identity
 from .utilities import (
     get_current_user_slug,
     status_to_gl_color,
@@ -1483,6 +1484,12 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 return ""
             return text[:12]
 
+        def _normalize_script_hash(value: Optional[str]) -> str:
+            if not value:
+                return ""
+            text = str(value).strip().lower()
+            return text
+
         def _safe_knob_value(owner, knob_name: str) -> Optional[str]:
             try:
                 knob = owner.knob(knob_name)
@@ -1494,6 +1501,49 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 return knob.value()
             except Exception:
                 return None
+
+        def _read_script_hash(owner) -> str:
+            stored = _normalize_script_hash(_safe_knob_value(owner, "charon_script_hash"))
+            if stored:
+                return stored
+            try:
+                return _normalize_script_hash(owner.metadata("charon/script_hash"))
+            except Exception:
+                return ""
+
+        def _update_read_parent_ids(old_id: str, new_id: str) -> None:
+            normalized_old = _normalize_node_id(old_id)
+            normalized_new = _normalize_node_id(new_id)
+            if not normalized_old or not normalized_new or normalized_old == normalized_new:
+                return
+            for class_name in ("Read", "ReadGeo2"):
+                try:
+                    candidates = list(nuke.allNodes(class_name))
+                except Exception:
+                    continue
+                for candidate in candidates:
+                    parent_val = ""
+                    try:
+                        parent_val = _normalize_node_id(candidate.metadata("charon/parent_id"))
+                    except Exception:
+                        parent_val = ""
+                    if parent_val != normalized_old:
+                        parent_val = _normalize_node_id(_safe_knob_value(candidate, "charon_parent_id"))
+                    if parent_val != normalized_old:
+                        continue
+                    try:
+                        candidate.setMetaData("charon/parent_id", normalized_new)
+                    except Exception:
+                        pass
+                    try:
+                        parent_knob = candidate.knob("charon_parent_id")
+                    except Exception:
+                        parent_knob = None
+                    if parent_knob is not None:
+                        try:
+                            parent_knob.setValue(normalized_new)
+                        except Exception:
+                            pass
 
         def _deduplicate_node_id(candidate: str) -> str:
             normalized = _normalize_node_id(candidate)
@@ -1564,21 +1614,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             knob.setValue(node_id)
                     except Exception:
                         pass
+            current_script_hash = _normalize_script_hash(get_nuke_script_hash(nuke))
+            stored_script_hash = _read_script_hash(node)
+            if current_script_hash and stored_script_hash and stored_script_hash != current_script_hash:
+                previous_id = node_id
+                node_id = generate_charon_node_id(current_script_hash)
+                update_charon_node_identity(node, node_id, current_script_hash)
+                _update_read_parent_ids(previous_id, node_id)
+            elif current_script_hash and not stored_script_hash:
+                update_charon_node_identity(node, "", current_script_hash)
             node_id = _deduplicate_node_id(node_id)
             if not node_id:
-                node_id = uuid.uuid4().hex[:12].lower()
-                try:
-                    knob = node.knob('charon_node_id')
-                    if knob is not None:
-                        knob.setValue(node_id)
-                except Exception:
-                    pass
-            try:
-                info_knob = node.knob('charon_node_id_info')
-                if info_knob is not None:
-                    info_knob.setValue(node_id or "Unknown")
-            except Exception:
-                pass
+                node_id = generate_charon_node_id(current_script_hash)
+            update_charon_node_identity(node, node_id, current_script_hash)
             write_metadata('charon/node_id', node_id or "")
             return node_id
 

@@ -3,6 +3,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Tuple
 
+from . import config
+from .paths import get_nuke_script_hash
 from .utilities import status_to_gl_color, status_to_tile_color
 
 
@@ -10,9 +12,101 @@ def sanitize_name(name):
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
 
 
-def _generate_charon_node_id() -> str:
-    """Return a short, human-friendly identifier for Charon nodes."""
-    return uuid.uuid4().hex[:12].lower()
+def _normalize_script_hash(value: str) -> str:
+    if not value:
+        return ""
+    return str(value).strip().lower()
+
+
+def _generate_charon_node_id(script_hash: str = "") -> str:
+    """Return a short identifier for Charon nodes, prefixed by the script hash."""
+    total_len = max(4, int(getattr(config, "CHARON_NODE_ID_LENGTH", 12)))
+    prefix_len = max(0, int(getattr(config, "CHARON_NODE_ID_SCRIPT_HASH_PREFIX", 0)))
+    prefix_len = min(prefix_len, total_len)
+    normalized_hash = _normalize_script_hash(script_hash)
+    prefix = normalized_hash[:prefix_len] if normalized_hash and prefix_len > 0 else ""
+    suffix_len = max(0, total_len - len(prefix))
+    suffix = uuid.uuid4().hex[:suffix_len].lower()
+    return (prefix + suffix).lower()
+
+
+def generate_charon_node_id(script_hash: str = "") -> str:
+    return _generate_charon_node_id(script_hash)
+
+
+def update_charon_node_identity(node, node_id: str, script_hash: str = "") -> None:
+    if node is None:
+        return
+    normalized_id = (node_id or "").strip().lower()
+    total_len = max(4, int(getattr(config, "CHARON_NODE_ID_LENGTH", 12)))
+    if normalized_id:
+        normalized_id = normalized_id[:total_len]
+    normalized_hash = _normalize_script_hash(script_hash)
+
+    def _set_knob_value(knob_name: str, value) -> None:
+        try:
+            knob = node.knob(knob_name)
+        except Exception:
+            knob = None
+        if knob is None:
+            return
+        try:
+            knob.setValue(value)
+        except Exception:
+            pass
+
+    if normalized_id:
+        _set_knob_value("charon_node_id", normalized_id)
+        _set_knob_value("charon_node_id_info", normalized_id)
+        try:
+            anchor_value = int(normalized_id, 16) / float(16 ** len(normalized_id))
+        except Exception:
+            anchor_value = time.time() % 1.0
+        _set_knob_value("charon_link_anchor", anchor_value)
+        try:
+            node.setMetaData("charon/node_id", normalized_id)
+        except Exception:
+            pass
+
+        raw_payload = ""
+        try:
+            raw_payload = node.metadata("charon/status_payload")
+        except Exception:
+            raw_payload = ""
+        if not raw_payload:
+            try:
+                knob_payload = node.knob("charon_status_payload")
+            except Exception:
+                knob_payload = None
+            if knob_payload is not None:
+                try:
+                    raw_payload = knob_payload.value()
+                except Exception:
+                    raw_payload = ""
+        if raw_payload:
+            try:
+                payload = json.loads(raw_payload)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                payload["node_id"] = normalized_id
+                try:
+                    serialized = json.dumps(payload)
+                except Exception:
+                    serialized = ""
+                if serialized:
+                    try:
+                        node.setMetaData("charon/status_payload", serialized)
+                    except Exception:
+                        pass
+                    _set_knob_value("charon_status_payload", serialized)
+
+    if normalized_hash:
+        _set_knob_value("charon_script_hash", normalized_hash)
+        try:
+            node.setMetaData("charon/script_hash", normalized_hash)
+        except Exception:
+            pass
 
 
 def _build_default_status_payload(
@@ -464,7 +558,8 @@ def create_charon_group_node(
     info_tab = nuke.Tab_Knob("charon_info_tab", "Info")
     node.addKnob(info_tab)
 
-    node_id_value = _generate_charon_node_id()
+    script_hash = get_nuke_script_hash(nuke)
+    node_id_value = _generate_charon_node_id(script_hash)
 
     workflow_knob = nuke.Text_Knob("workflow_data", "Workflow Data", json.dumps(workflow_data))
     _hide_knob(workflow_knob, nuke)
@@ -539,6 +634,10 @@ def create_charon_group_node(
     _hide_knob(node_id_knob, nuke)
     node.addKnob(node_id_knob)
 
+    script_hash_knob = nuke.String_Knob("charon_script_hash", "Script Hash", script_hash)
+    _hide_knob(script_hash_knob, nuke)
+    node.addKnob(script_hash_knob)
+
     try:
         link_anchor_value = int(node_id_value, 16) / float(16 ** len(node_id_value))
     except Exception:
@@ -588,6 +687,7 @@ def create_charon_group_node(
         if local_state_payload:
             node.setMetaData("charon/local_state", local_state_payload)
         node.setMetaData("charon/node_id", node_id_value)
+        node.setMetaData("charon/script_hash", script_hash or "")
         node.setMetaData("charon/read_node_id", "")
     except Exception:
         pass
@@ -820,9 +920,10 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
             return False
         return text in {"1", "true", "yes", "on"}
 
+    script_hash = get_nuke_script_hash()
     node_id_value = (node_id or "").strip().lower()[:12]
     if not node_id_value:
-        node_id_value = _generate_charon_node_id()
+        node_id_value = _generate_charon_node_id(script_hash)
 
     workflow_name = _read_str_knob("charon_workflow_name") or ""
     if not workflow_name:
@@ -900,6 +1001,7 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
     _set_knob_value("charon_node_id", node_id_value)
     _set_knob_value("charon_node_id_info", node_id_value)
     _set_knob_value("charon_read_id_info", "Not linked")
+    _set_knob_value("charon_script_hash", script_hash)
     _set_knob_value("charon_source_workflow_path", source_workflow_path or workflow_path)
     _set_knob_value("charon_validated", 1 if is_validated else 0)
     _set_knob_value("charon_local_state", local_state_payload)
@@ -953,6 +1055,7 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
         node.setMetaData("charon/is_validated", "1" if is_validated else "0")
         node.setMetaData("charon/local_state", local_state_payload or "")
         node.setMetaData("charon/node_id", node_id_value)
+        node.setMetaData("charon/script_hash", script_hash or "")
         node.setMetaData("charon/read_node_id", "")
         node.setMetaData("charon/read_node", "")
         node.setMetaData("charon/last_output", "")
