@@ -21,7 +21,11 @@ from ..validation_resolver import (
     resolve_missing_custom_nodes,
     resolve_missing_models,
 )
-from ..workflow_overrides import replace_workflow_model_paths, save_workflow_override
+from ..workflow_overrides import (
+    apply_validation_model_overrides,
+    replace_workflow_model_paths,
+    save_workflow_override,
+)
 from ..workflow_local_store import write_validation_resolve_status
 
 
@@ -1120,6 +1124,53 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                     write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
                 except Exception as exc:
                     system_warning(f"Failed to clear installing state: {exc}")
+
+    def _persist_validation_resolve_status(
+        self,
+        *,
+        overwrite: bool = True,
+        sync_workflow: bool = False,
+        context: str = "",
+    ) -> None:
+        if not self._workflow_folder:
+            system_debug("[Validation] Skipped resolve status persist; workflow folder unavailable")
+            return
+        if not isinstance(self._payload, dict):
+            return
+        try:
+            write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=overwrite)
+        except Exception as exc:
+            system_warning(f"Failed to persist validation resolve status: {exc}")
+            return
+        if sync_workflow:
+            self._sync_validated_workflow_from_cache(context=context)
+
+    def _sync_validated_workflow_from_cache(self, *, context: str = "") -> None:
+        if not self._workflow_folder or not isinstance(self._workflow_override, dict):
+            return
+        try:
+            replaced, replacements = apply_validation_model_overrides(
+                self._workflow_override, self._workflow_folder
+            )
+        except Exception as exc:
+            system_warning(f"Failed to apply validation overrides to workflow: {exc}")
+            return
+        if not replacements:
+            return
+        if not replaced:
+            return
+        try:
+            save_workflow_override(self._workflow_folder, self._workflow_override, parent=self)
+        except Exception as exc:
+            system_warning(f"Failed to persist workflow overrides: {exc}")
+            return
+        if isinstance(self._workflow_bundle, dict):
+            self._workflow_bundle["workflow"] = self._workflow_override
+        if context:
+            system_debug(
+                "[Validation] Updated workflow overrides from validation cache | "
+                f"context='{context}' replacements={len(replacements)}"
+            )
 
     def _persist_auto_resolve_state(
         self,
@@ -2576,11 +2627,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         entry["resolve_method"] = method_detail
                         entry["resolve_failed"] = ""
                 break
-        if self._workflow_folder:
-            try:
-                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
-            except Exception:
-                pass
+        self._persist_validation_resolve_status(
+            overwrite=True,
+            sync_workflow=True,
+            context="model_resolved",
+        )
         self._refresh_models_issue_status()
         self._refresh_models_issue_status()
         issue_info = self._issue_lookup.get("models") or {}
@@ -2596,16 +2647,18 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 if status_value in {"success", "resolved", "copied"}:
                     continue
                 remaining_unresolved += 1
-        if self._workflow_folder:
-            try:
-                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
+        try:
+            self._persist_validation_resolve_status(
+                overwrite=True,
+                sync_workflow=True,
+                context="model_update",
+            )
+            if self._workflow_folder:
                 system_debug(
                     f"[Validation] Persisted resolve status after model update | path='{self._workflow_folder}'"
                 )
-            except Exception as exc:
-                system_warning(f"Failed to persist resolve status after model update: {exc}")
-        else:
-            system_debug("[Validation] Skipped resolve status persist; workflow folder unavailable")
+        except Exception as exc:
+            system_warning(f"Failed to persist resolve status after model update: {exc}")
         system_debug(
             "[Validation] Completed mark model resolved | "
             f"row={row} remaining_missing={remaining_unresolved} "
@@ -2874,11 +2927,11 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         self._unsubscribe_transfer(row_info)
         self._refresh_models_issue_status()
         self._update_overall_state()
-        if self._workflow_folder:
-            try:
-                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
-            except Exception as exc:
-                system_warning(f"Failed to persist resolve status after transfer: {exc}")
+        self._persist_validation_resolve_status(
+            overwrite=True,
+            sync_workflow=True,
+            context="transfer_success",
+        )
         self._continue_auto_resolve_queue()
         self._clear_installing_state()
 
@@ -4090,20 +4143,16 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                         node_copy.pop("resolve_failed", None)
                         sanitized_nodes.append(node_copy)
                     pack["nodes"] = sanitized_nodes
-        if self._workflow_folder:
-            try:
-                write_validation_resolve_status(self._workflow_folder, self._payload, overwrite=True)
-                if update_snapshot:
-                    system_debug(
-                        f"[Validation] Installation completed for '{issue_key}'. "
-                        f"validation_resolve_status update: {update_snapshot}"
-                    )
-            except Exception as exc:
-                system_warning(
-                    f"Failed to persist validation resolve status after auto-resolve: {exc}"
-                )
-        else:
-            system_debug("[Validation] Skipped resolve status persist; workflow folder unavailable")
+        self._persist_validation_resolve_status(
+            overwrite=True,
+            sync_workflow=(issue_key == "models"),
+            context=f"auto_resolve_{issue_key}",
+        )
+        if update_snapshot:
+            system_debug(
+                f"[Validation] Installation completed for '{issue_key}'. "
+                f"validation_resolve_status update: {update_snapshot}"
+            )
 
     def _append_issue_note(
         self,

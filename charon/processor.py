@@ -1384,6 +1384,40 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     log_debug(f"Failed to persist metadata '{key}': {exc}", 'WARNING')
                     metadata_warning_emitted = True
                 return False
+        def _read_prompt_hash_knob():
+            try:
+                knob = node.knob('charon_prompt_hash')
+                if knob is not None:
+                    return str(knob.value()).strip()
+            except Exception:
+                return ""
+            return ""
+
+        def _ensure_prompt_hash_knob():
+            try:
+                knob = node.knob('charon_prompt_hash')
+            except Exception:
+                knob = None
+            if knob is not None:
+                return knob
+            try:
+                knob = nuke.String_Knob('charon_prompt_hash', 'Prompt Hash', '')
+                knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+                node.addKnob(knob)
+            except Exception:
+                return None
+            return knob
+
+        def _prompt_path_matches_hash(path_value, hash_value):
+            if not path_value or not hash_value:
+                return False
+            try:
+                basename = os.path.basename(str(path_value)).lower()
+            except Exception:
+                return False
+            prefix = str(hash_value)[:8].lower()
+            return bool(prefix) and prefix in basename
+
         def read_cached_prompt():
             path_value = ""
             try:
@@ -1392,11 +1426,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     path_value = str(knob.value()).strip()
             except Exception:
                 path_value = ""
-            hash_value = ""
+            hash_value = _read_prompt_hash_knob()
             try:
                 meta_val = node.metadata('charon/prompt_hash')
                 if meta_val is not None:
-                    hash_value = str(meta_val).strip()
+                    meta_hash = str(meta_val).strip()
+                    if meta_hash and not hash_value:
+                        hash_value = meta_hash
             except Exception:
                 hash_value = ""
             return path_value, hash_value
@@ -1409,7 +1445,14 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     knob.setValue(normalized_path)
             except Exception:
                 pass
-            write_metadata('charon/prompt_hash', hash_value or '')
+            normalized_hash = str(hash_value or '')
+            hash_knob = _ensure_prompt_hash_knob()
+            if hash_knob is not None:
+                try:
+                    hash_knob.setValue(normalized_hash)
+                except Exception:
+                    pass
+            write_metadata('charon/prompt_hash', normalized_hash)
             if hash_value:
                 log_debug(f'Stored prompt cache hash {hash_value}')
             if normalized_path:
@@ -2573,6 +2616,14 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         cached_prompt_path, cached_prompt_hash = read_cached_prompt()
         cached_prompt_path = cached_prompt_path.strip() if isinstance(cached_prompt_path, str) else ""
         cached_prompt_hash = cached_prompt_hash.strip() if isinstance(cached_prompt_hash, str) else ""
+        if (
+            workflow_hash
+            and cached_prompt_path
+            and not cached_prompt_hash
+            and _prompt_path_matches_hash(cached_prompt_path, workflow_hash)
+        ):
+            cached_prompt_hash = workflow_hash
+            store_cached_prompt(cached_prompt_path, cached_prompt_hash)
         if (
             cached_prompt_path
             and cached_prompt_hash

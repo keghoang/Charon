@@ -595,6 +595,10 @@ def create_charon_group_node(
     _hide_knob(prompt_path_knob, nuke)
     node.addKnob(prompt_path_knob)
 
+    prompt_hash_knob = nuke.String_Knob("charon_prompt_hash", "Prompt Hash", "")
+    _hide_knob(prompt_hash_knob, nuke)
+    node.addKnob(prompt_hash_knob)
+
     last_output_knob = nuke.String_Knob("charon_last_output", "Last Output Path", "")
     _hide_knob(last_output_knob, nuke)
     node.addKnob(last_output_knob)

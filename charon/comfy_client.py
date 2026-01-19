@@ -6,6 +6,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .paths import get_temp_file
+
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,15 @@ class ComfyUIClient:
 
     def submit_workflow(self, workflow):
         try:
-            data = json.dumps({"prompt": workflow}).encode("utf-8")
+            payload = {"prompt": workflow}
+            data_text = json.dumps(payload)
+            try:
+                payload_path = get_temp_file(suffix=".json", subdir="temp")
+                with open(payload_path, "w", encoding="utf-8") as handle:
+                    handle.write(data_text)
+            except Exception as exc:
+                logger.warning("Failed to write ComfyUI payload debug file: %s", exc)
+            data = data_text.encode("utf-8")
             request = urllib.request.Request(
                 f"{self.base_url}/prompt",
                 data=data,
