@@ -1294,6 +1294,409 @@ _run()
                 f"Final Prep is not yet implemented for {self.host}."
             )
 
+    def _final_prep_update_script(self) -> str:
+        return textwrap.dedent(
+            """\
+import math
+import nuke
+
+_DEBUG = True
+
+def _debug(message):
+    if _DEBUG:
+        print("[FinalPrep] " + message)
+
+def _angle_from_name(name):
+    if name == "CamInit":
+        return 0.0
+    if name.startswith("Cam"):
+        suffix = name[3:]
+        if suffix.isdigit():
+            return float(suffix)
+    return None
+
+def _angle_from_position(pos, pivot):
+    dx = pos[0] - pivot[0]
+    dz = pos[2] - pivot[2]
+    angle = math.degrees(math.atan2(dz, dx))
+    if angle < 0:
+        angle += 360.0
+    return angle
+
+def _find_upstream(start_node, class_names, max_hops=32):
+    current = start_node
+    visited = set()
+    hops = 0
+    while current and hops < max_hops:
+        if current in visited:
+            break
+        visited.add(current)
+        try:
+            if current.Class() in class_names:
+                return current
+        except Exception:
+            pass
+        try:
+            current = current.input(0)
+        except Exception:
+            current = None
+        hops += 1
+    return None
+
+def _camera_info(nodes, pivot):
+    info = []
+    for cam in nodes:
+        angle = _angle_from_name(cam.name())
+        if angle is None:
+            try:
+                angle = _angle_from_position(cam["translate"].value(), pivot)
+            except Exception:
+                angle = 0.0
+        info.append((cam, angle))
+    return info
+
+def _collect_rig_data(rig):
+    rig.begin()
+    try:
+        target = nuke.toNode("Target")
+        target_pos = target["translate"].value() if target else None
+        cameras = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("Camera3", "Camera2", "Camera")
+            and node.name().startswith("Cam")
+        ]
+        cam_data = {node.name(): node["translate"].value() for node in cameras}
+    finally:
+        rig.end()
+    return target_pos, cam_data
+
+def _find_group_input(group, input_name):
+    group.begin()
+    try:
+        input_node = nuke.toNode(input_name)
+        if not input_node or input_node.Class() != "Input":
+            return None
+        index = int(input_node["number"].value()) if input_node.knob("number") else 0
+    finally:
+        group.end()
+    return group.input(index)
+
+def _update_geo(group, geo_node):
+    if not geo_node:
+        return False
+    _debug("update_geo input: {0} ({1})".format(geo_node.name(), geo_node.Class()))
+    if geo_node.Class() not in ("ReadGeo2", "ReadGeo"):
+        upstream = _find_upstream(geo_node, ("ReadGeo2", "ReadGeo"))
+        if upstream:
+            _debug("resolved upstream geo: {0} ({1})".format(upstream.name(), upstream.Class()))
+            geo_node = upstream
+        else:
+            nuke.message("Geo input must be a ReadGeo/ReadGeo2 node.")
+            return False
+
+    root = nuke.root()
+    current_group = nuke.thisGroup()
+    root.begin()
+    original_selection = list(nuke.selectedNodes())
+    for n in original_selection:
+        n.setSelected(False)
+    try:
+        geo_node.setSelected(True)
+        nuke.nodeCopy("%clipboard%")
+        _debug("copied geo node: {0}".format(geo_node.fullName() if hasattr(geo_node, "fullName") else geo_node.name()))
+    finally:
+        geo_node.setSelected(False)
+        for n in original_selection:
+            try:
+                n.setSelected(True)
+            except Exception:
+                pass
+        if current_group and current_group is not root:
+            current_group.begin()
+
+    group.begin()
+    try:
+        before_nodes = set(nuke.allNodes())
+        for n in nuke.selectedNodes():
+            n.setSelected(False)
+        nuke.nodePaste("%clipboard%")
+        pasted_nodes = list(nuke.selectedNodes())
+        after_nodes = [node for node in nuke.allNodes() if node not in before_nodes]
+        if not after_nodes and not pasted_nodes:
+            nuke.message("Failed to paste geo node.")
+            return False
+        _debug("pasted nodes: {0}".format(
+            ", ".join("{0}({1})".format(node.name(), node.Class()) for node in pasted_nodes)
+        ))
+        _debug("after_nodes: {0}".format(
+            ", ".join("{0}({1})".format(node.name(), node.Class()) for node in after_nodes)
+        ))
+
+        pasted = None
+        for node in pasted_nodes + after_nodes:
+            if node.Class() in ("ReadGeo2", "ReadGeo"):
+                pasted = node
+                break
+        if pasted is None:
+            pasted = (pasted_nodes or after_nodes)[0]
+        _debug("chosen pasted: {0} ({1})".format(pasted.name(), pasted.Class()))
+        if pasted.knob("file"):
+            try:
+                _debug("pasted file: {0}".format(pasted["file"].value()))
+            except Exception:
+                pass
+
+        existing_geos = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("ReadGeo2", "ReadGeo")
+            and node is not pasted
+        ]
+        _debug("existing geos: {0}".format(
+            ", ".join("{0}({1})".format(node.name(), node.Class()) for node in existing_geos)
+        ))
+
+        def _is_clone(node):
+            try:
+                return bool(node.isClone())
+            except Exception:
+                return False
+
+        def _collect_connections(nodes):
+            connections = {node: [] for node in nodes}
+            for node in nuke.allNodes():
+                for i in range(node.inputs()):
+                    try:
+                        inp = node.input(i)
+                    except Exception:
+                        continue
+                    if inp in connections:
+                        connections[inp].append((node, i))
+            return connections
+
+        def _create_clone(master):
+            for n in nuke.selectedNodes():
+                n.setSelected(False)
+            master.setSelected(True)
+            before = set(nuke.allNodes())
+            if hasattr(nuke, "clone"):
+                try:
+                    nuke.clone(master)
+                except TypeError:
+                    nuke.clone()
+            else:
+                nuke.nodeCopy("%clipboard%")
+                nuke.nodePaste("%clipboard%")
+            created = [node for node in nuke.allNodes() if node not in before]
+            if created:
+                return created[0]
+            return None
+
+        if not existing_geos:
+            default_name = "ReadGeo" if geo_node.Class() == "ReadGeo" else "ReadGeo2"
+            try:
+                pasted.setName(default_name, unique=True)
+            except Exception:
+                pasted.setName(default_name)
+            _debug("created new geo: {0}".format(pasted.name()))
+            return True
+
+        master_old = None
+        for node in existing_geos:
+            if node.name() in ("ReadGeo2", "ReadGeo"):
+                master_old = node
+                break
+        if master_old is None:
+            for node in existing_geos:
+                if not _is_clone(node):
+                    master_old = node
+                    break
+        if master_old is None:
+            master_old = existing_geos[0]
+
+        _debug("master_old: {0}".format(master_old.name() if master_old else "None"))
+
+        geo_specs = []
+        for node in existing_geos:
+            try:
+                input_nodes = [node.input(i) for i in range(node.inputs())]
+            except Exception:
+                input_nodes = []
+            geo_specs.append({
+                "node": node,
+                "name": node.name(),
+                "pos": (node.xpos(), node.ypos()),
+                "is_master": node is master_old,
+                "inputs": input_nodes,
+            })
+        connections = _collect_connections([spec["node"] for spec in geo_specs])
+
+        new_nodes = {}
+        for spec in geo_specs:
+            if spec["is_master"]:
+                new_nodes[spec["node"]] = pasted
+            else:
+                clone = _create_clone(pasted)
+                if clone:
+                    new_nodes[spec["node"]] = clone
+                else:
+                    new_nodes[spec["node"]] = pasted
+        _debug("created {0} geo nodes".format(len(set(new_nodes.values()))))
+
+        for spec in geo_specs:
+            old_node = spec["node"]
+            new_node = new_nodes.get(old_node)
+            if new_node is None:
+                continue
+            inputs = spec.get("inputs", [])
+            for idx, inp in enumerate(inputs):
+                if inp is None:
+                    try:
+                        new_node.setInput(idx, None)
+                    except Exception:
+                        pass
+                    continue
+                replacement = new_nodes.get(inp, inp)
+                try:
+                    new_node.setInput(idx, replacement)
+                except Exception:
+                    pass
+
+        for old_node, new_node in new_nodes.items():
+            if old_node is new_node:
+                continue
+            for dep, idx in connections.get(old_node, []):
+                try:
+                    dep.setInput(idx, new_node)
+                except Exception:
+                    pass
+
+        for spec in geo_specs:
+            old_node = spec["node"]
+            new_node = new_nodes.get(old_node)
+            if new_node is None:
+                continue
+            try:
+                new_node.setXYpos(spec["pos"][0], spec["pos"][1])
+            except Exception:
+                pass
+
+        for spec in geo_specs:
+            old_node = spec["node"]
+            try:
+                nuke.delete(old_node)
+            except Exception:
+                pass
+
+        for spec in geo_specs:
+            new_node = new_nodes.get(spec["node"])
+            if new_node is None:
+                continue
+            try:
+                new_node.setName(spec["name"], unique=True)
+            except Exception:
+                try:
+                    new_node.setName(spec["name"])
+                except Exception:
+                    pass
+
+        try:
+            geos = [node for node in nuke.allNodes() if node.Class() in ("ReadGeo2", "ReadGeo")]
+            _debug("geo nodes after update: {0}".format(
+                ", ".join(
+                    "{0}({1})".format(node.name(), node["file"].value() if node.knob("file") else "")
+                    for node in geos
+                )
+            ))
+        except Exception:
+            pass
+        return True
+    finally:
+        group.end()
+
+def _update_cameras(group, rig):
+    target_pos, cam_data = _collect_rig_data(rig)
+    if not cam_data:
+        nuke.message("Coverage rig has no cameras named Cam*.")
+        return False
+
+    group.begin()
+    try:
+        if target_pos is not None:
+            target = nuke.toNode("Target")
+            if target:
+                target["translate"].setValue(target_pos)
+
+        dest_cams = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("Camera3", "Camera2", "Camera")
+            and node.name().startswith("Cam")
+        ]
+        if not dest_cams:
+            nuke.message("Final Prep has no cameras named Cam*.")
+            return False
+
+        dest_by_name = {node.name(): node for node in dest_cams}
+        used = set()
+        for name, translate_val in cam_data.items():
+            cam = dest_by_name.get(name)
+            if cam:
+                cam["translate"].setValue(translate_val)
+                used.add(name)
+
+        remaining_src = [
+            (name, translate_val)
+            for name, translate_val in cam_data.items()
+            if name not in used
+        ]
+        if remaining_src:
+            pivot = target_pos if target_pos is not None else [0.0, 0.0, 0.0]
+            dest_info = _camera_info(
+                [node for node in dest_cams if node.name() not in used],
+                pivot,
+            )
+            remaining_src_info = []
+            for name, translate_val in remaining_src:
+                angle = _angle_from_name(name)
+                if angle is None:
+                    angle = _angle_from_position(translate_val, pivot)
+                remaining_src_info.append((name, translate_val, angle))
+
+            for name, translate_val, angle in sorted(remaining_src_info, key=lambda item: item[2]):
+                if not dest_info:
+                    break
+                best_index = None
+                best_delta = None
+                for idx, (cam, cam_angle) in enumerate(dest_info):
+                    delta = abs(angle - cam_angle)
+                    delta = min(delta, 360.0 - delta)
+                    if best_delta is None or delta < best_delta:
+                        best_delta = delta
+                        best_index = idx
+                cam, _ = dest_info.pop(best_index)
+                cam["translate"].setValue(translate_val)
+        return True
+    finally:
+        group.end()
+
+def _run():
+    group = nuke.thisNode()
+    rig = _find_group_input(group, "coverage_rig")
+    if not rig:
+        nuke.message("Connect Charon_Coverage_Rig to coverage_rig input.")
+        return
+    if rig.Class() != "Group":
+        nuke.message("coverage_rig input must be a Group.")
+        return
+    geo = _find_group_input(group, "geo")
+
+    _update_cameras(group, rig)
+    if geo:
+        _update_geo(group, geo)
+
+_run()
+"""
+        )
+
     def _generate_final_prep_nuke(self):
         try:
             import nuke
@@ -1301,50 +1704,7 @@ _run()
         except ImportError:
             return
 
-        # 1. Validate Selection
-        selection = nuke.selectedNodes()
-        if not selection or len(selection) != 1:
-            QtWidgets.QMessageBox.warning(self, "Selection Required", "Please select the Charon Coverage Rig group.")
-            return
-        
-        rig_group = selection[0]
-        if rig_group.Class() != "Group":
-            QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Selected node must be a Group (Charon Coverage Rig).")
-            return
-
-        # 2. Extract Camera and Target Data
-        cam_names = ["CamInit", "Cam45", "Cam90", "Cam135", "Cam180", "Cam225", "Cam270", "Cam315"]
-        cam_data = {}
-        target_data = None
-        
-        with rig_group:
-            for name in cam_names:
-                cam = nuke.toNode(name)
-                if cam:
-                    cam_data[name] = cam['translate'].value()
-            
-            # Extract Target Data
-            tgt = nuke.toNode("Target")
-            if tgt:
-                target_data = tgt['translate'].value()
-
-        # 3. Find Geometry Source
-        geo_source = None
-        for i in range(rig_group.inputs()):
-            inp_node = rig_group.input(i)
-            if not inp_node:
-                continue
-            if inp_node.Class() in ("Camera3", "Camera2", "Camera", "Axis3", "Axis2", "Axis"):
-                continue
-            geo_source = inp_node
-            break
-        
-        if not geo_source:
-             QtWidgets.QMessageBox.warning(self, "Missing Geometry", 
-                 "Could not identify geometry source connected to the rig.")
-             return
-
-        # 4. Read Template from File
+        # Read Template from File
         try:
             # Construct path relative to this file
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1352,12 +1712,12 @@ _run()
             template_path = os.path.normpath(template_path)
             
             if not os.path.exists(template_path):
-                 QtWidgets.QMessageBox.warning(self, "Error", f"Template file not found: {template_path}")
-                 return
-                 
+                QtWidgets.QMessageBox.warning(self, "Error", f"Template file not found: {template_path}")
+                return
+
             with open(template_path, 'r') as f:
                 content = f.read()
-                
+
             # Extract the Group block
             # We look for the first "Group {" at the start of a line
             start_idx = content.find("\nGroup {")
@@ -1366,18 +1726,57 @@ _run()
                 if content.startswith("Group {"):
                     start_idx = 0
                 else:
-                     QtWidgets.QMessageBox.warning(self, "Error", "Could not find Group definition in template file.")
-                     return
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Error",
+                        "Could not find Group definition in template file.",
+                    )
+                    return
             else:
-                start_idx += 1 # Skip the newline
-            
-            script_content = content[start_idx:]
-            
+                start_idx += 1  # Skip the newline
+
+            end_idx = content.find("\nend_group", start_idx)
+            if end_idx == -1:
+                end_idx = content.find("end_group", start_idx)
+                if end_idx == -1:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Error",
+                        "Could not find end_group in template file.",
+                    )
+                    return
+                end_idx += len("end_group")
+            else:
+                end_idx += len("\nend_group")
+
+            script_content = content[start_idx:end_idx] + "\n"
+              
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to read template file: {str(e)}")
             return
 
-        # 5. Paste Script via Temp File
+        def _get_dag_center():
+            try:
+                center = nuke.center()
+                if isinstance(center, (tuple, list)) and len(center) >= 2:
+                    return int(center[0]), int(center[1])
+            except Exception:
+                pass
+            try:
+                nodes = nuke.allNodes(recurseGroups=False)
+                if nodes:
+                    min_x = min(node.xpos() for node in nodes)
+                    max_x = max(node.xpos() for node in nodes)
+                    min_y = min(node.ypos() for node in nodes)
+                    max_y = max(node.ypos() for node in nodes)
+                    return int((min_x + max_x) / 2), int((min_y + max_y) / 2)
+            except Exception:
+                pass
+            return 0, 0
+
+        anchor_pos = _get_dag_center()
+
+        # Paste Script via Temp File
         # Deselect everything to paste cleanly
         for n in nuke.allNodes(): n.setSelected(False)
         
@@ -1399,44 +1798,55 @@ _run()
                     sel = nuke.selectedNode()
                     if sel and sel.Class() == "Group":
                         final_prep_group = sel
-                except: pass
-            
+                except Exception:
+                    pass
+
             if not final_prep_group:
                 raise RuntimeError("Could not find pasted Group node.")
-            
-            # 6. Apply Camera and Target Data
+
             final_prep_group.begin()
             try:
-                for name, translate_val in cam_data.items():
-                    cam = nuke.toNode(name)
-                    if cam:
-                        cam['translate'].setValue(translate_val)
-                    else:
-                        print(f"Warning: Could not find camera '{name}' in pasted group to update.")
-                
-                # Apply Target Data
-                if target_data:
-                    tgt_pasted = nuke.toNode("Target")
-                    if tgt_pasted:
-                        tgt_pasted['translate'].setValue(target_data)
-                    else:
-                        print("Warning: Could not find 'Target' in pasted group to update.")
+                existing_inputs = {
+                    node.name(): node
+                    for node in nuke.allNodes()
+                    if node.Class() == "Input"
+                }
+
+                coverage_rig = existing_inputs.get("coverage_rig") or nuke.createNode("Input")
+                coverage_rig.setName("coverage_rig")
+                coverage_rig["number"].setValue(2)
+                coverage_rig.setXYpos(0, -200)
+
+                geo_input = existing_inputs.get("geo") or nuke.createNode("Input")
+                geo_input.setName("geo")
+                geo_input["number"].setValue(3)
+                geo_input.setXYpos(0, -120)
+
+                coverage_input = existing_inputs.get("coverage_sheet") or nuke.createNode("Input")
+                coverage_input.setName("coverage_sheet")
+                coverage_input["number"].setValue(4)
+                coverage_input.setXYpos(0, -40)
             finally:
                 final_prep_group.end()
-            
-            # 7. Connect Geometry (Disabled for standalone import)
-            # final_prep_group.setInput(0, geo_source)
-            
-            # Position near the rig
-            final_prep_group.setXYpos(rig_group.xpos() + 200, rig_group.ypos() + 200)
-            
+
+            if not final_prep_group.knob("charon_update_inputs"):
+                update_knob = nuke.PyScript_Knob(
+                    "charon_update_inputs",
+                    "Update Inputs",
+                    self._final_prep_update_script(),
+                )
+                update_knob.setFlag(nuke.STARTLINE)
+                final_prep_group.addKnob(update_knob)
+
+            final_prep_group.setXYpos(anchor_pos[0], anchor_pos[1])
+
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to generate Final Prep: {str(e)}")
         finally:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
-                except:
+                except Exception:
                     pass
 
     def _on_texture_bake_clicked(self):
@@ -1462,10 +1872,10 @@ _run()
             current_dir = os.path.dirname(os.path.abspath(__file__))
             template_path = os.path.join(current_dir, "..", "resources", "nuke_template", "projection_texture_bake.nk")
             template_path = os.path.normpath(template_path)
-            
+
             if not os.path.exists(template_path):
-                 QtWidgets.QMessageBox.warning(self, "Error", f"Template not found: {template_path}")
-                 return
+                QtWidgets.QMessageBox.warning(self, "Error", f"Template not found: {template_path}")
+                return
 
             with open(template_path, 'r') as f:
                 content = f.read()
@@ -1473,15 +1883,16 @@ _run()
             # Extract Group block
             start_idx = content.find("\\nGroup {")
             if start_idx == -1:
-                if content.startswith("Group {"): start_idx = 0
-                else: 
-                     # Try more robust search
-                     import re
-                     match = re.search(r"^Group \{", content, re.MULTILINE)
-                     if match:
-                         start_idx = match.start()
-                     else:
-                         raise ValueError("No Group definition found in template")
+                if content.startswith("Group {"):
+                    start_idx = 0
+                else:
+                    # Try more robust search
+                    import re
+                    match = re.search(r"^Group \{", content, re.MULTILINE)
+                    if match:
+                        start_idx = match.start()
+                    else:
+                        raise ValueError("No Group definition found in template")
             else:
                 start_idx += 1
             
@@ -1503,10 +1914,10 @@ _run()
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to process bake group: {str(e)}")
         finally:
-             if temp_path and os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
-                except:
+                except Exception:
                     pass
 
     def _setup_normal_ui(self, parent):
