@@ -4369,7 +4369,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 if ivt_node:
                                                     ivt_node.setInput(0, read_node)
                                                     ivt_node.setXpos(read_node.xpos())
-                                                    ivt_node.setYpos(read_node.ypos() + 200)
+                                                    ivt_node.setYpos(read_node.ypos() + 125)
                                                     try:
                                                         ivt_node['tile_color'].setValue(0x0000FFFF)
                                                         ivt_node['gl_color'].setValue(0x0000FFFF)
