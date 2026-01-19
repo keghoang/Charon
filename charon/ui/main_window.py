@@ -1,5 +1,6 @@
 from ..qt_compat import QtWidgets, QtCore, QtGui, Qt, UserRole, UniqueConnection, exec_dialog
 from typing import Optional, Tuple
+import textwrap
 import os, sys, time, json, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -971,216 +972,316 @@ end_group
                 f"Camera generation is not yet implemented for {self.host}."
             )
 
+    def _coverage_camera_generate_script(self) -> str:
+        return textwrap.dedent(
+            """\
+import math
+import nuke
+
+def _find_upstream(start_node, class_names, max_hops=32):
+    current = start_node
+    visited = set()
+    hops = 0
+    while current and hops < max_hops:
+        if current in visited:
+            break
+        visited.add(current)
+        try:
+            if current.Class() in class_names:
+                return current
+        except Exception:
+            pass
+        try:
+            current = current.input(0)
+        except Exception:
+            current = None
+        hops += 1
+    return None
+
+def _value_to_count(value):
+    choices = [2, 4, 6, 8]
+    if isinstance(value, (int, float)):
+        idx = int(value)
+        if 0 <= idx < len(choices):
+            return choices[idx]
+    text = str(value).strip()
+    if text.isdigit():
+        candidate = int(text)
+        if candidate in choices:
+            return candidate
+    return 8
+
+def _run():
+    group = nuke.thisNode()
+
+    count = 8
+    try:
+        knob = group.knob("charon_cam_count")
+        if knob is not None:
+            count = _value_to_count(knob.value())
+    except Exception:
+        pass
+
+    raw_init_cam = group.input(0)
+    geo_source = group.input(1)
+
+    init_cam = _find_upstream(raw_init_cam, ("Camera3", "Camera2", "Camera"))
+    if not init_cam:
+        nuke.message("Connect init_cam (Camera) to input 0.")
+        return
+    if not geo_source:
+        nuke.message("Connect geo to input 1.")
+        return
+
+    target_raw = init_cam.input(1)
+    target = _find_upstream(target_raw, ("Axis3", "Axis2", "Axis"))
+    if not target:
+        nuke.message("Connect a Target Axis to init_cam input 1.")
+        return
+
+    pivot = target["translate"].value()
+    start_pos = init_cam["translate"].value()
+
+    rx = start_pos[0] - pivot[0]
+    ry = start_pos[1] - pivot[1]
+    rz = start_pos[2] - pivot[2]
+
+    root = nuke.root()
+    current_group = nuke.thisGroup()
+    root.begin()
+    original_selection = list(nuke.selectedNodes())
+    for n in original_selection:
+        n.setSelected(False)
+    try:
+        init_cam.setSelected(True)
+        nuke.nodeCopy("%clipboard%")
+    finally:
+        init_cam.setSelected(False)
+        for n in original_selection:
+            try:
+                n.setSelected(True)
+            except Exception:
+                pass
+        if current_group and current_group is not root:
+            current_group.begin()
+
+    group.begin()
+    try:
+        input_cam = nuke.toNode("init_cam")
+        input_geo = nuke.toNode("geo")
+
+        inputs = [node for node in nuke.allNodes() if node.Class() == "Input"]
+        if input_cam is None:
+            for node in inputs:
+                if node is not input_geo:
+                    input_cam = node
+                    break
+        if input_geo is None:
+            for node in inputs:
+                if node is not input_cam:
+                    input_geo = node
+                    break
+
+        protected = set(node for node in (input_cam, input_geo) if node is not None)
+        for node in list(nuke.allNodes()):
+            if node in protected:
+                continue
+            nuke.delete(node)
+
+        if input_cam is None:
+            input_cam = nuke.createNode("Input")
+        input_cam.setName("init_cam")
+        input_cam["number"].setValue(0)
+        input_cam.setXYpos(0, 0)
+
+        if input_geo is None:
+            input_geo = nuke.createNode("Input")
+        input_geo.setName("geo")
+        input_geo["number"].setValue(1)
+        input_geo.setXYpos(0, 120)
+
+        dot_geo = nuke.createNode("Dot")
+        dot_geo.setInput(0, input_geo)
+        dot_geo.setXYpos(input_geo.xpos() + 120, input_geo.ypos() + 20)
+
+        tex_const = nuke.createNode("Constant")
+        tex_const.setName("BaseGray")
+        tex_const["color"].setValue([1, 1, 1, 1])
+        tex_const.setXYpos(input_geo.xpos() + 200, input_geo.ypos())
+
+        tex_wire = nuke.createNode("Wireframe")
+        tex_wire.setInput(0, tex_const)
+        tex_wire["operation"].setValue("over")
+        tex_wire["line_width"].setValue(0.12)
+        tex_wire["line_color"].setValue([0.36, 0.36, 0.36, 1])
+        tex_wire.setXYpos(tex_const.xpos(), tex_const.ypos() + 110)
+
+        apply_mat = nuke.createNode("ApplyMaterial")
+        apply_mat.setInput(0, dot_geo)
+        apply_mat.setInput(1, tex_wire)
+        apply_mat.setXYpos(input_geo.xpos() + 200, input_geo.ypos() + 220)
+
+        dot_mat = nuke.createNode("Dot")
+        dot_mat.setInput(0, apply_mat)
+        dot_mat.setXYpos(apply_mat.xpos() + 80, apply_mat.ypos() + 140)
+
+        int_target = nuke.createNode("Axis3")
+        int_target.setName("Target")
+        int_target["translate"].setValue(pivot)
+        int_target.setXYpos(-200, input_geo.ypos() + 220)
+
+        step = 360.0 / float(count)
+        angles = [int(round(step * i)) for i in range(count)]
+
+        render_outputs = []
+        base_x = 400
+        x_step = 250
+        y_cam = 240
+        y_scan = 460
+        y_merge = 580
+
+        for i, yaw in enumerate(angles):
+            name = "Init" if yaw == 0 else str(int(yaw))
+            x_pos = base_x + (i * x_step)
+
+            nuke.nodePaste("%clipboard%")
+            cam = nuke.selectedNode()
+            cam.setName(f"Cam{name}")
+            cam.setInput(1, int_target)
+            cam["rotate"].setValue([0, 0, 0])
+
+            rad_yaw = math.radians(float(yaw))
+            nx = rx * math.cos(rad_yaw) - rz * math.sin(rad_yaw)
+            nz = rx * math.sin(rad_yaw) + rz * math.cos(rad_yaw)
+            cam["translate"].setValue([pivot[0] + nx, pivot[1] + ry, pivot[2] + nz])
+            cam.setXYpos(x_pos, y_cam)
+
+            scanline = nuke.createNode("ScanlineRender")
+            scanline.setInput(1, dot_mat)
+            scanline.setInput(2, cam)
+            scanline.setXYpos(x_pos, y_scan)
+
+            bg = nuke.createNode("Constant")
+            bg.setName("BG_Constant")
+            bg["channels"].setValue("rgb")
+            bg["color"].setValue([0.36, 0.36, 0.36, 1])
+            bg.setXYpos(x_pos + 100, y_scan)
+
+            merge = nuke.createNode("Merge2")
+            merge.setInput(1, scanline)
+            merge.setInput(0, bg)
+            merge.setXYpos(x_pos, y_merge)
+
+            render_outputs.append(merge)
+
+        if count == 2:
+            columns = 2
+        elif count == 4:
+            columns = 2
+        elif count == 6:
+            columns = 3
+        else:
+            columns = 4
+        rows = int(math.ceil(float(count) / float(columns)))
+
+        contact = nuke.createNode("ContactSheet")
+        contact_width = columns * 1024
+        contact_height = rows * 1024
+        contact["width"].setValue(contact_width)
+        contact["height"].setValue(contact_height)
+        contact["rows"].setValue(rows)
+        contact["columns"].setValue(columns)
+        contact["roworder"].setValue("TopBottom")
+        contact["gap"].setValue(10)
+        for i, node in enumerate(render_outputs):
+            contact.setInput(i, node)
+        contact.setXYpos(base_x, 780)
+
+        output = nuke.createNode("Output")
+        output.setInput(0, contact)
+        output.setXYpos(base_x, 900)
+    finally:
+        group.end()
+
+_run()
+"""
+        )
+
     def _generate_coverage_cameras_nuke(self):
         try:
             import nuke
-            import math
         except ImportError:
             return
 
-        # 1. Find Context from Selection
         selection = nuke.selectedNodes()
         init_cam = None
+        geo_source = None
         target = None
-        
+
         for node in selection:
-            if node.Class() in ("Camera3", "Camera2", "Camera"):
+            if not init_cam and node.Class() in ("Camera3", "Camera2", "Camera"):
                 init_cam = node
-            elif node.Class() in ("Axis3", "Axis2", "Axis"):
+            elif not target and node.Class() in ("Axis3", "Axis2", "Axis"):
                 target = node
-        
+            elif not geo_source and node.Class() not in (
+                "Camera3",
+                "Camera2",
+                "Camera",
+                "Axis3",
+                "Axis2",
+                "Axis",
+            ):
+                geo_source = node
+
         if init_cam and not target:
             inp = init_cam.input(1)
             if inp and "Axis" in inp.Class():
                 target = inp
-        
-        if not init_cam or not target:
-            QtWidgets.QMessageBox.warning(self, "Selection Required", 
-                "Please select the Initial Camera and its Target Axis.\n"
-                "(Or select just the Camera if the Target is connected to Input 1)")
-            return
 
-        # Find connected geometry source
-        geo_source = None
-        
-        # 1. Try to find a ScanlineRender connected to the camera (Global search)
-        # We search recursively to find it even if it's inside a Group
-        for node in nuke.allNodes("ScanlineRender", recurseGroups=True):
-            if node.input(2) == init_cam:
-                geo_source = node.input(1)
-                break
-        
-        # 2. If not found, check immediate dependents of the camera (e.g. if camera is plugged into a Group)
-        if not geo_source:
-            deps = init_cam.dependent()
-            for dep in deps:
-                if dep.Class() == "Group":
-                    # Check inputs of the group to find something that looks like geometry (not the camera itself)
-                    # We assume the camera is one input. The geometry should be another.
-                    for i in range(dep.inputs()):
-                        inp = dep.input(i)
-                        if inp and inp != init_cam and inp != target:
-                            # Verify it's not another camera or axis just in case
-                            if inp.Class() not in ("Camera3", "Camera2", "Camera", "Axis3", "Axis2", "Axis"):
-                                geo_source = inp
-                                break
-                if geo_source:
-                    break
-
-        if not geo_source:
-             # Try to find a geo node in selection if available
-             for n in selection:
-                 if n not in (init_cam, target):
-                     geo_source = n
-                     break
-        
-        if not geo_source:
-             QtWidgets.QMessageBox.warning(self, "Missing Geometry", 
-                 "Could not identify geometry source. \n"
-                 "Please ensure the initial ScanlineRender is connected to the camera, or select the geometry node as well.")
-             return
-
-        # 2. Gather Params
-        pivot = target['translate'].value()
-        start_pos = init_cam['translate'].value()
-        # focal = init_cam['focal'].value() # No longer needed if we clone
-        
-        # Calculate radius vector relative to pivot
-        rx = start_pos[0] - pivot[0]
-        ry = start_pos[1] - pivot[1]
-        rz = start_pos[2] - pivot[2]
-        radius = math.sqrt(rx*rx + ry*ry + rz*rz)
-
-        # Clone Init Cam to Clipboard
-        # Save current selection
-        original_selection = nuke.selectedNodes()
-        # Select only init_cam
-        for n in nuke.allNodes(): n.setSelected(False)
-        init_cam.setSelected(True)
-        nuke.nodeCopy("%clipboard%")
-        init_cam.setSelected(False)
-        # Restore selection? Not strictly necessary as we'll select the group.
-
-        # 3. Create Group
         group = nuke.createNode("Group")
         group.setName("Charon_Coverage_Rig")
-        group.setXYpos(init_cam.xpos() + 300, init_cam.ypos())
-        
-        # Connect Group Input to Geo Source
-        group.setInput(0, geo_source)
-        
-        group.begin()
-        
-        input_geo = nuke.createNode("Input")
-        input_geo.setName("geo")
-        
-        # Texture Setup (White Base + Grey Wireframe)
-        tex_const = nuke.createNode("Constant")
-        tex_const.setName("BaseGray")
-        tex_const['color'].setValue([1, 1, 1, 1])
-        tex_const.setXYpos(input_geo.xpos() + 150, input_geo.ypos())
-        
-        tex_wire = nuke.createNode("Wireframe")
-        tex_wire.setInput(0, tex_const)
-        tex_wire['operation'].setValue("over")
-        tex_wire['line_width'].setValue(0.12)
-        tex_wire['line_color'].setValue([0.36, 0.36, 0.36, 1])
-        tex_wire.setXYpos(tex_const.xpos(), tex_const.ypos() + 100)
-        
-        apply_mat = nuke.createNode("ApplyMaterial")
-        apply_mat.setInput(0, input_geo)
-        apply_mat.setInput(1, tex_wire)
-        apply_mat.setXYpos(input_geo.xpos(), input_geo.ypos() + 200)
-        
-        # Internal Target
-        int_target = nuke.createNode("Axis3")
-        int_target.setName("Target")
-        int_target['translate'].setValue(pivot)
-        int_target.setXYpos(0, 0)
-        
-        # Create 8 Cameras and Render setups (45 degree increments)
-        cam_configs = [
-            ("Init",   0),
-            ("45",     45),
-            ("90",     90),
-            ("135",    135),
-            ("180",    180),
-            ("225",    225),
-            ("270",    270),
-            ("315",    315)
-        ]
-        
-        render_outputs = []
-        
-        for i, (name, yaw) in enumerate(cam_configs):
-            grid_x = i % 4
-            grid_y = i // 4
-            x_pos = (grid_x + grid_y * 4) * 200 
-            
-            # Paste Camera (Clone)
-            nuke.nodePaste("%clipboard%")
-            cam = nuke.selectedNode()
-            cam.setName(f"Cam{name}")
-            cam.setInput(1, int_target) # Reconnect LookAt to internal target
-            
-            # Explicitly reset rotation knobs to zero for clean LookAt behavior
-            cam['rotate'].setValue([0, 0, 0])
-            
-            # Position
-            rad_yaw = math.radians(yaw)
-            nx = rx * math.cos(rad_yaw) - rz * math.sin(rad_yaw)
-            nz = rx * math.sin(rad_yaw) + rz * math.cos(rad_yaw)
-            cam['translate'].setValue([pivot[0] + nx, pivot[1] + ry, pivot[2] + nz])
-            
-            cam.setXYpos(x_pos, 200)
-            
-            # Render Setup
-            scanline = nuke.createNode("ScanlineRender")
-            scanline.setInput(1, apply_mat)
-            scanline.setInput(2, cam)
-            scanline.setXYpos(x_pos, 400)
-            
-            # Background
-            bg = nuke.createNode("Constant")
-            bg.setName("BG_Constant")
-            bg['channels'].setValue("rgb")
-            bg['color'].setValue([0.36, 0.36, 0.36, 1])
-            bg.setXYpos(x_pos + 100, 400)
-            
-            merge = nuke.createNode("Merge2")
-            merge.setInput(1, scanline)
-            merge.setInput(0, bg)
-            merge.setXYpos(x_pos, 500)
-            
-            render_outputs.append(merge)
-            
-        # Contact Sheet
-        contact = nuke.createNode("ContactSheet")
-        
-        # Fixed resolution and layout as specified by user
-        contact_width = 4096
-        contact_height = 2048
-        rows = 2
-        columns = 4
-        gap = 10 # This gap is for internal calculation, Nuke uses 'row_gap' and 'col_gap' knobs
+        if init_cam:
+            group.setXYpos(init_cam.xpos() + 300, init_cam.ypos())
+            group.setInput(0, init_cam)
+        else:
+            group.setXYpos(0, 0)
+        if geo_source:
+            group.setInput(1, geo_source)
 
-        contact['width'].setValue(contact_width)
-        contact['height'].setValue(contact_height)
-        contact['rows'].setValue(rows)
-        contact['columns'].setValue(columns)
-        contact['roworder'].setValue("TopBottom")
-        contact['gap'].setValue(gap)
-        
-        for i, node in enumerate(render_outputs):
-            contact.setInput(i, node)
-            
-        contact.setXYpos(300, 700)
-        
-        output = nuke.createNode("Output")
-        output.setInput(0, contact)
-        output.setXYpos(300, 800)
-        
-        group.end()
+        group.begin()
+        try:
+            input_cam = nuke.createNode("Input")
+            input_cam.setName("init_cam")
+            input_cam["number"].setValue(0)
+            input_cam.setXYpos(0, 0)
+
+            input_geo = nuke.createNode("Input")
+            input_geo.setName("geo")
+            input_geo["number"].setValue(1)
+            input_geo.setXYpos(0, 100)
+        finally:
+            group.end()
+
+        controls_tab = nuke.Tab_Knob("charon_coverage_tab", "Coverage Cameras")
+        group.addKnob(controls_tab)
+
+        cam_count_knob = nuke.Enumeration_Knob("charon_cam_count", "Number of Cameras", ["2", "4", "6", "8"])
+        cam_count_knob.setValue(3)
+        group.addKnob(cam_count_knob)
+
+        generate_knob = nuke.PyScript_Knob(
+            "charon_generate_cameras",
+            "Generate Cameras",
+            self._coverage_camera_generate_script(),
+        )
+        group.addKnob(generate_knob)
+
+        if init_cam and geo_source and target:
+            try:
+                group["charon_generate_cameras"].execute()
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, "Error", f"Failed to generate cameras: {exc}")
+
         group.setSelected(True)
 
     def _on_final_prep_clicked(self):
@@ -1229,12 +1330,14 @@ end_group
 
         # 3. Find Geometry Source
         geo_source = None
-        # Check 'geo' input of the rig group
         for i in range(rig_group.inputs()):
             inp_node = rig_group.input(i)
-            # We assume the rig has an input named 'geo' connected to input 0 or similar
-            if i == 0:
-                geo_source = inp_node
+            if not inp_node:
+                continue
+            if inp_node.Class() in ("Camera3", "Camera2", "Camera", "Axis3", "Axis2", "Axis"):
+                continue
+            geo_source = inp_node
+            break
         
         if not geo_source:
              QtWidgets.QMessageBox.warning(self, "Missing Geometry", 
