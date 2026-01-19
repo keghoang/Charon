@@ -1115,9 +1115,46 @@ def _rebuild_for_count(group, count):
     if not script_content:
         return None
 
+    def _collect_dependents(node):
+        deps = []
+        for other in nuke.allNodes(recurseGroups=False):
+            for i in range(other.inputs()):
+                try:
+                    if other.input(i) == node:
+                        deps.append((other, i))
+                except Exception:
+                    pass
+        return deps
+
+    def _unique_name(base_name, names=None):
+        if names is None:
+            names = {node.name() for node in nuke.allNodes(recurseGroups=False)}
+        if base_name not in names:
+            return base_name
+        index = 1
+        while True:
+            candidate = "{0}{1}".format(base_name, index)
+            if candidate not in names:
+                return candidate
+            index += 1
+
+    def _ensure_name_available(name, keep_node=None):
+        for other in nuke.allNodes(recurseGroups=False):
+            if other is keep_node:
+                continue
+            try:
+                if other.name() == name:
+                    try:
+                        other.setName(_unique_name("{0}_OLD".format(name)))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
     input_nodes = [group.input(i) for i in range(group.inputs())]
     old_name = group.name()
     old_pos = (group.xpos(), group.ypos())
+    downstream = _collect_dependents(group)
     update_script = ""
     update_knob = group.knob("charon_update_inputs")
     if update_knob:
@@ -1142,6 +1179,12 @@ def _rebuild_for_count(group, count):
     except Exception:
         pass
 
+    for dep, idx in downstream:
+        try:
+            dep.setInput(idx, new_group)
+        except Exception:
+            pass
+
     _ensure_inputs(new_group)
     _ensure_update_knobs(new_group, update_script)
 
@@ -1151,9 +1194,14 @@ def _rebuild_for_count(group, count):
     except Exception:
         pass
     try:
-        new_group.setName(old_name, unique=True)
+        if new_group.name() != old_name:
+            new_group.setName(old_name)
     except Exception:
-        pass
+        try:
+            if new_group.name() != old_name:
+                new_group.setName(old_name, unique=True)
+        except Exception:
+            pass
     try:
         nuke.delete(old_group)
     except Exception:
@@ -1468,8 +1516,11 @@ import nuke
 
 TEMPLATE_DIR = r"__TEMPLATE_DIR__"
 
+_DEBUG = True
+
 def _debug(message):
-    pass
+    if _DEBUG:
+        print("[FinalPrep] " + message)
 
 def _angle_from_name(name):
     if name == "CamInit":
@@ -1609,6 +1660,31 @@ def _current_cam_count(group):
     finally:
         group.end()
 
+def _unique_name(base_name, names=None):
+    if names is None:
+        names = {node.name() for node in nuke.allNodes(recurseGroups=False)}
+    if base_name not in names:
+        return base_name
+    index = 1
+    while True:
+        candidate = "{0}{1}".format(base_name, index)
+        if candidate not in names:
+            return candidate
+        index += 1
+
+def _ensure_name_available(name, keep_node=None):
+    for other in nuke.allNodes(recurseGroups=False):
+        if other is keep_node:
+            continue
+        try:
+            if other.name() == name:
+                try:
+                    other.setName(_unique_name("{0}_OLD".format(name)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
 def _rebuild_for_count(group, count):
     try:
         count = int(count)
@@ -1625,9 +1701,21 @@ def _rebuild_for_count(group, count):
     if not script_content:
         return None
 
+    def _collect_dependents(node):
+        deps = []
+        for other in nuke.allNodes(recurseGroups=False):
+            for i in range(other.inputs()):
+                try:
+                    if other.input(i) == node:
+                        deps.append((other, i))
+                except Exception:
+                    pass
+        return deps
+
     input_nodes = [group.input(i) for i in range(group.inputs())]
     old_name = group.name()
     old_pos = (group.xpos(), group.ypos())
+    downstream = []
     update_script = ""
     update_knob = group.knob("charon_update_inputs")
     if update_knob:
@@ -1636,39 +1724,74 @@ def _rebuild_for_count(group, count):
         except Exception:
             update_script = ""
 
-    nuke.root().begin()
-    new_group = _paste_group(script_content)
-    if not new_group:
-        nuke.message("Failed to rebuild Final Prep group.")
-        return None
-
-    for idx, inp in enumerate(input_nodes):
+    root = nuke.root()
+    current_group = nuke.thisGroup()
+    root.begin()
+    try:
+        _debug("rebuild start: old_name={0} count={1}".format(old_name, count))
+        downstream = _collect_dependents(group)
+        _debug("downstream count: {0}".format(len(downstream)))
         try:
-            new_group.setInput(idx, inp)
+            group.setName(_unique_name("{0}_OLD".format(old_name)))
+            _debug("old group renamed to: {0}".format(group.name()))
+        except Exception as exc:
+            _debug("old group rename failed: {0}".format(exc))
+
+        new_group = _paste_group(script_content)
+        if not new_group:
+            nuke.message("Failed to rebuild Final Prep group.")
+            return None
+
+        for idx, inp in enumerate(input_nodes):
+            try:
+                new_group.setInput(idx, inp)
+            except Exception:
+                pass
+        for dep, idx in downstream:
+            try:
+                dep.setInput(idx, new_group)
+            except Exception:
+                pass
+        try:
+            new_group.setXYpos(old_pos[0], old_pos[1])
         except Exception:
             pass
-    try:
-        new_group.setXYpos(old_pos[0], old_pos[1])
-    except Exception:
-        pass
 
-    _ensure_inputs(new_group)
-    _ensure_update_knobs(new_group, update_script)
+        _ensure_inputs(new_group)
+        _ensure_update_knobs(new_group, update_script)
 
-    old_group = group
-    try:
-        old_group.setName("{0}_OLD".format(old_name), unique=True)
-    except Exception:
-        pass
-    try:
-        new_group.setName(old_name, unique=True)
-    except Exception:
-        pass
-    try:
-        nuke.delete(old_group)
-    except Exception:
-        pass
-    return new_group
+        try:
+            nuke.delete(group)
+        except Exception:
+            pass
+
+        try:
+            _ensure_name_available(old_name, new_group)
+            if new_group.name() != old_name:
+                try:
+                    new_group.setName(old_name)
+                except Exception:
+                    new_group.setName(_unique_name(old_name))
+        except Exception:
+            try:
+                if new_group.name() != old_name:
+                    new_group.setName(_unique_name(old_name))
+            except Exception:
+                pass
+        _debug("rename result: {0}".format(new_group.name()))
+        try:
+            conflicts = [
+                node.fullName() if hasattr(node, "fullName") else node.name()
+                for node in nuke.allNodes(recurseGroups=True)
+                if node.Class() == "Group" and node.name().startswith(old_name)
+            ]
+            _debug("group name matches: {0}".format(", ".join(conflicts)))
+        except Exception:
+            pass
+        return new_group
+    finally:
+        if current_group and current_group is not root:
+            current_group.begin()
 
 def _camera_info(nodes, pivot):
     info = []
@@ -2037,6 +2160,11 @@ def _run():
 
     rig_cam_count = len(_collect_rig_data(rig)[1])
     current_cam_count = _current_cam_count(group)
+    _debug("rig_cam_count={0} current_cam_count={1} group={2}".format(
+        rig_cam_count,
+        current_cam_count,
+        group.name(),
+    ))
     if rig_cam_count and current_cam_count and rig_cam_count != current_cam_count:
         _debug("rebuild for camera count: {0}".format(rig_cam_count))
         new_group = _rebuild_for_count(group, rig_cam_count)
