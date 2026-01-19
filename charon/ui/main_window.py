@@ -998,6 +998,168 @@ def _find_upstream(start_node, class_names, max_hops=32):
         hops += 1
     return None
 
+def _read_group_block(template_path):
+    try:
+        with open(template_path, "r") as handle:
+            content = handle.read()
+    except Exception as exc:
+        _debug("failed to read template: {0}".format(exc))
+        return None
+
+    start_idx = content.find("\\nGroup {")
+    if start_idx == -1:
+        if content.startswith("Group {"):
+            start_idx = 0
+        else:
+            _debug("template missing Group block")
+            return None
+    else:
+        start_idx += 1
+
+    end_idx = content.find("\\nend_group", start_idx)
+    if end_idx == -1:
+        end_idx = content.find("end_group", start_idx)
+        if end_idx == -1:
+            _debug("template missing end_group")
+            return None
+        end_idx += len("end_group")
+    else:
+        end_idx += len("\\nend_group")
+    return content[start_idx:end_idx] + "\\n"
+
+def _paste_group(script_content):
+    import tempfile
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".nk", delete=False) as handle:
+            handle.write(script_content)
+            temp_path = handle.name
+        for node in nuke.allNodes():
+            node.setSelected(False)
+        nuke.nodePaste(temp_path)
+        for node in nuke.selectedNodes():
+            if node.Class() == "Group":
+                return node
+    except Exception as exc:
+        _debug("paste failed: {0}".format(exc))
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+    return None
+
+def _ensure_inputs(group):
+    group.begin()
+    try:
+        inputs = {node.name(): node for node in nuke.allNodes() if node.Class() == "Input"}
+
+        coverage_rig = inputs.get("coverage_rig") or nuke.createNode("Input")
+        coverage_rig.setName("coverage_rig")
+        coverage_rig["number"].setValue(2)
+
+        geo_input = inputs.get("geo") or nuke.createNode("Input")
+        geo_input.setName("geo")
+        geo_input["number"].setValue(3)
+
+        coverage_input = inputs.get("coverage_sheet") or nuke.createNode("Input")
+        coverage_input.setName("coverage_sheet")
+        coverage_input["number"].setValue(4)
+    finally:
+        group.end()
+
+def _ensure_update_knobs(group, update_script):
+    if not group.knob("charon_update_inputs"):
+        update_knob = nuke.PyScript_Knob(
+            "charon_update_inputs",
+            "Update Inputs",
+            update_script or "",
+        )
+        update_knob.setFlag(nuke.STARTLINE)
+        group.addKnob(update_knob)
+
+    if not group.knob("charon_rig_cam_count"):
+        cam_count_knob = nuke.Int_Knob("charon_rig_cam_count", "Projection Cameras Found")
+        try:
+            cam_count_knob.setEnabled(False)
+        except Exception:
+            cam_count_knob.setFlag(nuke.DISABLED)
+        group.addKnob(cam_count_knob)
+
+def _current_cam_count(group):
+    group.begin()
+    try:
+        cams = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("Camera3", "Camera2", "Camera")
+            and node.name().startswith("Cam")
+        ]
+        return len(cams)
+    finally:
+        group.end()
+
+def _rebuild_for_count(group, count):
+    try:
+        count = int(count)
+    except Exception:
+        return None
+
+    template_path = os.path.join(TEMPLATE_DIR, "projection_final_prep_{0}_cams.nk".format(count))
+    template_path = os.path.normpath(template_path)
+    if not os.path.exists(template_path):
+        _debug("template not found: {0}".format(template_path))
+        return None
+
+    script_content = _read_group_block(template_path)
+    if not script_content:
+        return None
+
+    input_nodes = [group.input(i) for i in range(group.inputs())]
+    old_name = group.name()
+    old_pos = (group.xpos(), group.ypos())
+    update_script = ""
+    update_knob = group.knob("charon_update_inputs")
+    if update_knob:
+        try:
+            update_script = update_knob.value()
+        except Exception:
+            update_script = ""
+
+    nuke.root().begin()
+    new_group = _paste_group(script_content)
+    if not new_group:
+        nuke.message("Failed to rebuild Final Prep group.")
+        return None
+
+    for idx, inp in enumerate(input_nodes):
+        try:
+            new_group.setInput(idx, inp)
+        except Exception:
+            pass
+    try:
+        new_group.setXYpos(old_pos[0], old_pos[1])
+    except Exception:
+        pass
+
+    _ensure_inputs(new_group)
+    _ensure_update_knobs(new_group, update_script)
+
+    old_group = group
+    try:
+        old_group.setName("{0}_OLD".format(old_name), unique=True)
+    except Exception:
+        pass
+    try:
+        new_group.setName(old_name, unique=True)
+    except Exception:
+        pass
+    try:
+        nuke.delete(old_group)
+    except Exception:
+        pass
+    return new_group
+
 def _value_to_count(value):
     choices = [2, 4, 6, 8]
     if isinstance(value, (int, float)):
@@ -1295,16 +1457,19 @@ _run()
             )
 
     def _final_prep_update_script(self) -> str:
-        return textwrap.dedent(
+        template_dir = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "resources", "nuke_template")
+        )
+        script = textwrap.dedent(
             """\
 import math
+import os
 import nuke
 
-_DEBUG = True
+TEMPLATE_DIR = r"__TEMPLATE_DIR__"
 
 def _debug(message):
-    if _DEBUG:
-        print("[FinalPrep] " + message)
+    pass
 
 def _angle_from_name(name):
     if name == "CamInit":
@@ -1343,6 +1508,168 @@ def _find_upstream(start_node, class_names, max_hops=32):
         hops += 1
     return None
 
+def _read_group_block(template_path):
+    try:
+        with open(template_path, "r") as handle:
+            content = handle.read()
+    except Exception as exc:
+        _debug("failed to read template: {0}".format(exc))
+        return None
+
+    start_idx = content.find("\\nGroup {")
+    if start_idx == -1:
+        if content.startswith("Group {"):
+            start_idx = 0
+        else:
+            _debug("template missing Group block")
+            return None
+    else:
+        start_idx += 1
+
+    end_idx = content.find("\\nend_group", start_idx)
+    if end_idx == -1:
+        end_idx = content.find("end_group", start_idx)
+        if end_idx == -1:
+            _debug("template missing end_group")
+            return None
+        end_idx += len("end_group")
+    else:
+        end_idx += len("\\nend_group")
+    return content[start_idx:end_idx] + "\\n"
+
+def _paste_group(script_content):
+    import tempfile
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".nk", delete=False) as handle:
+            handle.write(script_content)
+            temp_path = handle.name
+        for node in nuke.allNodes():
+            node.setSelected(False)
+        nuke.nodePaste(temp_path)
+        for node in nuke.selectedNodes():
+            if node.Class() == "Group":
+                return node
+    except Exception as exc:
+        _debug("paste failed: {0}".format(exc))
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+    return None
+
+def _ensure_inputs(group):
+    group.begin()
+    try:
+        inputs = {node.name(): node for node in nuke.allNodes() if node.Class() == "Input"}
+
+        coverage_rig = inputs.get("coverage_rig") or nuke.createNode("Input")
+        coverage_rig.setName("coverage_rig")
+        coverage_rig["number"].setValue(2)
+
+        geo_input = inputs.get("geo") or nuke.createNode("Input")
+        geo_input.setName("geo")
+        geo_input["number"].setValue(3)
+
+        coverage_input = inputs.get("coverage_sheet") or nuke.createNode("Input")
+        coverage_input.setName("coverage_sheet")
+        coverage_input["number"].setValue(4)
+    finally:
+        group.end()
+
+def _ensure_update_knobs(group, update_script):
+    if not group.knob("charon_update_inputs"):
+        update_knob = nuke.PyScript_Knob(
+            "charon_update_inputs",
+            "Update Inputs",
+            update_script or "",
+        )
+        update_knob.setFlag(nuke.STARTLINE)
+        group.addKnob(update_knob)
+
+    if not group.knob("charon_rig_cam_count"):
+        cam_count_knob = nuke.Int_Knob("charon_rig_cam_count", "Projection Cameras Found")
+        try:
+            cam_count_knob.setEnabled(False)
+        except Exception:
+            cam_count_knob.setFlag(nuke.DISABLED)
+        group.addKnob(cam_count_knob)
+
+def _current_cam_count(group):
+    group.begin()
+    try:
+        cams = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("Camera3", "Camera2", "Camera")
+            and node.name().startswith("Cam")
+        ]
+        return len(cams)
+    finally:
+        group.end()
+
+def _rebuild_for_count(group, count):
+    try:
+        count = int(count)
+    except Exception:
+        return None
+
+    template_path = os.path.join(TEMPLATE_DIR, "projection_final_prep_{0}_cams.nk".format(count))
+    template_path = os.path.normpath(template_path)
+    if not os.path.exists(template_path):
+        _debug("template not found: {0}".format(template_path))
+        return None
+
+    script_content = _read_group_block(template_path)
+    if not script_content:
+        return None
+
+    input_nodes = [group.input(i) for i in range(group.inputs())]
+    old_name = group.name()
+    old_pos = (group.xpos(), group.ypos())
+    update_script = ""
+    update_knob = group.knob("charon_update_inputs")
+    if update_knob:
+        try:
+            update_script = update_knob.value()
+        except Exception:
+            update_script = ""
+
+    nuke.root().begin()
+    new_group = _paste_group(script_content)
+    if not new_group:
+        nuke.message("Failed to rebuild Final Prep group.")
+        return None
+
+    for idx, inp in enumerate(input_nodes):
+        try:
+            new_group.setInput(idx, inp)
+        except Exception:
+            pass
+    try:
+        new_group.setXYpos(old_pos[0], old_pos[1])
+    except Exception:
+        pass
+
+    _ensure_inputs(new_group)
+    _ensure_update_knobs(new_group, update_script)
+
+    old_group = group
+    try:
+        old_group.setName("{0}_OLD".format(old_name), unique=True)
+    except Exception:
+        pass
+    try:
+        new_group.setName(old_name, unique=True)
+    except Exception:
+        pass
+    try:
+        nuke.delete(old_group)
+    except Exception:
+        pass
+    return new_group
+
 def _camera_info(nodes, pivot):
     info = []
     for cam in nodes:
@@ -1369,6 +1696,25 @@ def _collect_rig_data(rig):
     finally:
         rig.end()
     return target_pos, cam_data
+
+def _update_rig_camera_count(group, rig):
+    _, cam_data = _collect_rig_data(rig)
+    count = len(cam_data)
+    knob = group.knob("charon_rig_cam_count")
+    if knob is None:
+        knob = nuke.Int_Knob("charon_rig_cam_count", "Projection Cameras Found")
+        try:
+            knob.setEnabled(False)
+        except Exception:
+            knob.setFlag(nuke.DISABLED)
+        group.addKnob(knob)
+    try:
+        knob.setValue(count)
+    except Exception:
+        try:
+            knob.setValue(int(count))
+        except Exception:
+            pass
 
 def _find_group_input(group, input_name):
     group.begin()
@@ -1689,13 +2035,25 @@ def _run():
         return
     geo = _find_group_input(group, "geo")
 
+    rig_cam_count = len(_collect_rig_data(rig)[1])
+    current_cam_count = _current_cam_count(group)
+    if rig_cam_count and current_cam_count and rig_cam_count != current_cam_count:
+        _debug("rebuild for camera count: {0}".format(rig_cam_count))
+        new_group = _rebuild_for_count(group, rig_cam_count)
+        if new_group:
+            group = new_group
+            rig = _find_group_input(group, "coverage_rig")
+            geo = _find_group_input(group, "geo")
+
     _update_cameras(group, rig)
+    _update_rig_camera_count(group, rig)
     if geo:
         _update_geo(group, geo)
 
 _run()
 """
         )
+        return script.replace("__TEMPLATE_DIR__", template_dir)
 
     def _generate_final_prep_nuke(self):
         try:
@@ -1708,9 +2066,15 @@ _run()
         try:
             # Construct path relative to this file
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            template_path = os.path.join(current_dir, "..", "resources", "nuke_template", "projection_final_prep.nk")
+            template_path = os.path.join(
+                current_dir,
+                "..",
+                "resources",
+                "nuke_template",
+                "projection_final_prep_6_cams.nk",
+            )
             template_path = os.path.normpath(template_path)
-            
+
             if not os.path.exists(template_path):
                 QtWidgets.QMessageBox.warning(self, "Error", f"Template file not found: {template_path}")
                 return
@@ -1837,6 +2201,17 @@ _run()
                 )
                 update_knob.setFlag(nuke.STARTLINE)
                 final_prep_group.addKnob(update_knob)
+
+            if not final_prep_group.knob("charon_rig_cam_count"):
+                cam_count_knob = nuke.Int_Knob(
+                    "charon_rig_cam_count",
+                    "Projection Cameras Found",
+                )
+                try:
+                    cam_count_knob.setEnabled(False)
+                except Exception:
+                    cam_count_knob.setFlag(nuke.DISABLED)
+                final_prep_group.addKnob(cam_count_knob)
 
             final_prep_group.setXYpos(anchor_pos[0], anchor_pos[1])
 
