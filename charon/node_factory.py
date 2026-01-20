@@ -424,6 +424,30 @@ def create_charon_group_node(
         pass
     node.addKnob(reuse_knob)
 
+    output_tab = nuke.Tab_Knob("charon_output_tab", "Output")
+    node.addKnob(output_tab)
+
+    output_enable = nuke.Boolean_Knob("charon_output_override_enable", "Enabled")
+    output_enable.setFlag(nuke.NO_ANIMATION)
+    output_enable.setFlag(nuke.STARTLINE)
+    try:
+        output_enable.setValue(0)
+    except Exception:
+        pass
+    try:
+        output_enable.setTooltip("Write outputs to a custom absolute path.")
+    except Exception:
+        pass
+    node.addKnob(output_enable)
+
+    output_path = nuke.String_Knob("charon_output_override_path", "Location", "")
+    output_path.setFlag(nuke.STARTLINE)
+    try:
+        output_path.setTooltip("Absolute folder to write outputs into. Output subfolders are added automatically.")
+    except Exception:
+        pass
+    node.addKnob(output_path)
+
     recursive_tab = nuke.Tab_Knob("charon_recursive_tab", "Recursive Mode")
     node.addKnob(recursive_tab)
 
@@ -434,6 +458,18 @@ def create_charon_group_node(
     recursive_iterations = nuke.Int_Knob("charon_recursive_iterations", "Iteration Count")
     recursive_iterations.setValue(1)
     node.addKnob(recursive_iterations)
+
+    recursive_output_folder = nuke.Boolean_Knob(
+        "charon_recursive_output_per_iteration",
+        "Per-Iteration Folder",
+    )
+    recursive_output_folder.setFlag(nuke.NO_ANIMATION)
+    recursive_output_folder.setFlag(nuke.STARTLINE)
+    try:
+        recursive_output_folder.setTooltip("Save each iteration in its own output subfolder.")
+    except Exception:
+        pass
+    node.addKnob(recursive_output_folder)
 
     recursive_current = nuke.Int_Knob("charon_recursive_current", "Current Iteration")
     recursive_current.setValue(0)
@@ -663,6 +699,89 @@ def create_charon_group_node(
 
     node_id_info_knob = nuke.Text_Knob("charon_node_id_info", "Charon Node ID", node_id_value)
     node.addKnob(node_id_info_knob)
+
+    refresh_id_script = "\n".join(
+        (
+            "import nuke",
+            "",
+            "def _normalize_node_id(value):",
+            "    if not value:",
+            "        return ''",
+            "    text = str(value).strip().lower()",
+            "    if not text:",
+            "        return ''",
+            "    return text[:12]",
+            "",
+            "def _update_read_parent_ids(old_value, new_value):",
+            "    old_norm = _normalize_node_id(old_value)",
+            "    new_norm = _normalize_node_id(new_value)",
+            "    if not old_norm or not new_norm or old_norm == new_norm:",
+            "        return",
+            "    for class_name in ('Read', 'ReadGeo2', 'ReadGeo'):",
+            "        try:",
+            "            candidates = list(nuke.allNodes(class_name))",
+            "        except Exception:",
+            "            continue",
+            "        for candidate in candidates:",
+            "            parent_val = ''",
+            "            try:",
+            "                parent_val = _normalize_node_id(candidate.metadata('charon/parent_id'))",
+            "            except Exception:",
+            "                parent_val = ''",
+            "            if parent_val != old_norm:",
+            "                try:",
+            "                    parent_val = _normalize_node_id(candidate.knob('charon_parent_id').value())",
+            "                except Exception:",
+            "                    parent_val = ''",
+            "            if parent_val != old_norm:",
+            "                continue",
+            "            try:",
+            "                candidate.setMetaData('charon/parent_id', new_norm)",
+            "            except Exception:",
+            "                pass",
+            "            try:",
+            "                knob = candidate.knob('charon_parent_id')",
+            "            except Exception:",
+            "                knob = None",
+            "            if knob is not None:",
+            "                try:",
+            "                    knob.setValue(new_norm)",
+            "                except Exception:",
+            "                    pass",
+            "",
+            "def _run():",
+            "    try:",
+            "        from charon.node_factory import generate_charon_node_id, update_charon_node_identity",
+            "        from charon.paths import get_nuke_script_hash",
+            "    except Exception as exc:",
+            "        nuke.message('Failed to load Charon helpers: {0}'.format(exc))",
+            "        return",
+            "    node = nuke.thisNode()",
+            "    old_id = ''",
+            "    try:",
+            "        old_id = str(node.knob('charon_node_id').value()).strip().lower()",
+            "    except Exception:",
+            "        old_id = ''",
+            "    script_hash = ''",
+            "    try:",
+            "        script_hash = str(node.knob('charon_script_hash').value()).strip().lower()",
+            "    except Exception:",
+            "        script_hash = ''",
+            "    if not script_hash:",
+            "        try:",
+            "            script_hash = str(get_nuke_script_hash(nuke) or '').strip().lower()",
+            "        except Exception:",
+            "            script_hash = ''",
+            "    new_id = generate_charon_node_id(script_hash)",
+            "    update_charon_node_identity(node, new_id, script_hash)",
+            "    _update_read_parent_ids(old_id, new_id)",
+            "",
+            "_run()",
+        )
+    )
+    refresh_id_knob = nuke.PyScript_Knob("charon_refresh_node_id", "Refresh ID", refresh_id_script)
+    refresh_id_knob.clearFlag(nuke.STARTLINE)
+    node.addKnob(refresh_id_knob)
 
     read_id_info_knob = nuke.Text_Knob("charon_read_id_info", "Linked Read Node ID", "Not linked")
     node.addKnob(read_id_info_knob)

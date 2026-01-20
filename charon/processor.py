@@ -19,6 +19,7 @@ from .conversion_cache import (
 )
 from .paths import (
     allocate_charon_output_path,
+    allocate_custom_output_path,
     get_default_comfy_launch_path,
     get_nuke_script_hash,
     get_placeholder_image_path,
@@ -112,6 +113,7 @@ def _allocate_output_path(
     workflow_name: Optional[str],
     category: str,
     output_name: Optional[str] = None,
+    output_subfolder: Optional[str] = None,
 ) -> str:
     """
     Wrap allocate_charon_output_path to remain compatible with older signatures.
@@ -125,6 +127,7 @@ def _allocate_output_path(
             workflow_name=workflow_name,
             category=category,
             output_name=output_name,
+            output_subfolder=output_subfolder,
         )
     except TypeError:
         return allocate_charon_output_path(
@@ -1361,6 +1364,38 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 rec_current_captured = int(node.knob('charon_recursive_current').value())
             rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
         except: pass
+
+        recursive_output_subfolder = ""
+        try:
+            per_iteration = bool(node.knob("charon_recursive_output_per_iteration").value())
+        except Exception:
+            per_iteration = False
+        if rec_enabled_captured and per_iteration:
+            try:
+                iteration_index = int(rec_current_captured) + 1
+            except Exception:
+                iteration_index = 1
+            recursive_output_subfolder = f"Iteration_{iteration_index:03d}"
+
+        custom_output_root = ""
+        try:
+            output_enabled = bool(node.knob("charon_output_override_enable").value())
+        except Exception:
+            output_enabled = False
+        try:
+            custom_output_root = str(node.knob("charon_output_override_path").value()).strip()
+        except Exception:
+            custom_output_root = ""
+        if not output_enabled or not custom_output_root:
+            custom_output_root = ""
+        else:
+            custom_output_root = os.path.normpath(custom_output_root)
+            if not os.path.isabs(custom_output_root):
+                log_debug(
+                    f"Custom output path must be absolute; ignoring: {custom_output_root}",
+                    "WARNING",
+                )
+                custom_output_root = ""
 
         if hasattr(node, 'setMetaData'):
             metadata_writer = node.setMetaData
@@ -3697,15 +3732,24 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         output_node_name = output_label
                                         if artifact.get("node_id"):
                                             output_node_name = f"{output_label}_{artifact.get('node_id')}"
-                                        allocated_output_path = _allocate_output_path(
-                                            charon_node_id,
-                                            _resolve_nuke_script_name(),
-                                            raw_extension_lower,
-                                            user_slug,
-                                            workflow_display_name,
-                                            category,
-                                            output_node_name,
-                                        )
+                                        if custom_output_root:
+                                            allocated_output_path = allocate_custom_output_path(
+                                                custom_output_root,
+                                                raw_extension_lower,
+                                                output_node_name,
+                                                output_subfolder=recursive_output_subfolder,
+                                            )
+                                        else:
+                                            allocated_output_path = _allocate_output_path(
+                                                charon_node_id,
+                                                _resolve_nuke_script_name(),
+                                                raw_extension_lower,
+                                                user_slug,
+                                                workflow_display_name,
+                                                category,
+                                                output_node_name,
+                                                output_subfolder=recursive_output_subfolder,
+                                            )
                                         log_debug(f'Resolved output path: {allocated_output_path}')
                                         source_filename = artifact.get("filename")
                                         source_is_abs = isinstance(source_filename, str) and os.path.isabs(source_filename)

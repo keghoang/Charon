@@ -279,6 +279,43 @@ def _ensure_directory(path: str) -> None:
         logger.warning("Could not create directory %s: %s", path, exc)
 
 
+def allocate_custom_output_path(
+    custom_root: str,
+    extension: Optional[str] = None,
+    output_name: Optional[str] = None,
+    output_subfolder: Optional[str] = None,
+) -> str:
+    extension = (extension or "").strip() or ".png"
+    if not extension.startswith("."):
+        extension = f".{extension}"
+
+    base_root = os.path.normpath(str(custom_root or ""))
+    output_segment = _sanitize_component(output_name, "") if output_name else ""
+    output_subfolder_segment = _sanitize_component(output_subfolder, "") if output_subfolder else ""
+    segments = [seg for seg in (output_subfolder_segment, output_segment) if seg]
+    base_output_dir = os.path.join(base_root, *segments) if segments else base_root
+
+    _ensure_directory(base_output_dir)
+
+    prefix = OUTPUT_PREFIX
+    version_pattern = re.compile(rf"{re.escape(prefix)}(\d+)", re.IGNORECASE)
+    highest_version = 0
+    try:
+        for entry in os.listdir(base_output_dir):
+            match = version_pattern.match(entry)
+            if match:
+                try:
+                    highest_version = max(highest_version, int(match.group(1)))
+                except ValueError:
+                    continue
+    except FileNotFoundError:
+        pass
+
+    next_version = highest_version + 1
+    filename = f"{prefix}{next_version:03d}{extension.lower()}"
+    return os.path.join(base_output_dir, filename)
+
+
 def allocate_charon_output_path(
     node_id: Optional[str],
     script_name: Optional[str],
@@ -287,6 +324,7 @@ def allocate_charon_output_path(
     workflow_name: Optional[str] = None,
     category: Optional[str] = None,
     output_name: Optional[str] = None,
+    output_subfolder: Optional[str] = None,
 ) -> str:
     """
     Determine the versioned output path for a CharonOp run.
@@ -329,6 +367,10 @@ def allocate_charon_output_path(
         node_id=normalized_node_id,
     )
     base_output_dir = os.path.join(work_root, CHARON_FOLDER_NAME, directory_suffix)
+    output_subfolder_segment = _sanitize_component(output_subfolder, "") if output_subfolder else ""
+    if output_subfolder_segment:
+        base_output_dir = os.path.join(base_output_dir, output_subfolder_segment)
+
     output_segment = _sanitize_component(output_name, "") if output_name else ""
     if output_segment:
         base_output_dir = os.path.join(base_output_dir, output_segment)

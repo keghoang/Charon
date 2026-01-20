@@ -1516,7 +1516,7 @@ import nuke
 
 TEMPLATE_DIR = r"__TEMPLATE_DIR__"
 
-_DEBUG = True
+_DEBUG = False
 
 def _debug(message):
     if _DEBUG:
