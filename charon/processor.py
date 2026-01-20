@@ -1179,7 +1179,7 @@ def _handle_recursive_updates(node, last_output):
     import nuke
     log_debug(f"Recursive Update Triggered for {node.name()}")
     
-    # 1. Increment Attribute
+    # 1. Override Attribute with Current Iteration
     try:
         attr = node.knob('charon_recursive_attribute').value()
         if attr:
@@ -1191,16 +1191,29 @@ def _handle_recursive_updates(node, last_output):
                     k = target_node[parts[1]]
             elif attr in node.knobs():
                 k = node[attr]
-            
-            if k:
+
+            current_val = None
+            try:
+                curr_knob = node.knob('charon_recursive_current')
+                if curr_knob:
+                    current_val = int(curr_knob.value()) + 1
+            except Exception:
+                current_val = None
+
+            if k and current_val is not None:
                 v = k.value()
-                log_debug(f"Incrementing attribute {attr} from {v}")
+                log_debug(f"Setting attribute {attr} to iteration {current_val} (was {v})")
                 if isinstance(v, (int, float)):
-                    k.setValue(v + 1)
-                elif isinstance(v, str) and v.isdigit():
-                    k.setValue(str(int(v) + 1))
+                    k.setValue(type(v)(current_val))
+                elif isinstance(v, str):
+                    k.setValue(str(current_val))
+                else:
+                    try:
+                        k.setValue(current_val)
+                    except Exception:
+                        k.setValue(str(current_val))
     except Exception as e:
-        log_debug(f"Failed to increment recursive attribute: {e}", "WARNING")
+        log_debug(f"Failed to set recursive attribute: {e}", "WARNING")
 
     # 2. Update Read Node & Connections
     try:
@@ -1364,6 +1377,29 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 rec_current_captured = int(node.knob('charon_recursive_current').value())
             rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
         except: pass
+        
+        if rec_enabled_captured and not is_recursive_call:
+            try:
+                attr = node.knob('charon_recursive_attribute').value()
+            except Exception:
+                attr = ""
+            if attr:
+                try:
+                    target_knob = None
+                    if '.' in attr:
+                        parts = attr.split('.', 1)
+                        target_node = nuke.toNode(parts[0])
+                        if target_node and parts[1] in target_node.knobs():
+                            target_knob = target_node[parts[1]]
+                    elif attr in node.knobs():
+                        target_knob = node[attr]
+                    if target_knob is not None:
+                        try:
+                            target_knob.setValue(0)
+                        except Exception:
+                            target_knob.setValue("0")
+                except Exception as exc:
+                    log_debug(f"Failed to reset recursive attribute: {exc}", "WARNING")
 
         recursive_output_subfolder = ""
         try:
@@ -5035,9 +5071,22 @@ def create_contact_sheet_from_charonop(node_override=None):
             nuke.message("No image outputs found.")
         return
 
-    _create_generic_result_group(node, image_paths)
+    columns_override = None
+    try:
+        recursive_enabled = bool(node.knob('charon_recursive_enable').value())
+    except Exception:
+        recursive_enabled = False
+    if recursive_enabled:
+        try:
+            iterations = int(node.knob('charon_recursive_iterations').value())
+        except Exception:
+            iterations = 0
+        if iterations > 0:
+            columns_override = iterations
 
-def _create_generic_result_group(charon_node, image_paths):
+    _create_generic_result_group(node, image_paths, columns_override=columns_override)
+
+def _create_generic_result_group(charon_node, image_paths, columns_override=None):
     import nuke
     import uuid
     
@@ -5115,7 +5164,13 @@ def _create_generic_result_group(charon_node, image_paths):
     
     group.begin()
     
-    cols = min(len(image_paths), 4)
+    if columns_override:
+        try:
+            cols = max(1, int(columns_override))
+        except Exception:
+            cols = min(len(image_paths), 4)
+    else:
+        cols = min(len(image_paths), 4)
     rows = (len(image_paths) + cols - 1) // cols
     
     cs = nuke.createNode("ContactSheet")
