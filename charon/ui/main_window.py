@@ -1384,14 +1384,7 @@ def _run():
 
             render_outputs.append(merge)
 
-        if count == 2:
-            columns = 2
-        elif count == 4:
-            columns = 2
-        elif count == 6:
-            columns = 3
-        else:
-            columns = 4
+        columns = max(1, int(count))
         rows = int(math.ceil(float(count) / float(columns)))
 
         contact = nuke.createNode("ContactSheet")
@@ -1839,7 +1832,27 @@ def _update_rig_camera_count(group, rig):
         except Exception:
             pass
 
-def _find_group_input(group, input_name):
+def _resolve_passthrough(start_node, max_hops=32):
+    current = start_node
+    visited = set()
+    hops = 0
+    while current and hops < max_hops:
+        if current in visited:
+            break
+        visited.add(current)
+        try:
+            if current.Class() not in ("Dot", "NoOp"):
+                return current
+        except Exception:
+            return current
+        try:
+            current = current.input(0)
+        except Exception:
+            current = None
+        hops += 1
+    return start_node
+
+def _find_group_input(group, input_name, class_names=None):
     group.begin()
     try:
         input_node = nuke.toNode(input_name)
@@ -1848,7 +1861,14 @@ def _find_group_input(group, input_name):
         index = int(input_node["number"].value()) if input_node.knob("number") else 0
     finally:
         group.end()
-    return group.input(index)
+    node = group.input(index)
+    if not node:
+        return None
+    if class_names:
+        resolved = _find_upstream(node, class_names)
+        if resolved:
+            return resolved
+    return _resolve_passthrough(node)
 
 def _update_geo(group, geo_node):
     if not geo_node:
@@ -2149,11 +2169,11 @@ def _update_cameras(group, rig):
 
 def _run():
     group = nuke.thisNode()
-    rig = _find_group_input(group, "coverage_rig")
+    rig = _find_group_input(group, "coverage_rig", ("Group", "Gizmo", "LiveGroup"))
     if not rig:
         nuke.message("Connect Charon_Coverage_Rig to coverage_rig input.")
         return
-    if rig.Class() != "Group":
+    if rig.Class() not in ("Group", "Gizmo", "LiveGroup"):
         nuke.message("coverage_rig input must be a Group.")
         return
     geo = _find_group_input(group, "geo")
@@ -2182,6 +2202,361 @@ _run()
 """
         )
         return script.replace("__TEMPLATE_DIR__", template_dir)
+
+    def _texture_bake_update_script(self) -> str:
+        script = textwrap.dedent(
+            """\
+import nuke
+
+_DEBUG = True
+
+def _debug(message):
+    if _DEBUG:
+        print("[TextureBake] " + message)
+
+def _find_upstream(start_node, class_names, max_hops=32):
+    current = start_node
+    visited = set()
+    hops = 0
+    while current and hops < max_hops:
+        if current in visited:
+            break
+        visited.add(current)
+        try:
+            if current.Class() in class_names:
+                return current
+        except Exception:
+            pass
+        try:
+            current = current.input(0)
+        except Exception:
+            current = None
+        hops += 1
+    return None
+
+def _resolve_passthrough(start_node, max_hops=32):
+    current = start_node
+    visited = set()
+    hops = 0
+    while current and hops < max_hops:
+        if current in visited:
+            break
+        visited.add(current)
+        try:
+            if current.Class() not in ("Dot", "NoOp"):
+                return current
+        except Exception:
+            return current
+        try:
+            current = current.input(0)
+        except Exception:
+            current = None
+        hops += 1
+    return start_node
+
+def _find_group_input(group, input_name, class_names=None):
+    group.begin()
+    try:
+        input_node = nuke.toNode(input_name)
+        if not input_node or input_node.Class() != "Input":
+            return None
+        index = int(input_node["number"].value()) if input_node.knob("number") else 0
+    finally:
+        group.end()
+    node = group.input(index)
+    if not node:
+        return None
+    if class_names:
+        resolved = _find_upstream(node, class_names)
+        if resolved:
+            return resolved
+    return _resolve_passthrough(node)
+
+def _collect_rig_cam_count(rig):
+    if not rig or not hasattr(rig, "begin"):
+        return 0
+    rig.begin()
+    try:
+        cams = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("Camera3", "Camera2", "Camera")
+            and node.name().startswith("Cam")
+        ]
+        return len(cams)
+    finally:
+        rig.end()
+
+def _ensure_rig_count_knob(group):
+    knob = group.knob("charon_rig_cam_count")
+    if knob:
+        return knob
+    knob = nuke.Int_Knob("charon_rig_cam_count", "Projection Cameras Found")
+    try:
+        knob.setEnabled(False)
+    except Exception:
+        knob.setFlag(nuke.DISABLED)
+    group.addKnob(knob)
+    return knob
+
+def _update_rig_camera_count(group, rig):
+    count = _collect_rig_cam_count(rig)
+    knob = _ensure_rig_count_knob(group)
+    try:
+        knob.setValue(count)
+    except Exception:
+        try:
+            knob.setValue(int(count))
+        except Exception:
+            pass
+
+def _update_geo(group, geo_node):
+    if not geo_node:
+        return False
+    _debug("update_geo input: {0} ({1})".format(geo_node.name(), geo_node.Class()))
+    if geo_node.Class() not in ("ReadGeo2", "ReadGeo"):
+        upstream = _find_upstream(geo_node, ("ReadGeo2", "ReadGeo"))
+        if upstream:
+            _debug("resolved upstream geo: {0} ({1})".format(upstream.name(), upstream.Class()))
+            geo_node = upstream
+        else:
+            nuke.message("Geo input must be a ReadGeo/ReadGeo2 node.")
+            return False
+
+    root = nuke.root()
+    current_group = nuke.thisGroup()
+    root.begin()
+    original_selection = list(nuke.selectedNodes())
+    for n in original_selection:
+        n.setSelected(False)
+    try:
+        geo_node.setSelected(True)
+        nuke.nodeCopy("%clipboard%")
+        _debug("copied geo node: {0}".format(
+            geo_node.fullName() if hasattr(geo_node, "fullName") else geo_node.name()
+        ))
+    finally:
+        geo_node.setSelected(False)
+        for n in original_selection:
+            try:
+                n.setSelected(True)
+            except Exception:
+                pass
+        if current_group and current_group is not root:
+            current_group.begin()
+
+    group.begin()
+    try:
+        before_nodes = set(nuke.allNodes())
+        for n in nuke.selectedNodes():
+            n.setSelected(False)
+        nuke.nodePaste("%clipboard%")
+        pasted_nodes = list(nuke.selectedNodes())
+        after_nodes = [node for node in nuke.allNodes() if node not in before_nodes]
+        if not after_nodes and not pasted_nodes:
+            nuke.message("Failed to paste geo node.")
+            return False
+        _debug("pasted nodes: {0}".format(
+            ", ".join("{0}({1})".format(node.name(), node.Class()) for node in pasted_nodes)
+        ))
+        _debug("after_nodes: {0}".format(
+            ", ".join("{0}({1})".format(node.name(), node.Class()) for node in after_nodes)
+        ))
+
+        pasted = None
+        for node in pasted_nodes + after_nodes:
+            if node.Class() in ("ReadGeo2", "ReadGeo"):
+                pasted = node
+                break
+        if pasted is None:
+            pasted = (pasted_nodes or after_nodes)[0]
+        _debug("chosen pasted: {0} ({1})".format(pasted.name(), pasted.Class()))
+        if pasted.knob("file"):
+            try:
+                _debug("pasted file: {0}".format(pasted["file"].value()))
+            except Exception:
+                pass
+
+        existing_geos = [
+            node for node in nuke.allNodes()
+            if node.Class() in ("ReadGeo2", "ReadGeo")
+            and node is not pasted
+        ]
+        _debug("existing geos: {0}".format(
+            ", ".join("{0}({1})".format(node.name(), node.Class()) for node in existing_geos)
+        ))
+
+        def _is_clone(node):
+            try:
+                return bool(node.isClone())
+            except Exception:
+                return False
+
+        def _collect_connections(nodes):
+            connections = {node: [] for node in nodes}
+            for node in nuke.allNodes():
+                for i in range(node.inputs()):
+                    try:
+                        inp = node.input(i)
+                    except Exception:
+                        continue
+                    if inp in connections:
+                        connections[inp].append((node, i))
+            return connections
+
+        def _create_clone(master):
+            for n in nuke.selectedNodes():
+                n.setSelected(False)
+            master.setSelected(True)
+            before = set(nuke.allNodes())
+            if hasattr(nuke, "clone"):
+                try:
+                    nuke.clone(master)
+                except TypeError:
+                    nuke.clone()
+            else:
+                nuke.nodeCopy("%clipboard%")
+                nuke.nodePaste("%clipboard%")
+            created = [node for node in nuke.allNodes() if node not in before]
+            if created:
+                return created[0]
+            return None
+
+        if not existing_geos:
+            default_name = "ReadGeo" if geo_node.Class() == "ReadGeo" else "ReadGeo2"
+            try:
+                pasted.setName(default_name, unique=True)
+            except Exception:
+                pasted.setName(default_name)
+            _debug("created new geo: {0}".format(pasted.name()))
+            return True
+
+        master_old = None
+        for node in existing_geos:
+            if node.name() in ("ReadGeo2", "ReadGeo"):
+                master_old = node
+                break
+        if master_old is None:
+            for node in existing_geos:
+                if not _is_clone(node):
+                    master_old = node
+                    break
+        if master_old is None:
+            master_old = existing_geos[0]
+
+        _debug("master_old: {0}".format(master_old.name() if master_old else "None"))
+
+        geo_specs = []
+        for node in existing_geos:
+            try:
+                input_nodes = [node.input(i) for i in range(node.inputs())]
+            except Exception:
+                input_nodes = []
+            geo_specs.append({
+                "node": node,
+                "name": node.name(),
+                "pos": (node.xpos(), node.ypos()),
+                "is_master": node is master_old,
+                "inputs": input_nodes,
+            })
+        connections = _collect_connections([spec["node"] for spec in geo_specs])
+
+        new_nodes = {}
+        for spec in geo_specs:
+            if spec["is_master"]:
+                new_nodes[spec["node"]] = pasted
+            else:
+                clone = _create_clone(pasted)
+                if clone:
+                    new_nodes[spec["node"]] = clone
+                else:
+                    new_nodes[spec["node"]] = pasted
+        _debug("created {0} geo nodes".format(len(set(new_nodes.values()))))
+
+        for spec in geo_specs:
+            old_node = spec["node"]
+            new_node = new_nodes.get(old_node)
+            if new_node is None:
+                continue
+            inputs = spec.get("inputs", [])
+            for idx, inp in enumerate(inputs):
+                if inp is None:
+                    try:
+                        new_node.setInput(idx, None)
+                    except Exception:
+                        pass
+                    continue
+                replacement = new_nodes.get(inp, inp)
+                try:
+                    new_node.setInput(idx, replacement)
+                except Exception:
+                    pass
+
+        for old_node, new_node in new_nodes.items():
+            if old_node is new_node:
+                continue
+            for dep, idx in connections.get(old_node, []):
+                try:
+                    dep.setInput(idx, new_node)
+                except Exception:
+                    pass
+
+        for spec in geo_specs:
+            old_node = spec["node"]
+            new_node = new_nodes.get(old_node)
+            if new_node is None:
+                continue
+            try:
+                new_node.setXYpos(spec["pos"][0], spec["pos"][1])
+            except Exception:
+                pass
+
+        for spec in geo_specs:
+            old_node = spec["node"]
+            try:
+                nuke.delete(old_node)
+            except Exception:
+                pass
+
+        for spec in geo_specs:
+            new_node = new_nodes.get(spec["node"])
+            if new_node is None:
+                continue
+            try:
+                new_node.setName(spec["name"], unique=True)
+            except Exception:
+                try:
+                    new_node.setName(spec["name"])
+                except Exception:
+                    pass
+
+        return True
+    finally:
+        group.end()
+
+def _run():
+    group = nuke.thisNode()
+    rig = _find_group_input(group, "Charon_Coverage_Rig")
+    _debug("resolved rig: {0} ({1})".format(
+        rig.name() if rig else "None",
+        rig.Class() if rig else "None",
+    ))
+    geo = _find_group_input(group, "geo", ("ReadGeo2", "ReadGeo"))
+    _debug("resolved geo: {0} ({1})".format(
+        geo.name() if geo else "None",
+        geo.Class() if geo else "None",
+    ))
+    if rig:
+        _debug("rig camera count: {0}".format(_collect_rig_cam_count(rig)))
+        _update_rig_camera_count(group, rig)
+    if not geo:
+        nuke.message("Connect geo to geo input.")
+        return
+    _update_geo(group, geo)
+
+_run()
+"""
+        )
+        return script
 
     def _generate_final_prep_nuke(self):
         try:
@@ -2383,23 +2758,28 @@ _run()
             with open(template_path, 'r') as f:
                 content = f.read()
 
-            # Extract Group block
-            start_idx = content.find("\\nGroup {")
-            if start_idx == -1:
-                if content.startswith("Group {"):
-                    start_idx = 0
-                else:
-                    # Try more robust search
-                    import re
-                    match = re.search(r"^Group \{", content, re.MULTILINE)
-                    if match:
-                        start_idx = match.start()
-                    else:
-                        raise ValueError("No Group definition found in template")
-            else:
-                start_idx += 1
-            
-            script_content = content[start_idx:]
+            # Extract only the outer Group block so we don't leak nodes into root.
+            lines = content.splitlines(keepends=True)
+            start_line = None
+            end_line = None
+            depth = 0
+            for idx, line in enumerate(lines):
+                stripped = line.lstrip()
+                if stripped.startswith("Group {"):
+                    if start_line is None:
+                        start_line = idx
+                    depth += 1
+                elif stripped.startswith("end_group"):
+                    if depth > 0:
+                        depth -= 1
+                        if depth == 0 and start_line is not None:
+                            end_line = idx
+                            break
+
+            if start_line is None or end_line is None:
+                raise ValueError("No complete Group block found in template")
+
+            script_content = "".join(lines[start_line:end_line + 1])
             
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to load template: {str(e)}")
@@ -2412,7 +2792,39 @@ _run()
                 f.write(script_content)
                 temp_path = f.name
             
+            current_group = nuke.thisGroup()
+            root = nuke.root()
+            root.begin()
             nuke.nodePaste(temp_path)
+
+            bake_group = None
+            for node in nuke.selectedNodes():
+                if node.Class() == "Group":
+                    bake_group = node
+                    break
+            if bake_group is None:
+                bake_group = nuke.toNode("Projection_Texture_Bake")
+            if current_group and current_group is not root:
+                current_group.begin()
+
+            if bake_group and not bake_group.knob("charon_template_dir"):
+                template_dir = os.path.normpath(
+                    os.path.join(current_dir, "..", "resources", "nuke_template")
+                )
+                template_knob = nuke.String_Knob(
+                    "charon_template_dir",
+                    "Template Dir",
+                    template_dir,
+                )
+                template_knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+                bake_group.addKnob(template_knob)
+            elif bake_group is None:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Error",
+                    "Failed to create Projection_Texture_Bake group. "
+                    "Please delete any pasted nodes and try again.",
+                )
 
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", f"Failed to process bake group: {str(e)}")
