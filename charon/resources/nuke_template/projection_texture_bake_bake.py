@@ -30,6 +30,58 @@ def iter_tiles():
                 yield u, v
 
 
+def _format_from_node(node):
+    if not node:
+        return None
+    try:
+        fmt = node.format()
+        if fmt:
+            return fmt
+    except Exception:
+        pass
+    try:
+        width = int(node.width())
+        height = int(node.height())
+        if width > 0 and height > 0:
+            return nuke.Format(width, height, 0, 0, width, height, 1, "bake_input")
+    except Exception:
+        pass
+    return None
+
+
+def _format_from_resolution(size):
+    try:
+        return nuke.Format(size, size, 0, 0, size, size, 1, "bake_resolution")
+    except Exception:
+        return None
+
+
+def _apply_root_format(root, fmt):
+    if not fmt or not root or not root.knob("format"):
+        return None
+    try:
+        width = int(fmt.width())
+        height = int(fmt.height())
+    except Exception:
+        return None
+    try:
+        name = fmt.name()
+    except Exception:
+        name = ""
+    if not name:
+        name = "bake_{0}x{1}".format(width, height)
+    fmt_string = "{0} {1} 0 0 {0} {1} 1 {2}".format(width, height, name)
+    try:
+        nuke.addFormat(fmt_string)
+    except Exception:
+        pass
+    try:
+        root["format"].setValue(name)
+    except Exception:
+        pass
+    return name
+
+
 def _ensure_anchor(node):
     k = None
     try:
@@ -263,6 +315,23 @@ else:
             pass
 
     with nuke.root():
+        root = nuke.root()
+        original_format = None
+        try:
+            if root.knob("format"):
+                original_format = root["format"].value()
+        except Exception:
+            original_format = None
+
+        target_format = _format_from_node(n.input(0))
+        if target_format is None:
+            try:
+                bake_res = int(n["bake_resolution"].value())
+            except Exception:
+                bake_res = 2048
+            target_format = _format_from_resolution(bake_res)
+        _apply_root_format(root, target_format)
+
         input_node = n
         aces_node = None
 
@@ -326,3 +395,11 @@ else:
             if aces_node:
                 nuke.delete(aces_node)
             n["UVcoord"].setValue([0, 0])
+            if original_format and root.knob("format"):
+                try:
+                    if hasattr(original_format, "name"):
+                        root["format"].setValue(original_format.name())
+                    else:
+                        root["format"].setValue(original_format)
+                except Exception:
+                    pass
