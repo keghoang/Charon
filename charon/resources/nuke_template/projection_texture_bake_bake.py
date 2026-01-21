@@ -51,28 +51,30 @@ def _format_from_node(node):
 
 def _format_from_resolution(size):
     try:
-        return nuke.Format(size, size, 0, 0, size, size, 1, "bake_resolution")
+        name = "bake_{0}".format(size)
+        return nuke.Format(size, size, 0, 0, size, size, 1, name)
     except Exception:
         return None
 
 
-def _apply_root_format(root, fmt):
-    if not fmt or not root or not root.knob("format"):
+def _apply_bake_resolution(root, node):
+    if not root or not root.knob("format"):
         return None
     try:
-        width = int(fmt.width())
-        height = int(fmt.height())
+        res = int(node["bake_resolution"].value())
     except Exception:
         return None
-    try:
-        name = fmt.name()
-    except Exception:
-        name = ""
-    if not name:
-        name = "bake_{0}x{1}".format(width, height)
-    fmt_string = "{0} {1} 0 0 {0} {1} 1 {2}".format(width, height, name)
+    name = "bake_{0}".format(res)
+    fmt_string = "{0} {0} 0 0 {0} {0} 1 {1}".format(res, name)
     try:
         nuke.addFormat(fmt_string)
+    except Exception:
+        pass
+    try:
+        for f in nuke.formats():
+            if f.name() == name:
+                root["format"].setValue(f)
+                return name
     except Exception:
         pass
     try:
@@ -323,14 +325,7 @@ else:
         except Exception:
             original_format = None
 
-        target_format = _format_from_node(n.input(0))
-        if target_format is None:
-            try:
-                bake_res = int(n["bake_resolution"].value())
-            except Exception:
-                bake_res = 2048
-            target_format = _format_from_resolution(bake_res)
-        _apply_root_format(root, target_format)
+        _apply_bake_resolution(root, n)
 
         input_node = n
         aces_node = None
@@ -352,7 +347,7 @@ else:
             w["raw"].setValue(True)
 
         w_exr = nuke.createNode("Write", inpanel=False)
-        w_exr.setInput(0, n)
+        w_exr.setInput(0, input_node)
         w_exr["file_type"].setValue("exr")
         w_exr["channels"].setValue("rgba")
 
