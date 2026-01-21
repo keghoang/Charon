@@ -30,33 +30,6 @@ def iter_tiles():
                 yield u, v
 
 
-def _format_from_node(node):
-    if not node:
-        return None
-    try:
-        fmt = node.format()
-        if fmt:
-            return fmt
-    except Exception:
-        pass
-    try:
-        width = int(node.width())
-        height = int(node.height())
-        if width > 0 and height > 0:
-            return nuke.Format(width, height, 0, 0, width, height, 1, "bake_input")
-    except Exception:
-        pass
-    return None
-
-
-def _format_from_resolution(size):
-    try:
-        name = "bake_{0}".format(size)
-        return nuke.Format(size, size, 0, 0, size, size, 1, name)
-    except Exception:
-        return None
-
-
 def _apply_bake_resolution(root, node):
     if not root or not root.knob("format"):
         return None
