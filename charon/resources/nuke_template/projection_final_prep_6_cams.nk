@@ -72,7 +72,7 @@ Group {
   xpos 337
   ypos -131
  }
-set Nb7696000 [stack 0]
+set N4a8bc000 [stack 0]
 push 0
  Camera3 {
   inputs 2
@@ -107,7 +107,7 @@ push 0
   xpos 1200
   ypos 2070
  }
-set N1a323000 [stack 0]
+set N4a8e7000 [stack 0]
  Constant {
   inputs 0
   channels rgb
@@ -119,37 +119,34 @@ set N1a323000 [stack 0]
  }
  AmbientOcclusion {
   spread 0.0004
+  falloff 0.02
   name AmbientOcclusion1
   xpos 360
   ypos 591
  }
-set N11106d00 [stack 0]
+set N4a8bd400 [stack 0]
+push $N4a8bc000
 push 0
- ApplyMaterial {
+ Camera3 {
   inputs 2
-  name ApplyMaterial5
-  xpos 1276
-  ypos 1999
- }
-push 0
- RayRender {
-  inputs 3
-  stochastic_samples 18
-  name RayRender5
-  xpos 1276
-  ypos 2067
+  translate {84.85281374 145 84.85281374}
+  focal 100
+  name Cam300
+  xpos 1253
+  ypos 1502
  }
  Dot {
-  name Dot47
-  xpos 1310
-  ypos 2812
+  name Dot74
+  xpos 1277
+  ypos 1610
  }
- Grade {
-  gamma 0.94
-  name Grade14
-  xpos 1604
-  ypos 2809
+set N4a93dc00 [stack 0]
+ Dot {
+  name Dot69
+  xpos 1277
+  ypos 1876
  }
+set N909be000 [stack 0]
  Input {
   inputs 0
   name charon_result
@@ -162,7 +159,7 @@ push 0
   xpos 1452
   ypos 416
  }
-set Nb7680000 [stack 0]
+set N4a8e7800 [stack 0]
  Dot {
   name Dot95
   xpos 1371
@@ -178,78 +175,13 @@ set Nb7680000 [stack 0]
   xpos 1452
   ypos 1814
  }
-set Nb7680c00 [stack 0]
- Dot {
-  name Dot126
-  xpos 1769
-  ypos 1814
- }
- Dot {
-  name Dot127
-  xpos 1769
-  ypos 2753
- }
-push $N1a323000
- Dot {
-  name Dot66
-  xpos 1200
-  ypos 2133
- }
-set Nb76c4800 [stack 0]
- Dot {
-  name Dot67
-  xpos 1200
-  ypos 2198
- }
-set Nb76c4c00 [stack 0]
- Dot {
-  name Dot68
-  xpos 1200
-  ypos 2262
- }
-push $Nb7696000
-push 0
- Camera3 {
-  inputs 2
-  translate {84.85281374 145 84.85281374}
-  focal 100
-  name Cam300
-  xpos 1253
-  ypos 1502
- }
- Dot {
-  name Dot74
-  xpos 1277
-  ypos 1610
- }
-set Nb76c5400 [stack 0]
- Dot {
-  name Dot69
-  xpos 1277
-  ypos 1876
- }
-set Nb76c5800 [stack 0]
- Dot {
-  name Dot70
-  xpos 1277
-  ypos 1911
- }
- Constant {
-  inputs 0
-  channels rgb
-  color 1
-  name Constant6
-  xpos 1957
-  ypos 1820
- }
+set N4a93c400 [stack 0]
  Project3D2 {
   inputs 2
   project_on front
-  crop false
-  occlusion_mode world
-  name Project3D11
-  xpos 1957
-  ypos 1908
+  name Project3D12
+  xpos 1418
+  ypos 1873
  }
  ReadGeo2 {
   file //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/Work/kien/projection_test/char_lobsterman.abc
@@ -286,10 +218,93 @@ set Nb76c5800 [stack 0]
    /root/char_lobsterman_mdl_v005:GEOgrp/char_lobsterman_mdl_v005:body_geo/char_lobsterman_mdl_v005:body_geoShape
   }
   name ReadGeo2
+  xpos 1418
+  ypos 1980
+ }
+ set C4a928300 [stack 0]
+set N90a40a00 [stack 0]
+ ApplyMaterial {
+  inputs 2
+  name ApplyMaterial5
+  xpos 1276
+  ypos 1999
+ }
+push 0
+ RayRender {
+  inputs 3
+  stochastic_samples 18
+  name RayRender5
+  xpos 1276
+  ypos 2067
+ }
+ Dot {
+  name Dot47
+  xpos 1310
+  ypos 2812
+ }
+ Grade {
+  gamma 0.94
+  name Grade14
+  xpos 1604
+  ypos 2809
+ }
+push $N4a93c400
+ Dot {
+  name Dot126
+  xpos 1769
+  ypos 1814
+ }
+ Dot {
+  name Dot127
+  xpos 1769
+  ypos 2753
+ }
+push $N4a8e7000
+ Dot {
+  name Dot66
+  xpos 1200
+  ypos 2133
+ }
+set N4a93d000 [stack 0]
+ Dot {
+  name Dot67
+  xpos 1200
+  ypos 2198
+ }
+set N4a93d400 [stack 0]
+ Dot {
+  name Dot68
+  xpos 1200
+  ypos 2262
+ }
+push $N909be000
+ Dot {
+  name Dot70
+  xpos 1277
+  ypos 1911
+ }
+ Constant {
+  inputs 0
+  channels rgb
+  color 1
+  name Constant6
+  xpos 1957
+  ypos 1820
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  crop false
+  occlusion_mode world
+  name Project3D11
+  xpos 1957
+  ypos 1908
+ }
+clone $C4a928300 {
   xpos 1957
   ypos 1977
+  selected false
  }
- set Cb7697e00 [stack 0]
 push 0
 add_layer {P P.red P.green P.blue P.alpha P.X P.Y P.Z P.x P.y P.z}
 add_layer {N N.red N.green N.blue}
@@ -298,7 +313,7 @@ add_layer {N N.red N.green N.blue}
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender16
   xpos 1957
@@ -309,8 +324,8 @@ add_layer {N N.red N.green N.blue}
   xpos 1957
   ypos 2390
  }
-push $Nb76c4c00
-clone $Cb7697e00 {
+push $N4a93d400
+clone $C4a928300 {
   inputs 0
   xpos 1614
   ypos 1979
@@ -322,7 +337,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender17
   xpos 1614
@@ -333,7 +348,7 @@ push 0
   xpos 1648
   ypos 2333
  }
-set Nb76fa800 [stack 0]
+set N909bf000 [stack 0]
  FilterErode {
   channels all
   name FilterErode6
@@ -367,28 +382,15 @@ set Nb76fa800 [stack 0]
   xpos 1847
   ypos 2570
  }
-push $Nb76c4800
-push $Nb76c5800
-push $Nb7680c00
- Project3D2 {
-  inputs 2
-  project_on front
-  name Project3D12
-  xpos 1418
-  ypos 1873
- }
-clone $Cb7697e00 {
-  xpos 1418
-  ypos 1980
-  selected false
- }
+push $N4a93d000
+push $N90a40a00
 push 0
  ScanlineRender {
   inputs 3
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender18
   xpos 1418
@@ -410,7 +412,7 @@ add_layer {projectionPrev projectionPrev.red projectionPrev.green projectionPrev
   xpos 1418
   ypos 2554
  }
-push $Nb76fa800
+push $N909bf000
  Dot {
   name Dot72
   xpos 1538
@@ -519,13 +521,13 @@ push $Nb76fa800
    xpos 0
    ypos -347
   }
-set N1085e800 [stack 0]
+set N90a42d00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1085e800
+push $N90a42d00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -653,7 +655,7 @@ push 0
    ypos 623
   }
  end_group
-push $Nb76fa800
+push $N909bf000
  Shuffle2 {
   fromInput1 {
    {0}
@@ -767,7 +769,7 @@ add_layer {AO AO.red AO.green AO.blue}
   xpos 1847
   ypos 2809
  }
-push $Nb76c5400
+push $N4a93dc00
  Dot {
   name Dot75
   xpos 685
@@ -788,9 +790,82 @@ push $Nb76c5400
   xpos 315
   ypos 2065
  }
-set N1a322800 [stack 0]
-push $N11106d00
+set N90b71800 [stack 0]
+push $N4a8bd400
+push $N4a8bc000
 push 0
+ Camera3 {
+  inputs 2
+  translate {0 145 120}
+  focal 100
+  name CamInit
+  xpos 337
+  ypos 69
+ }
+ Dot {
+  name Dot7
+  xpos 361
+  ypos 174
+ }
+set N90ca6000 [stack 0]
+ Dot {
+  name Dot101
+  xpos 170
+  ypos 174
+ }
+ Dot {
+  name Dot100
+  xpos 170
+  ypos 1681
+ }
+ Dot {
+  name Dot93
+  xpos 392
+  ypos 1681
+ }
+ Dot {
+  name Dot82
+  xpos 392
+  ypos 1894
+ }
+set N90ca7000 [stack 0]
+ Input {
+  inputs 0
+  name beauty
+  xpos 502
+  ypos 344
+ }
+ Dot {
+  name Dot81
+  xpos 536
+  ypos 388
+ }
+set N90c48000 [stack 0]
+ Dot {
+  name Dot128
+  xpos 581
+  ypos 388
+ }
+set N90c48400 [stack 0]
+ Dot {
+  name Dot92
+  xpos 581
+  ypos 1808
+ }
+set N90c48800 [stack 0]
+ Project3D2 {
+  inputs 2
+  project_on front
+  name Project3D14
+  xpos 547
+  ypos 1891
+ }
+clone $C4a928300 {
+  xpos 547
+  ypos 1998
+  selected false
+ }
+set N90d32000 [stack 0]
  ApplyMaterial {
   inputs 2
   name ApplyMaterial4
@@ -816,30 +891,7 @@ push 0
   xpos 719
   ypos 2778
  }
- Input {
-  inputs 0
-  name beauty
-  xpos 502
-  ypos 344
- }
- Dot {
-  name Dot81
-  xpos 536
-  ypos 388
- }
-set N109d2400 [stack 0]
- Dot {
-  name Dot128
-  xpos 581
-  ypos 388
- }
-set N109d2800 [stack 0]
- Dot {
-  name Dot92
-  xpos 581
-  ypos 1808
- }
-set N109d2c00 [stack 0]
+push $N90c48800
  Dot {
   name Dot129
   xpos 884
@@ -850,61 +902,25 @@ set N109d2c00 [stack 0]
   xpos 884
   ypos 2749
  }
-push $N1a322800
+push $N90b71800
  Dot {
   name Dot78
   xpos 315
   ypos 2151
  }
-set N10a00400 [stack 0]
+set N90c49400 [stack 0]
  Dot {
   name Dot79
   xpos 315
   ypos 2216
  }
-set N10a00800 [stack 0]
+set N90c49800 [stack 0]
  Dot {
   name Dot80
   xpos 315
   ypos 2280
  }
-push $Nb7696000
-push 0
- Camera3 {
-  inputs 2
-  translate {0 145 120}
-  focal 100
-  name CamInit
-  xpos 337
-  ypos 69
- }
- Dot {
-  name Dot7
-  xpos 361
-  ypos 174
- }
-set N10a01000 [stack 0]
- Dot {
-  name Dot101
-  xpos 170
-  ypos 174
- }
- Dot {
-  name Dot100
-  xpos 170
-  ypos 1681
- }
- Dot {
-  name Dot93
-  xpos 392
-  ypos 1681
- }
- Dot {
-  name Dot82
-  xpos 392
-  ypos 1894
- }
-set N10a2c000 [stack 0]
+push $N90ca7000
  Dot {
   name Dot83
   xpos 392
@@ -927,7 +943,7 @@ set N10a2c000 [stack 0]
   xpos 1072
   ypos 1926
  }
-clone $Cb7697e00 {
+clone $C4a928300 {
   xpos 1072
   ypos 1995
   selected false
@@ -938,7 +954,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender19
   xpos 1072
@@ -949,8 +965,8 @@ push 0
   xpos 1072
   ypos 2408
  }
-push $N10a00800
-clone $Cb7697e00 {
+push $N90c49800
+clone $C4a928300 {
   inputs 0
   xpos 729
   ypos 1997
@@ -962,7 +978,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender20
   xpos 729
@@ -973,7 +989,7 @@ push 0
   xpos 763
   ypos 2351
  }
-set N10a2d000 [stack 0]
+set N90d02000 [stack 0]
  FilterErode {
   channels all
   name FilterErode7
@@ -1007,28 +1023,15 @@ set N10a2d000 [stack 0]
   xpos 962
   ypos 2588
  }
-push $N10a00400
-push $N10a2c000
-push $N109d2c00
- Project3D2 {
-  inputs 2
-  project_on front
-  name Project3D14
-  xpos 547
-  ypos 1891
- }
-clone $Cb7697e00 {
-  xpos 547
-  ypos 1998
-  selected false
- }
+push $N90c49400
+push $N90d32000
 push 0
  ScanlineRender {
   inputs 3
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender21
   xpos 547
@@ -1049,7 +1052,7 @@ push 0
   xpos 547
   ypos 2572
  }
-push $N10a2d000
+push $N90d02000
  Dot {
   name Dot85
   xpos 667
@@ -1158,13 +1161,13 @@ push $N10a2d000
    xpos 0
    ypos -347
   }
-set N10abc300 [stack 0]
+set N90d34300 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N10abc300
+push $N90d34300
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1292,7 +1295,7 @@ push 0
    ypos 623
   }
  end_group
-push $N10a2d000
+push $N90d02000
  Shuffle2 {
   fromInput1 {
    {0}
@@ -1407,7 +1410,7 @@ push $N10a2d000
   xpos 996
   ypos 2822
  }
-push $Nb7696000
+push $N4a8bc000
 push 0
  Camera3 {
   inputs 2
@@ -1442,9 +1445,56 @@ push 0
   xpos 2116
   ypos 699
  }
-set N1a322000 [stack 0]
-push $N11106d00
+set N90e55000 [stack 0]
+push $N4a8bd400
+push $N4a8bc000
 push 0
+ Camera3 {
+  inputs 2
+  translate {-120 145 7.347880795e-15}
+  focal 100
+  name Cam120
+  xpos 2169
+  ypos 110
+ }
+ Dot {
+  name Dot24
+  xpos 2193
+  ypos 221
+ }
+set N90e87400 [stack 0]
+ Dot {
+  name Dot33
+  xpos 2193
+  ypos 494
+ }
+set N90e87800 [stack 0]
+push $N4a8e7800
+ Dot {
+  name Dot116
+  xpos 1769
+  ypos 416
+ }
+set N90e55800 [stack 0]
+ Dot {
+  name Dot88
+  xpos 2368
+  ypos 416
+ }
+set N90e55c00 [stack 0]
+ Project3D2 {
+  inputs 2
+  project_on front
+  name Project3D5
+  xpos 2334
+  ypos 491
+ }
+clone $C4a928300 {
+  xpos 2334
+  ypos 598
+  selected false
+ }
+set N90f17700 [stack 0]
  ApplyMaterial {
   inputs 2
   name ApplyMaterial3
@@ -1470,19 +1520,7 @@ push 0
   xpos 2520
   ypos 1392
  }
-push $Nb7680000
- Dot {
-  name Dot116
-  xpos 1769
-  ypos 416
- }
-set N10b2d000 [stack 0]
- Dot {
-  name Dot88
-  xpos 2368
-  ypos 416
- }
-set N10b2d400 [stack 0]
+push $N90e55c00
  Dot {
   name Dot118
   xpos 2685
@@ -1493,46 +1531,25 @@ set N10b2d400 [stack 0]
   xpos 2685
   ypos 1324
  }
-push $N1a322000
+push $N90e55000
  Dot {
   name Dot30
   xpos 2116
   ypos 751
  }
-set N10be7000 [stack 0]
+set N90e86800 [stack 0]
  Dot {
   name Dot31
   xpos 2116
   ypos 816
  }
-set N10be7400 [stack 0]
+set N90e86c00 [stack 0]
  Dot {
   name Dot32
   xpos 2116
   ypos 880
  }
-push $Nb7696000
-push 0
- Camera3 {
-  inputs 2
-  translate {-120 145 7.347880795e-15}
-  focal 100
-  name Cam120
-  xpos 2169
-  ypos 110
- }
- Dot {
-  name Dot24
-  xpos 2193
-  ypos 221
- }
-set N10be7c00 [stack 0]
- Dot {
-  name Dot33
-  xpos 2193
-  ypos 494
- }
-set N10c10000 [stack 0]
+push $N90e87800
  Dot {
   name Dot34
   xpos 2193
@@ -1555,7 +1572,7 @@ set N10c10000 [stack 0]
   xpos 2873
   ypos 526
  }
-clone $Cb7697e00 {
+clone $C4a928300 {
   xpos 2873
   ypos 595
   selected false
@@ -1566,7 +1583,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender7
   xpos 2873
@@ -1577,8 +1594,8 @@ push 0
   xpos 2873
   ypos 1008
  }
-push $N10be7400
-clone $Cb7697e00 {
+push $N90e86c00
+clone $C4a928300 {
   inputs 0
   xpos 2530
   ypos 597
@@ -1590,7 +1607,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender8
   xpos 2530
@@ -1601,7 +1618,7 @@ push 0
   xpos 2564
   ypos 951
  }
-set N10c11000 [stack 0]
+set N90ec2800 [stack 0]
  FilterErode {
   channels all
   name FilterErode3
@@ -1635,28 +1652,15 @@ set N10c11000 [stack 0]
   xpos 2763
   ypos 1188
  }
-push $N10be7000
-push $N10c10000
-push $N10b2d400
- Project3D2 {
-  inputs 2
-  project_on front
-  name Project3D5
-  xpos 2334
-  ypos 491
- }
-clone $Cb7697e00 {
-  xpos 2334
-  ypos 598
-  selected false
- }
+push $N90e86800
+push $N90f17700
 push 0
  ScanlineRender {
   inputs 3
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender9
   xpos 2334
@@ -1677,7 +1681,7 @@ push 0
   xpos 2334
   ypos 1172
  }
-push $N10c11000
+push $N90ec2800
  Dot {
   name Dot36
   xpos 2454
@@ -1786,13 +1790,13 @@ push $N10c11000
    xpos 0
    ypos -347
   }
-set N10c96300 [stack 0]
+set N90f43e00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N10c96300
+push $N90f43e00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1920,7 +1924,7 @@ push 0
    ypos 623
   }
  end_group
-push $N10c11000
+push $N90ec2800
  Shuffle2 {
   fromInput1 {
    {0}
@@ -2030,7 +2034,7 @@ push $N10c11000
   xpos 2763
   ypos 1392
  }
-push $N10be7c00
+push $N90e87400
  Dot {
   name Dot25
   xpos 1570
@@ -2051,9 +2055,44 @@ push $N10be7c00
   xpos 1200
   ypos 710
  }
-set N110eb800 [stack 0]
-push $N11106d00
+set N9102b000 [stack 0]
+push $N4a8bd400
+push $N4a8bc000
 push 0
+ Camera3 {
+  inputs 2
+  translate {-84.85281374 145 84.85281374}
+  focal 100
+  name Cam60
+  xpos 1253
+  ypos 95
+ }
+ Dot {
+  name Dot22
+  xpos 1277
+  ypos 222
+ }
+set N91074800 [stack 0]
+ Dot {
+  name Dot16
+  xpos 1277
+  ypos 505
+ }
+set N91074c00 [stack 0]
+push $N4a8e7800
+ Project3D2 {
+  inputs 2
+  project_on front
+  name Project3D3
+  xpos 1418
+  ypos 502
+ }
+clone $C4a928300 {
+  xpos 1418
+  ypos 609
+  selected false
+ }
+set N91102d00 [stack 0]
  ApplyMaterial {
   inputs 2
   name ApplyMaterial2
@@ -2079,52 +2118,31 @@ push 0
   xpos 1604
   ypos 1403
  }
-push $N10b2d000
+push $N90e55800
  Dot {
   name Dot117
   xpos 1769
   ypos 1359
  }
-push $N110eb800
+push $N9102b000
  Dot {
   name Dot12
   xpos 1200
   ypos 762
  }
-set N10d05c00 [stack 0]
+set N9102bc00 [stack 0]
  Dot {
   name Dot13
   xpos 1200
   ypos 827
  }
-set N10da8000 [stack 0]
+set N91074000 [stack 0]
  Dot {
   name Dot14
   xpos 1200
   ypos 891
  }
-push $Nb7696000
-push 0
- Camera3 {
-  inputs 2
-  translate {-84.85281374 145 84.85281374}
-  focal 100
-  name Cam60
-  xpos 1253
-  ypos 95
- }
- Dot {
-  name Dot22
-  xpos 1277
-  ypos 222
- }
-set N10da8800 [stack 0]
- Dot {
-  name Dot16
-  xpos 1277
-  ypos 505
- }
-set N10da8c00 [stack 0]
+push $N91074c00
  Dot {
   name Dot18
   xpos 1277
@@ -2147,7 +2165,7 @@ set N10da8c00 [stack 0]
   xpos 1957
   ypos 537
  }
-clone $Cb7697e00 {
+clone $C4a928300 {
   xpos 1957
   ypos 606
   selected false
@@ -2158,7 +2176,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender4
   xpos 1957
@@ -2169,8 +2187,8 @@ push 0
   xpos 1957
   ypos 1019
  }
-push $N10da8000
-clone $Cb7697e00 {
+push $N91074000
+clone $C4a928300 {
   inputs 0
   xpos 1614
   ypos 608
@@ -2182,7 +2200,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender5
   xpos 1614
@@ -2193,7 +2211,7 @@ push 0
   xpos 1648
   ypos 962
  }
-set N10da9c00 [stack 0]
+set N91075c00 [stack 0]
  FilterErode {
   channels all
   name FilterErode2
@@ -2227,28 +2245,15 @@ set N10da9c00 [stack 0]
   xpos 1847
   ypos 1199
  }
-push $N10d05c00
-push $N10da8c00
-push $Nb7680000
- Project3D2 {
-  inputs 2
-  project_on front
-  name Project3D3
-  xpos 1418
-  ypos 502
- }
-clone $Cb7697e00 {
-  xpos 1418
-  ypos 609
-  selected false
- }
+push $N9102bc00
+push $N91102d00
 push 0
  ScanlineRender {
   inputs 3
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender6
   xpos 1418
@@ -2269,7 +2274,7 @@ push 0
   xpos 1418
   ypos 1183
  }
-push $N10da9c00
+push $N91075c00
  Dot {
   name Dot20
   xpos 1538
@@ -2378,13 +2383,13 @@ push $N10da9c00
    xpos 0
    ypos -347
   }
-set N10e57e00 [stack 0]
+set N91137400 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N10e57e00
+push $N91137400
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2512,7 +2517,7 @@ push 0
    ypos 623
   }
  end_group
-push $N10da9c00
+push $N91075c00
  Shuffle2 {
   fromInput1 {
    {0}
@@ -2622,7 +2627,7 @@ push $N10da9c00
   xpos 1847
   ypos 1403
  }
-push $N10da8800
+push $N91074800
  Dot {
   name Dot23
   xpos 654
@@ -2643,9 +2648,29 @@ push $N10da8800
   xpos 284
   ypos 715
  }
-set N110eb000 [stack 0]
-push $N11106d00
-push 0
+set N91232400 [stack 0]
+push $N4a8bd400
+push $N90ca6000
+ Dot {
+  name Dot15
+  xpos 361
+  ypos 503
+ }
+set N91266000 [stack 0]
+push $N90c48000
+ Project3D2 {
+  inputs 2
+  project_on front
+  name Project3D8
+  xpos 502
+  ypos 500
+ }
+clone $C4a928300 {
+  xpos 502
+  ypos 607
+  selected false
+ }
+set N912d3e00 [stack 0]
  ApplyMaterial {
   inputs 2
   name ApplyMaterial1
@@ -2671,7 +2696,7 @@ push 0
   xpos 688
   ypos 1408
  }
-push $N109d2800
+push $N90c48400
  Dot {
   name Dot114
   xpos 853
@@ -2682,31 +2707,25 @@ push $N109d2800
   xpos 853
   ypos 1367
  }
-push $N110eb000
+push $N91232400
  Dot {
   name Dot2
   xpos 284
   ypos 760
  }
-set N10f5cc00 [stack 0]
+set N91233400 [stack 0]
  Dot {
   name Dot3
   xpos 284
   ypos 825
  }
-set N10f5d000 [stack 0]
+set N91233800 [stack 0]
  Dot {
   name Dot4
   xpos 284
   ypos 889
  }
-push $N10a01000
- Dot {
-  name Dot15
-  xpos 361
-  ypos 503
- }
-set N10f5d800 [stack 0]
+push $N91266000
  Dot {
   name Dot5
   xpos 361
@@ -2729,7 +2748,7 @@ set N10f5d800 [stack 0]
   xpos 1041
   ypos 535
  }
-clone $Cb7697e00 {
+clone $C4a928300 {
   xpos 1041
   ypos 604
   selected false
@@ -2740,7 +2759,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender3
   xpos 1041
@@ -2751,8 +2770,8 @@ push 0
   xpos 1041
   ypos 1017
  }
-push $N10f5d000
-clone $Cb7697e00 {
+push $N91233800
+clone $C4a928300 {
   inputs 0
   xpos 698
   ypos 606
@@ -2764,7 +2783,7 @@ push 0
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel {P.red P.green P.blue}
+  P_channel P
   N_channel N
   name ScanlineRender1
   xpos 698
@@ -2775,7 +2794,7 @@ push 0
   xpos 732
   ypos 960
  }
-set N10f86800 [stack 0]
+set N91267000 [stack 0]
  FilterErode {
   channels all
   name FilterErode1
@@ -2809,28 +2828,15 @@ set N10f86800 [stack 0]
   xpos 931
   ypos 1197
  }
-push $N10f5cc00
-push $N10f5d800
-push $N109d2400
- Project3D2 {
-  inputs 2
-  project_on front
-  name Project3D8
-  xpos 502
-  ypos 500
- }
-clone $Cb7697e00 {
-  xpos 502
-  ypos 607
-  selected false
- }
+push $N91233400
+push $N912d3e00
 push 0
  ScanlineRender {
   inputs 3
   conservative_shader_sampling false
   motion_vectors_type distance
   output_shader_vectors true
-  P_channel P
+  P_channel {P.red P.green P.blue}
   N_channel N
   name ScanlineRender2
   xpos 502
@@ -2851,7 +2857,7 @@ push 0
   xpos 502
   ypos 1181
  }
-push $N10f86800
+push $N91267000
  Dot {
   name Dot1
   xpos 622
@@ -2960,13 +2966,13 @@ push $N10f86800
    xpos 0
    ypos -347
   }
-set N11011400 [stack 0]
+set N9132c500 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N11011400
+push $N9132c500
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3094,7 +3100,7 @@ push 0
    ypos 623
   }
  end_group
-push $N10f86800
+push $N91267000
  Shuffle2 {
   fromInput1 {
    {0}
@@ -3229,7 +3235,7 @@ push $N10f86800
   xpos 2763
   ypos 3244
  }
-clone $Cb7697e00 {
+clone $C4a928300 {
   inputs 0
   xpos 146
   ypos -113
