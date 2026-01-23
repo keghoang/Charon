@@ -52,6 +52,7 @@ from ..charon_logger import (
 )
 from ..icon_manager import get_icon_manager
 from ..paths import get_charon_temp_dir
+from .. import paths
 
 
 # Centralized UI palette for quick tweaks
@@ -65,6 +66,84 @@ COLOR_NEW_WORKFLOW_BG = "#84a8de"
 COLOR_NEW_WORKFLOW_TEXT = "#3c5e78"
 COLOR_NEW_WORKFLOW_HOVER = "#94b6e7"
 COLOR_NEW_WORKFLOW_PRESSED = "#7393bf"
+
+_TEXTURE_BAKE_TEMPLATE_HOOK_INSTALLED = False
+
+
+def _ensure_projection_texture_bake_template_dirs() -> int:
+    try:
+        import nuke
+    except Exception:
+        return 0
+
+    template_dir = os.path.normpath(os.path.join(paths.RESOURCE_DIR, "nuke_template"))
+    if not os.path.isdir(template_dir):
+        return 0
+
+    updated = 0
+    try:
+        nodes = nuke.allNodes("Group")
+    except Exception:
+        return 0
+
+    for node in nodes:
+        try:
+            if not node.knob("project_texture"):
+                continue
+        except Exception:
+            continue
+
+        knob = None
+        try:
+            knob = node.knob("charon_template_dir")
+        except Exception:
+            knob = None
+
+        if knob:
+            try:
+                current = knob.value()
+            except Exception:
+                current = ""
+            if not current or not os.path.exists(current):
+                try:
+                    knob.setValue(template_dir)
+                    updated += 1
+                except Exception:
+                    pass
+        else:
+            try:
+                template_knob = nuke.String_Knob("charon_template_dir", "Template Dir", template_dir)
+                template_knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
+                node.addKnob(template_knob)
+                updated += 1
+            except Exception:
+                pass
+
+    if updated:
+        system_debug(f"Updated Projection_Texture_Bake template dir on {updated} node(s).")
+
+    return updated
+
+
+def _install_projection_texture_bake_template_hook() -> None:
+    global _TEXTURE_BAKE_TEMPLATE_HOOK_INSTALLED
+    if _TEXTURE_BAKE_TEMPLATE_HOOK_INSTALLED:
+        return
+
+    try:
+        import nuke
+    except Exception:
+        return
+
+    def _on_script_load():
+        _ensure_projection_texture_bake_template_dirs()
+
+    try:
+        nuke.addOnScriptLoad(_on_script_load)
+    except Exception:
+        return
+
+    _TEXTURE_BAKE_TEMPLATE_HOOK_INSTALLED = True
 
 
 class CharonWindow(QtWidgets.QWidget):
@@ -147,6 +226,8 @@ class CharonWindow(QtWidgets.QWidget):
         # Setup UI
         self.setup_ui()
         self._apply_main_background()
+        _install_projection_texture_bake_template_hook()
+        _ensure_projection_texture_bake_template_dirs()
 
         # Clean up missing bookmarks in background
         self._folder_probe_executor.submit(self._async_bookmark_cleanup)

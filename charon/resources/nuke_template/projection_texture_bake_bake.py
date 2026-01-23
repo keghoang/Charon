@@ -256,6 +256,19 @@ def _build_contact_sheet(group, out_dir, tiles, cols, rows):
             group.begin()
 
 
+def _set_write_knob(node, name, value):
+    try:
+        if node.knob(name):
+            node[name].setValue(value)
+    except Exception:
+        pass
+
+
+def _set_exr_colorspace(node, colorspace):
+    for knob_name in ("colorspace", "file_colorspace", "ocioColorspace"):
+        _set_write_knob(node, knob_name, colorspace)
+
+
 # PATH RESOLUTION
 project_path = os.environ.get("BUCK_PROJECT_PATH")
 user = getpass.getuser()
@@ -320,9 +333,11 @@ else:
             w["raw"].setValue(True)
 
         w_exr = nuke.createNode("Write", inpanel=False)
-        w_exr.setInput(0, input_node)
+        w_exr.setInput(0, n)
         w_exr["file_type"].setValue("exr")
         w_exr["channels"].setValue("rgba")
+        _set_write_knob(w_exr, "raw", False)
+        _set_exr_colorspace(w_exr, "scene_linear")
 
         try:
             for u, v in iter_tiles():
