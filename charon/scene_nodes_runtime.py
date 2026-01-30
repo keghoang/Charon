@@ -60,11 +60,151 @@ def list_scene_nodes(nuke_module=None) -> List[SceneNodeInfo]:
     for node_id, group in duplicates.items():
         if len(group) <= 1:
             continue
-        sorted_group = sorted(group, key=_node_sort_key)
-        keeper = sorted_group[0]
-        for duplicate in sorted_group[1:]:
+        def _has_value(value) -> bool:
+            if value in (None, ""):
+                return False
+            try:
+                return bool(str(value).strip())
+            except Exception:
+                return False
+
+        def _node_has_outputs(target) -> bool:
+            if _has_value(_read_knob_value(target, "charon_last_output")):
+                return True
+            try:
+                if _has_value(target.metadata("charon/last_output")):
+                    return True
+            except Exception:
+                pass
+            if _has_value(_read_knob_value(target, "charon_read_node")):
+                return True
+            if _has_value(_read_knob_value(target, "charon_contact_sheet")):
+                return True
+            try:
+                if _has_value(target.metadata("charon/read_node")):
+                    return True
+            except Exception:
+                pass
+            try:
+                if _has_value(target.metadata("charon/contact_sheet")):
+                    return True
+            except Exception:
+                pass
+            return False
+
+        def _node_pos(target):
+            try:
+                return (float(target.xpos()), float(target.ypos()))
+            except Exception:
+                return None
+
+        def _distance_sq(a, b):
+            if a is None or b is None:
+                return None
+            dx = a[0] - b[0]
+            dy = a[1] - b[1]
+            return dx * dx + dy * dy
+
+        def _match_parent(candidate, parent_id: str) -> bool:
+            if not parent_id:
+                return False
+            normalized_parent = parent_id.strip().lower()[:12]
+            if not normalized_parent:
+                return False
+            try:
+                meta_val = candidate.metadata("charon/parent_id")
+                if isinstance(meta_val, str) and meta_val.strip().lower()[:12] == normalized_parent:
+                    return True
+            except Exception:
+                pass
+            knob_val = _read_knob_value(candidate, "charon_parent_id")
+            if isinstance(knob_val, str) and knob_val.strip().lower()[:12] == normalized_parent:
+                return True
+            return False
+
+        def _looks_like_contact_sheet_group(candidate) -> bool:
+            try:
+                if candidate.Class() != "Group":
+                    return False
+            except Exception:
+                return False
+            try:
+                if candidate.knob("charon_read_id") is not None:
+                    return True
+            except Exception:
+                pass
+            try:
+                meta_val = candidate.metadata("charon/read_id")
+                if meta_val:
+                    return True
+            except Exception:
+                pass
+            try:
+                return "ContactSheet" in (candidate.name() or "")
+            except Exception:
+                return False
+
+        def _reassign_outputs_for_duplicate(duplicate_node, keeper_node, old_id: str, new_id: str) -> None:
+            dup_pos = _node_pos(duplicate_node)
+            keep_pos = _node_pos(keeper_node)
+            try:
+                candidates = list(nuke.allNodes("Read")) + list(nuke.allNodes("ReadGeo2")) + list(nuke.allNodes("Group"))
+            except Exception:
+                candidates = []
+            for candidate in candidates:
+                if candidate is None or candidate is duplicate_node or candidate is keeper_node:
+                    continue
+                try:
+                    cls_name = candidate.Class()
+                except Exception:
+                    cls_name = ""
+                if cls_name == "Group" and not _looks_like_contact_sheet_group(candidate):
+                    continue
+                if not _match_parent(candidate, old_id):
+                    continue
+                cand_pos = _node_pos(candidate)
+                if keep_pos is not None and dup_pos is not None:
+                    dist_dup = _distance_sq(cand_pos, dup_pos)
+                    dist_keep = _distance_sq(cand_pos, keep_pos)
+                    if dist_dup is None or dist_keep is None:
+                        continue
+                    if dist_dup > dist_keep:
+                        continue
+                try:
+                    candidate.setMetaData("charon/parent_id", new_id)
+                except Exception:
+                    pass
+                knob = _safe_knob(candidate, "charon_parent_id")
+                if knob is not None:
+                    try:
+                        knob.setValue(new_id)
+                    except Exception:
+                        pass
+                if cls_name == "Group" and _looks_like_contact_sheet_group(candidate):
+                    try:
+                        sheet_knob = _safe_knob(duplicate_node, "charon_contact_sheet")
+                    except Exception:
+                        sheet_knob = None
+                    if sheet_knob is not None:
+                        try:
+                            sheet_knob.setValue(candidate.name())
+                        except Exception:
+                            pass
+
+        group_with_outputs = [item for item in group if _node_has_outputs(item)]
+        if group_with_outputs:
+            group_with_outputs = sorted(group_with_outputs, key=_node_sort_key)
+            keeper = group_with_outputs[0]
+        else:
+            group = sorted(group, key=_node_sort_key)
+            keeper = group[0]
+        for duplicate in group:
+            if duplicate is keeper:
+                continue
             try:
                 new_identifier = reset_charon_node_state(duplicate) or ""
+                if new_identifier:
+                    _reassign_outputs_for_duplicate(duplicate, keeper, node_id, new_identifier)
                 normalized = new_identifier.strip().lower()
                 if normalized:
                     system_debug(

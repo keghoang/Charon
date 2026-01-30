@@ -1693,6 +1693,137 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             parent_knob.setValue(normalized_new)
                         except Exception:
                             pass
+            try:
+                group_candidates = list(nuke.allNodes("Group"))
+            except Exception:
+                group_candidates = []
+            for candidate in group_candidates:
+                parent_val = ""
+                try:
+                    parent_val = _normalize_node_id(candidate.metadata("charon/parent_id"))
+                except Exception:
+                    parent_val = ""
+                if parent_val != normalized_old:
+                    parent_val = _normalize_node_id(_safe_knob_value(candidate, "charon_parent_id"))
+                if parent_val != normalized_old:
+                    continue
+                try:
+                    candidate.setMetaData("charon/parent_id", normalized_new)
+                except Exception:
+                    pass
+                try:
+                    parent_knob = candidate.knob("charon_parent_id")
+                except Exception:
+                    parent_knob = None
+                if parent_knob is not None:
+                    try:
+                        parent_knob.setValue(normalized_new)
+                    except Exception:
+                        pass
+
+        def _sync_anchored_output_nodes(node_id: str) -> None:
+            if not node_id:
+                return
+            try:
+                node_full = node.fullName()
+            except Exception:
+                node_full = ""
+            try:
+                node_name = node.name()
+            except Exception:
+                node_name = ""
+            if not node_full and not node_name:
+                return
+
+            def _anchor_matches(candidate) -> bool:
+                try:
+                    anchor_knob = candidate.knob("charon_link_anchor")
+                except Exception:
+                    anchor_knob = None
+                if anchor_knob is None:
+                    return False
+                expr = ""
+                try:
+                    expr = anchor_knob.expression()
+                except Exception:
+                    expr = ""
+                if not expr:
+                    return False
+                if node_full and node_full in expr:
+                    return True
+                if node_name and node_name in expr:
+                    return True
+                return False
+
+            def _update_parent(candidate) -> None:
+                try:
+                    candidate.setMetaData("charon/parent_id", node_id)
+                except Exception:
+                    pass
+                try:
+                    parent_knob = candidate.knob("charon_parent_id")
+                except Exception:
+                    parent_knob = None
+                if parent_knob is not None:
+                    try:
+                        parent_knob.setValue(node_id)
+                    except Exception:
+                        pass
+
+            def _matches_parent(candidate) -> bool:
+                parent_val = ""
+                try:
+                    parent_val = _normalize_node_id(candidate.metadata("charon/parent_id"))
+                except Exception:
+                    parent_val = ""
+                if not parent_val:
+                    parent_val = _normalize_node_id(_safe_knob_value(candidate, "charon_parent_id"))
+                return parent_val == _normalize_node_id(node_id)
+
+            def _set_contact_sheet_knob(candidate_name: str) -> None:
+                try:
+                    knob = node.knob("charon_contact_sheet")
+                except Exception:
+                    knob = None
+                if knob is None:
+                    return
+                current_name = ""
+                try:
+                    current_name = str(knob.value() or "").strip()
+                except Exception:
+                    current_name = ""
+                if current_name:
+                    try:
+                        current = nuke.toNode(current_name)
+                    except Exception:
+                        current = None
+                    if current is not None and _matches_parent(current):
+                        return
+                try:
+                    knob.setValue(candidate_name)
+                except Exception:
+                    pass
+
+            try:
+                candidates = list(nuke.allNodes())
+            except Exception:
+                candidates = []
+            for candidate in candidates:
+                if candidate is None or candidate is node:
+                    continue
+                if not _anchor_matches(candidate):
+                    continue
+                _update_parent(candidate)
+                try:
+                    if candidate.Class() == "Group":
+                        try:
+                            read_id_knob = candidate.knob("charon_read_id")
+                        except Exception:
+                            read_id_knob = None
+                        if read_id_knob is not None:
+                            _set_contact_sheet_knob(candidate.name())
+                except Exception:
+                    pass
 
         def _deduplicate_node_id(candidate: str) -> str:
             normalized = _normalize_node_id(candidate)
@@ -1722,13 +1853,163 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 except Exception:
                     return ""
 
-            nodes_with_id.sort(key=_node_sort_key)
-            keeper = nodes_with_id[0]
-            for duplicate in nodes_with_id[1:]:
+            def _has_value(value: Optional[str]) -> bool:
+                if value is None:
+                    return False
+                try:
+                    return bool(str(value).strip())
+                except Exception:
+                    return False
+
+            def _node_has_outputs(target) -> bool:
+                if _has_value(_safe_knob_value(target, "charon_last_output")):
+                    return True
+                try:
+                    if _has_value(target.metadata("charon/last_output")):
+                        return True
+                except Exception:
+                    pass
+                for knob_name in ("charon_read_node", "charon_contact_sheet"):
+                    if _has_value(_safe_knob_value(target, knob_name)):
+                        return True
+                for meta_key in ("charon/read_node", "charon/contact_sheet"):
+                    try:
+                        if _has_value(target.metadata(meta_key)):
+                            return True
+                    except Exception:
+                        pass
+                return False
+
+            nodes_with_outputs = [item for item in nodes_with_id if _node_has_outputs(item)]
+            if nodes_with_outputs:
+                nodes_with_outputs.sort(key=_node_sort_key)
+                if node in nodes_with_outputs and len(nodes_with_outputs) == 1:
+                    keeper = node
+                else:
+                    keeper = nodes_with_outputs[0]
+            else:
+                if node in nodes_with_id:
+                    keeper = node
+                else:
+                    nodes_with_id.sort(key=_node_sort_key)
+                    keeper = nodes_with_id[0]
+
+            def _node_pos(target) -> Optional[Tuple[float, float]]:
+                if target is None:
+                    return None
+                try:
+                    return (float(target.xpos()), float(target.ypos()))
+                except Exception:
+                    return None
+
+            def _distance_sq(a: Optional[Tuple[float, float]], b: Optional[Tuple[float, float]]) -> Optional[float]:
+                if a is None or b is None:
+                    return None
+                dx = a[0] - b[0]
+                dy = a[1] - b[1]
+                return dx * dx + dy * dy
+
+            def _match_parent(candidate_node, parent_id: str) -> bool:
+                if not parent_id:
+                    return False
+                normalized_parent = _normalize_node_id(parent_id)
+                if not normalized_parent:
+                    return False
+                try:
+                    meta_val = _normalize_node_id(candidate_node.metadata("charon/parent_id"))
+                except Exception:
+                    meta_val = ""
+                if meta_val == normalized_parent:
+                    return True
+                knob_val = _normalize_node_id(_safe_knob_value(candidate_node, "charon_parent_id"))
+                return knob_val == normalized_parent
+
+            def _looks_like_contact_sheet_group(candidate_node) -> bool:
+                try:
+                    if candidate_node.Class() != "Group":
+                        return False
+                except Exception:
+                    return False
+                try:
+                    if candidate_node.knob("charon_read_id") is not None:
+                        return True
+                except Exception:
+                    pass
+                try:
+                    meta_val = candidate_node.metadata("charon/read_id")
+                    if meta_val:
+                        return True
+                except Exception:
+                    pass
+                try:
+                    return "ContactSheet" in (candidate_node.name() or "")
+                except Exception:
+                    return False
+
+            def _reassign_outputs_for_duplicate(duplicate_node, keeper_node, old_id: str, new_id: str) -> None:
+                if not old_id or not new_id:
+                    return
+                dup_pos = _node_pos(duplicate_node)
+                keep_pos = _node_pos(keeper_node)
+                try:
+                    candidates = list(nuke.allNodes("Read")) + list(nuke.allNodes("ReadGeo2")) + list(nuke.allNodes("Group"))
+                except Exception:
+                    candidates = []
+                for candidate_node in candidates:
+                    if candidate_node is None or candidate_node is duplicate_node or candidate_node is keeper_node:
+                        continue
+                    try:
+                        cls_name = candidate_node.Class()
+                    except Exception:
+                        cls_name = ""
+                    if cls_name == "Group" and not _looks_like_contact_sheet_group(candidate_node):
+                        continue
+                    if not _match_parent(candidate_node, old_id):
+                        continue
+                    cand_pos = _node_pos(candidate_node)
+                    if keep_pos is not None and dup_pos is not None:
+                        dist_dup = _distance_sq(cand_pos, dup_pos)
+                        dist_keep = _distance_sq(cand_pos, keep_pos)
+                        if dist_dup is None or dist_keep is None:
+                            continue
+                        if dist_dup > dist_keep:
+                            continue
+                    try:
+                        candidate_node.setMetaData("charon/parent_id", new_id)
+                    except Exception:
+                        pass
+                    try:
+                        parent_knob = candidate_node.knob("charon_parent_id")
+                    except Exception:
+                        parent_knob = None
+                    if parent_knob is not None:
+                        try:
+                            parent_knob.setValue(new_id)
+                        except Exception:
+                            pass
+                    if cls_name == "Group" and _looks_like_contact_sheet_group(candidate_node):
+                        try:
+                            sheet_knob = duplicate_node.knob("charon_contact_sheet")
+                        except Exception:
+                            sheet_knob = None
+                        if sheet_knob is not None:
+                            try:
+                                sheet_knob.setValue(candidate_node.name())
+                            except Exception:
+                                pass
+
+            for duplicate in nodes_with_id:
+                if duplicate is keeper:
+                    continue
                 try:
                     new_identifier = reset_charon_node_state(duplicate) or ""
                 except Exception:
                     new_identifier = ""
+                if new_identifier:
+                    try:
+                        _reassign_outputs_for_duplicate(duplicate, keeper, normalized, new_identifier)
+                    except Exception:
+                        pass
                 if duplicate is node:
                     normalized = _normalize_node_id(new_identifier)
 
@@ -1736,7 +2017,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 refreshed = _normalize_node_id(_safe_knob_value(node, "charon_node_id"))
                 return refreshed or normalized
 
-            if node in nodes_with_id[1:]:
+            if node in nodes_with_id and node is not keeper:
                 refreshed = _normalize_node_id(_safe_knob_value(node, "charon_node_id"))
                 if refreshed:
                     return refreshed
@@ -1777,6 +2058,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 node_id = generate_charon_node_id(current_script_hash)
             update_charon_node_identity(node, node_id, current_script_hash)
             write_metadata('charon/node_id', node_id or "")
+            _sync_anchored_output_nodes(node_id)
             return node_id
 
         def _collect_linked_read_ids(parent_id: str) -> List[str]:
@@ -5095,14 +5377,49 @@ def _create_generic_result_group(charon_node, image_paths, columns_override=None
         node_id = charon_node.knob('charon_node_id').value()
     except: pass
     
-    # Cleanup existing by knob
+    def _normalize_parent(value) -> str:
+        if value in (None, ""):
+            return ""
+        try:
+            return str(value).strip().lower()
+        except Exception:
+            return ""
+
+    # Cleanup existing by knob (only if it belongs to this CharonOp)
     try:
         existing_name = charon_node.knob('charon_contact_sheet').value()
         if existing_name:
             existing = nuke.toNode(existing_name)
             if existing:
-                nuke.delete(existing)
-    except: pass
+                parent_val = ""
+                try:
+                    parent_val = _normalize_parent(existing.metadata('charon/parent_id'))
+                except Exception:
+                    parent_val = ""
+                if not parent_val:
+                    try:
+                        parent_knob = existing.knob('charon_parent_id')
+                    except Exception:
+                        parent_knob = None
+                    if parent_knob is not None:
+                        try:
+                            parent_val = _normalize_parent(parent_knob.value())
+                        except Exception:
+                            parent_val = ""
+                if parent_val and _normalize_parent(node_id) == parent_val:
+                    nuke.delete(existing)
+                else:
+                    try:
+                        charon_node.knob('charon_contact_sheet').setValue('')
+                    except Exception:
+                        pass
+            else:
+                try:
+                    charon_node.knob('charon_contact_sheet').setValue('')
+                except Exception:
+                    pass
+    except Exception:
+        pass
     
     # Cleanup existing by metadata (fallback)
     if node_id:
