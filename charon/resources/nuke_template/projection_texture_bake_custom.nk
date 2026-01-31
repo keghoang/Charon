@@ -15,7 +15,7 @@ define_window_layout_xml {<?xml version="1.0" encoding="UTF-8"?>
                     <page id="Viewer.1"/>
                 </dock>
                 <split size="543"/>
-                <dock id="" activePageId="DAG.1" focus="true">
+                <dock id="" activePageId="DAG.2" focus="true">
                     <page id="DAG.1"/>
                     <page id="Curve Editor.1"/>
                     <page id="DopeSheet.1"/>
@@ -50,13 +50,14 @@ Group {
  inputs 0
  name Projection_Texture_Bake
  knobChanged "n=nuke.thisNode()\nk=nuke.thisKnob()\nif k.name() in ('asset_name', 'subname', 'showPanel'):\n import os, getpass\n p=os.environ.get('BUCK_PROJECT_PATH')\n u=getpass.getuser()\n a=n\['asset_name'].value()\n s=n\['subname'].value()\n if not p:\n  r=n.node('Read11')\n  if r:\n   f=r\['file'].value().replace('\\\\', '/')\n   if '/Production/' in f:\n    p=f.split('/Production/')\[0]\n msg = os.path.join(p, 'Production/MAYA/sourceimages/work.'+u+'/_CHARON', a, s).replace('\\\\', '/') if p else 'Path Not Found'\n n\['path_preview'].setValue(msg)\n"
+ selected true
  xpos -179
  ypos -150
  addUserKnob {20 baketab l "Bake Setting"}
  addUserKnob {30 uvsize l "UV size"}
  uvsize {1 1}
  addUserKnob {30 UVcoord l "UV coord"}
- addUserKnob {22 project_texture l "Project Texture" T "n=nuke.thisNode()\n_DEBUG = False\n\ndef _debug(message):\n  if _DEBUG:\n    print('\[TextureBake] ' + message)\n\ndef _resolve(node, max_hops=32):\n  cur=node\n  visited=set()\n  hops=0\n  while cur and hops<max_hops:\n    if cur in visited:\n      break\n    visited.add(cur)\n    try:\n      if cur.Class() not in ('Dot','NoOp'):\n        return cur\n    except Exception:\n      return cur\n    try:\n      cur=cur.input(0)\n    except Exception:\n      cur=None\n    hops+=1\n  return node\n\ndef _find_upstream(start_node, class_names, max_hops=32):\n  current=start_node\n  visited=set()\n  hops=0\n  while current and hops<max_hops:\n    if current in visited:\n      break\n    visited.add(current)\n    try:\n      if current.Class() in class_names:\n        return current\n    except Exception:\n      pass\n    try:\n      current=current.input(0)\n    except Exception:\n      current=None\n    hops+=1\n  return None\n\ndef _collect_rig_cam_count(rig):\n  if not rig or not hasattr(rig, 'begin'):\n    return 0\n  rig.begin()\n  try:\n    cams=\[node for node in nuke.allNodes() if node.Class() in ('Camera3','Camera2','Camera') and node.name().startswith('Cam')]\n    return len(cams)\n  finally:\n    rig.end()\n\ndef _current_cam_count(group):\n  group.begin()\n  try:\n    cams=\[node for node in nuke.allNodes() if node.Class() in ('Camera3','Camera2','Camera') and node.name().startswith('Cam')]\n    return len(cams)\n  finally:\n    group.end()\n\ndef _ensure_rig_count_knob(group):\n  knob=group.knob('charon_rig_cam_count')\n  if knob:\n    return knob\n  knob=nuke.Int_Knob('charon_rig_cam_count', 'Projection Cameras Found')\n  try:\n    knob.setEnabled(False)\n  except Exception:\n    knob.setFlag(nuke.DISABLED)\n  group.addKnob(knob)\n  return knob\n\ndef _update_rig_camera_count(group, rig):\n  count=_collect_rig_cam_count(rig)\n  knob=_ensure_rig_count_knob(group)\n  try:\n    knob.setValue(count)\n  except Exception:\n    try:\n      knob.setValue(int(count))\n    except Exception:\n      pass\n\ndef _read_group_block(template_path):\n  try:\n    with open(template_path, 'r') as handle:\n      content=handle.read()\n  except Exception as exc:\n    _debug('failed to read template: \{0\}'.format(exc))\n    return None\n\n  lines=content.splitlines(True)\n  start_line=None\n  end_line=None\n  depth=0\n  for idx, line in enumerate(lines):\n    stripped=line.lstrip()\n    if stripped.startswith('Group \{'):\n      if start_line is None:\n        start_line=idx\n      depth+=1\n    elif stripped.startswith('end_group'):\n      if depth > 0:\n        depth-=1\n        if depth == 0 and start_line is not None:\n          end_line=idx\n          break\n  if start_line is None or end_line is None:\n    _debug('template missing Group block')\n    return None\n  return ''.join(lines\[start_line:end_line + 1]) + '\\n'\n\ndef _paste_group(script_content):\n  import tempfile\n  temp_path=''\n  try:\n    with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as handle:\n      handle.write(script_content)\n      temp_path=handle.name\n    for node in nuke.allNodes():\n      node.setSelected(False)\n    nuke.nodePaste(temp_path)\n    for node in nuke.selectedNodes():\n      if node.Class()=='Group':\n        return node\n  except Exception as exc:\n    _debug('paste failed: \{0\}'.format(exc))\n  finally:\n    if temp_path and os.path.exists(temp_path):\n      try:\n        os.unlink(temp_path)\n      except Exception:\n        pass\n  return None\n\ndef _collect_dependents(node):\n  deps=\[]\n  for other in nuke.allNodes(recurseGroups=False):\n    for i in range(other.inputs()):\n      try:\n        if other.input(i)==node:\n          deps.append((other,i))\n      except Exception:\n        pass\n  return deps\n\ndef _ensure_template_knob(group):\n  knob=group.knob('charon_template_dir')\n  if knob:\n    return knob\n  knob=nuke.String_Knob('charon_template_dir','Template Dir','')\n  knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)\n  group.addKnob(knob)\n  return knob\n\ndef _resolve_template_dir(group):\n  import os\n  import sys\n  template_dir=''\n  knob=None\n  try:\n    knob=_ensure_template_knob(group)\n  except Exception:\n    knob=None\n  if knob:\n    try:\n      template_dir=knob.value()\n    except Exception:\n      template_dir=''\n  if template_dir and os.path.exists(template_dir):\n    return template_dir\n  candidates=\[]\n  try:\n    env_dir=os.environ.get('CHARON_TEMPLATE_DIR') or ''\n  except Exception:\n    env_dir=''\n  if env_dir:\n    candidates.append(env_dir)\n  try:\n    import charon.paths as _charon_paths\n    candidates.append(os.path.join(_charon_paths.RESOURCE_DIR, 'nuke_template'))\n  except Exception:\n    pass\n  try:\n    for entry in list(sys.path):\n      if not entry:\n        continue\n      candidates.append(os.path.join(entry, 'charon', 'resources', 'nuke_template'))\n      candidates.append(os.path.join(entry, 'resources', 'nuke_template'))\n  except Exception:\n    pass\n  try:\n    import nuke as _nuke\n    for entry in _nuke.pluginPath():\n      if not entry:\n        continue\n      candidates.append(os.path.join(entry, 'charon', 'resources', 'nuke_template'))\n      candidates.append(os.path.join(entry, 'resources', 'nuke_template'))\n  except Exception:\n    pass\n  for candidate in candidates:\n    if candidate and os.path.exists(candidate):\n      candidate=os.path.normpath(candidate)\n      try:\n        if knob:\n          knob.setValue(candidate)\n        elif group.knob('charon_template_dir'):\n          group\['charon_template_dir'].setValue(candidate)\n      except Exception:\n        pass\n      return candidate\n  return template_dir\n\ndef _copy_knob_values(src, dst, names):\n  for name in names:\n    try:\n      if src.knob(name) and dst.knob(name):\n        dst\[name].setValue(src\[name].value())\n    except Exception:\n      pass\n\n\ndef _unique_name(base):\n  try:\n    existing=set(n.name() for n in nuke.allNodes(recurseGroups=False))\n  except Exception:\n    existing=set()\n  if base not in existing:\n    return base\n  idx=1\n  while True:\n    candidate='\{0\}_\{1\}'.format(base, idx)\n    if candidate not in existing:\n      return candidate\n    idx+=1\n\ndef _rebuild_for_count(group, count):\n  try:\n    count=int(count)\n  except Exception:\n    return None\n  template_dir=_resolve_template_dir(group)\n  if not template_dir:\n    nuke.message('Template directory missing.')\n    return None\n  template_path=os.path.normpath(os.path.join(template_dir, 'projection_texture_bake_\{0\}_cams.nk'.format(count)))\n  if not os.path.exists(template_path):\n    nuke.message('Template not found for \{0\} cams.'.format(count))\n    return None\n  script_content=_read_group_block(template_path)\n  if not script_content:\n    return None\n\n  input_nodes=\[group.input(i) for i in range(group.inputs())]\n  old_name=group.name()\n  old_pos=(group.xpos(), group.ypos())\n  downstream=_collect_dependents(group)\n  values=\{\}\n  for name in \['asset_name','subname','aces_mode','uvsize','bake_resolution']:\n    try:\n      if group.knob(name):\n        values\[name]=group\[name].value()\n    except Exception:\n      pass\n\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  new_group=_paste_group(script_content)\n  if not new_group:\n    nuke.message('Failed to rebuild bake group.')\n    return None\n\n  for idx, inp in enumerate(input_nodes):\n    try:\n      new_group.setInput(idx, inp)\n    except Exception:\n      pass\n  try:\n    new_group.setXYpos(old_pos\[0], old_pos\[1])\n  except Exception:\n    pass\n  _copy_knob_values(group, new_group, values.keys())\n\n  for dep, idx in downstream:\n    try:\n      dep.setInput(idx, new_group)\n    except Exception:\n      pass\n\n  temp_name=_unique_name('\{0\}_OLD'.format(old_name))\n  try:\n    group.setName(temp_name)\n  except Exception:\n    pass\n  try:\n    new_group.setName(old_name)\n  except Exception:\n    pass\n  try:\n    nuke.delete(group)\n  except Exception:\n    pass\n\n  _ensure_template_knob(new_group)\n  try:\n    new_group\['charon_template_dir'].setValue(template_dir)\n  except Exception:\n    pass\n\n  if current_group and current_group is not root:\n    current_group.begin()\n  return new_group\n\ndef _update_geo(group, geo_node):\n  if not geo_node:\n    return False\n  _debug('update_geo input: \{0\} (\{1\})'.format(geo_node.name(), geo_node.Class()))\n  if geo_node.Class() not in ('ReadGeo2','ReadGeo'):\n    upstream=_find_upstream(geo_node, ('ReadGeo2','ReadGeo'))\n    if upstream:\n      _debug('resolved upstream geo: \{0\} (\{1\})'.format(upstream.name(), upstream.Class()))\n      geo_node=upstream\n    else:\n      nuke.message('Geo input must be a ReadGeo/ReadGeo2 node.')\n      return False\n\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  original_selection=list(nuke.selectedNodes())\n  for n in original_selection:\n    n.setSelected(False)\n  try:\n    geo_node.setSelected(True)\n    nuke.nodeCopy('%clipboard%')\n  finally:\n    geo_node.setSelected(False)\n    for n in original_selection:\n      try:\n        n.setSelected(True)\n      except Exception:\n        pass\n    if current_group and current_group is not root:\n      current_group.begin()\n\n  group.begin()\n  try:\n    before_nodes=set(nuke.allNodes())\n    for n in nuke.selectedNodes():\n      n.setSelected(False)\n    nuke.nodePaste('%clipboard%')\n    pasted_nodes=list(nuke.selectedNodes())\n    after_nodes=\[node for node in nuke.allNodes() if node not in before_nodes]\n    if not after_nodes and not pasted_nodes:\n      nuke.message('Failed to paste geo node.')\n      return False\n\n    pasted=None\n    for node in pasted_nodes + after_nodes:\n      if node.Class() in ('ReadGeo2','ReadGeo'):\n        pasted=node\n        break\n    if pasted is None:\n      pasted=(pasted_nodes or after_nodes)\[0]\n\n    existing_geos=\[node for node in nuke.allNodes() if node.Class() in ('ReadGeo2','ReadGeo') and node is not pasted]\n\n    def _is_clone(node):\n      try:\n        return bool(node.isClone())\n      except Exception:\n        return False\n\n    def _collect_connections(nodes):\n      connections=\{node: \[] for node in nodes\}\n      for node in nuke.allNodes():\n        for i in range(node.inputs()):\n          try:\n            inp=node.input(i)\n          except Exception:\n            continue\n          if inp in connections:\n            connections\[inp].append((node,i))\n      return connections\n\n    def _create_clone(master):\n      for n in nuke.selectedNodes():\n        n.setSelected(False)\n      master.setSelected(True)\n      before=set(nuke.allNodes())\n      if hasattr(nuke, 'clone'):\n        try:\n          nuke.clone(master)\n        except TypeError:\n          nuke.clone()\n      else:\n        nuke.nodeCopy('%clipboard%')\n        nuke.nodePaste('%clipboard%')\n      created=\[node for node in nuke.allNodes() if node not in before]\n      if created:\n        return created\[0]\n      return None\n\n    if not existing_geos:\n      default_name='ReadGeo' if geo_node.Class()=='ReadGeo' else 'ReadGeo2'\n      try:\n        pasted.setName(default_name, unique=True)\n      except Exception:\n        pasted.setName(default_name)\n      return True\n\n    master_old=None\n    for node in existing_geos:\n      if node.name() in ('ReadGeo2','ReadGeo'):\n        master_old=node\n        break\n    if master_old is None:\n      for node in existing_geos:\n        if not _is_clone(node):\n          master_old=node\n          break\n    if master_old is None:\n      master_old=existing_geos\[0]\n\n    geo_specs=\[]\n    for node in existing_geos:\n      try:\n        input_nodes=\[node.input(i) for i in range(node.inputs())]\n      except Exception:\n        input_nodes=\[]\n      geo_specs.append(\{\n        'node': node,\n        'name': node.name(),\n        'pos': (node.xpos(), node.ypos()),\n        'is_master': node is master_old,\n        'inputs': input_nodes,\n      \})\n    connections=_collect_connections(\[spec\['node'] for spec in geo_specs])\n\n    new_nodes=\{\}\n    for spec in geo_specs:\n      if spec\['is_master']:\n        new_nodes\[spec\['node']]=pasted\n      else:\n        clone=_create_clone(pasted)\n        if clone:\n          new_nodes\[spec\['node']]=clone\n        else:\n          new_nodes\[spec\['node']]=pasted\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      new_node=new_nodes.get(old_node)\n      if new_node is None:\n        continue\n      inputs=spec.get('inputs', \[])\n      for idx, inp in enumerate(inputs):\n        if inp is None:\n          try:\n            new_node.setInput(idx, None)\n          except Exception:\n            pass\n          continue\n        replacement=new_nodes.get(inp, inp)\n        try:\n          new_node.setInput(idx, replacement)\n        except Exception:\n          pass\n\n    for old_node, new_node in new_nodes.items():\n      if old_node is new_node:\n        continue\n      for dep, idx in connections.get(old_node, \[]):\n        try:\n          dep.setInput(idx, new_node)\n        except Exception:\n          pass\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      new_node=new_nodes.get(old_node)\n      if new_node is None:\n        continue\n      try:\n        new_node.setXYpos(spec\['pos']\[0], spec\['pos']\[1])\n      except Exception:\n        pass\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      try:\n        nuke.delete(old_node)\n      except Exception:\n        pass\n\n    for spec in geo_specs:\n      new_node=new_nodes.get(spec\['node'])\n      if new_node is None:\n        continue\n      try:\n        new_node.setName(spec\['name'], unique=True)\n      except Exception:\n        try:\n          new_node.setName(spec\['name'])\n        except Exception:\n          pass\n\n    return True\n  finally:\n    group.end()\n\ndef _update_uv_size(group, geo_node):\n  if not geo_node:\n    _debug('uv size: geo input missing')\n    return\n  _debug('uv size: geo input ' + geo_node.name() + ' (' + geo_node.Class() + ')')\n  if geo_node.Class() not in ('ReadGeo2','ReadGeo'):\n    upstream=_find_upstream(geo_node, ('ReadGeo2','ReadGeo'))\n    if upstream:\n      _debug('uv size: resolved geo ' + upstream.name() + ' (' + upstream.Class() + ')')\n      geo_node=upstream\n    else:\n      _debug('uv size: uv source must be ReadGeo/ReadGeo2')\n      return\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  try:\n    def _get_geometry(node):\n      if not hasattr(node, 'geometry'):\n        _debug('uv size: geometry() not available on ' + node.Class())\n        return None\n      geo=None\n      try:\n        geo=node.geometry(nuke.frame())\n        _debug('uv size: geometry(frame) ok')\n      except Exception as exc:\n        _debug('uv size: geometry(frame) failed: ' + str(exc))\n      if not geo:\n        try:\n          geo=node.geometry()\n          _debug('uv size: geometry() ok')\n        except Exception as exc2:\n          _debug('uv size: geometry() failed: ' + str(exc2))\n      return geo\n\n    def _collect_uvs_from_geo(geo):\n      uvs=\[]\n      try:\n        attr=None\n        try:\n          attr=geo.pointAttrib('uv')\n        except Exception:\n          attr=None\n        if attr:\n          _debug('uv size: using point attrib uv')\n          for p in geo.points():\n            try:\n              uv=attr.value(p)\n            except Exception:\n              try:\n                uv=p.attribValue(attr)\n              except Exception:\n                uv=None\n            if uv:\n              uvs.append(uv)\n      except Exception as exc:\n        _debug('uv size: point attrib read failed: ' + str(exc))\n      if not uvs:\n        try:\n          for p in geo.points():\n            uv=None\n            try:\n              attrs=p.attributes()\n              if attrs:\n                uv=attrs.get('uv')\n            except Exception:\n              uv=None\n            if uv is None:\n              try:\n                uv=p.attribValue('uv')\n              except Exception:\n                uv=None\n            if uv:\n              uvs.append(uv)\n        except Exception as exc:\n          _debug('uv size: point attrib fallback failed: ' + str(exc))\n      if not uvs:\n        try:\n          attr=None\n          try:\n            attr=geo.vertexAttrib('uv')\n          except Exception:\n            attr=None\n          if attr:\n            _debug('uv size: using vertex attrib uv')\n            for vtx in geo.vertices():\n              try:\n                uv=attr.value(vtx)\n              except Exception:\n                try:\n                  uv=vtx.attribValue(attr)\n                except Exception:\n                  uv=None\n              if uv:\n                uvs.append(uv)\n        except Exception as exc:\n          _debug('uv size: vertex attrib read failed: ' + str(exc))\n      return uvs\n\n    def _compute_range(uvs):\n      import math\n      min_idx=None\n      max_idx=None\n      for uv in uvs:\n        try:\n          u=float(uv\[0])\n          v=float(uv\[1])\n        except Exception:\n          continue\n        tile_u=int(math.floor(u))\n        tile_v=int(math.floor(v))\n        idx=tile_u + (tile_v * 10)\n        if min_idx is None or idx < min_idx:\n          min_idx=idx\n        if max_idx is None or idx > max_idx:\n          max_idx=idx\n      return min_idx, max_idx\n\n    def _apply_range(min_idx, max_idx):\n      if min_idx is None or max_idx is None:\n        _debug('uv size: compute failed')\n        return False\n      try:\n        group\['uvsize'].setValue(\[int(min_idx), int(max_idx)])\n        _debug('uv size: set to ' + str(int(min_idx)) + '-' + str(int(max_idx)))\n        return True\n      except Exception as exc:\n        _debug('uv size: set failed: ' + str(exc))\n        return False\n\n    geo=_get_geometry(geo_node)\n    if geo:\n      uvs=_collect_uvs_from_geo(geo)\n      if uvs:\n        _debug('uv size: uv count ' + str(len(uvs)))\n        min_idx, max_idx=_compute_range(uvs)\n        if _apply_range(min_idx, max_idx):\n          return\n      else:\n        _debug('uv size: uv attribute not found on geometry')\n\n    _debug('uv size: WriteGeo fallback disabled')\n    return\n  finally:\n    if current_group and current_group is not root:\n      current_group.begin()\n\ndef _resolve_camera_input(node):\n  if not node:\n    return None\n  node=_resolve(node)\n  try:\n    if node and node.Class() in ('Camera3','Camera2','Camera'):\n      return node\n  except Exception:\n    pass\n  upstream=_find_upstream(node, ('Camera3','Camera2','Camera'))\n  if upstream:\n    return upstream\n  return None\n\ndef _safe_input(group, index):\n  try:\n    return group.input(index)\n  except Exception:\n    return None\n\ndef _collect_dependents_in_group(target):\n  deps=\[]\n  for other in nuke.allNodes():\n    for i in range(other.inputs()):\n      try:\n        if other.input(i)==target:\n          deps.append((other,i))\n      except Exception:\n        pass\n  return deps\n\ndef _update_camera_from_input(group, cam_node, target_name):\n  if not cam_node:\n    return False\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  original_selection=list(nuke.selectedNodes())\n  for n in original_selection:\n    n.setSelected(False)\n  try:\n    cam_node.setSelected(True)\n    nuke.nodeCopy('%clipboard%')\n  finally:\n    cam_node.setSelected(False)\n    for n in original_selection:\n      try:\n        n.setSelected(True)\n      except Exception:\n        pass\n    if current_group and current_group is not root:\n      current_group.begin()\n\n  group.begin()\n  try:\n    before_nodes=set(nuke.allNodes())\n    for n in nuke.selectedNodes():\n      n.setSelected(False)\n    nuke.nodePaste('%clipboard%')\n    pasted_nodes=list(nuke.selectedNodes())\n    after_nodes=\[node for node in nuke.allNodes() if node not in before_nodes]\n    new_cam=None\n    for node in pasted_nodes + after_nodes:\n      if node.Class() in ('Camera3','Camera2','Camera'):\n        new_cam=node\n        break\n    if not new_cam:\n      return False\n\n    old_cam=nuke.toNode(target_name)\n    if not old_cam:\n      try:\n        new_cam.setName(target_name, unique=True)\n      except Exception:\n        try:\n          new_cam.setName(target_name)\n        except Exception:\n          pass\n      return True\n\n    try:\n      old_inputs=\[old_cam.input(i) for i in range(old_cam.inputs())]\n    except Exception:\n      old_inputs=\[]\n    deps=_collect_dependents_in_group(old_cam)\n\n    for idx, inp in enumerate(old_inputs):\n      try:\n        new_cam.setInput(idx, inp)\n      except Exception:\n        pass\n\n    for dep, idx in deps:\n      try:\n        dep.setInput(idx, new_cam)\n      except Exception:\n        pass\n\n    try:\n      new_cam.setXYpos(old_cam.xpos(), old_cam.ypos())\n    except Exception:\n      pass\n\n    try:\n      nuke.delete(old_cam)\n    except Exception:\n      pass\n\n    try:\n      new_cam.setName(target_name, unique=True)\n    except Exception:\n      try:\n        new_cam.setName(target_name)\n      except Exception:\n        pass\n    return True\n  finally:\n    group.end()\n\ndef _projection_pairs():\n  return \[\n    ('Image_MASTER', 'Cam_MASTER', 'Charon_InitCam', 1, 2),\n    ('Image_2', 'Cam_2', 'Charon_InitCam1', 3, 4),\n    ('Image_3', 'Cam_3', 'Charon_InitCam2', 5, 6),\n    ('Image_4', 'Cam_4', 'Charon_InitCam3', 7, 8),\n    ('Image_5', 'Cam_5', 'Charon_InitCam4', 9, 10),\n    ('Image_6', 'Cam_6', 'Charon_InitCam5', 11, 12),\n    ('Image_7', 'Cam_7', 'Charon_InitCam6', 13, 14),\n    ('Image_8', 'Cam_8', 'Charon_InitCam7', 15, 16),\n  ]\n\ndef _update_pair_count(group, count):\n  knob=_ensure_rig_count_knob(group)\n  try:\n    knob.setValue(int(count))\n  except Exception:\n    try:\n      knob.setValue(float(count))\n    except Exception:\n      pass\n\ndef _set_knob_visible(knob, visible):\n  if not knob:\n    return\n  try:\n    knob.setVisible(visible)\n    return\n  except Exception:\n    pass\n  try:\n    if visible:\n      knob.clearFlag(nuke.INVISIBLE)\n    else:\n      knob.setFlag(nuke.INVISIBLE)\n  except Exception:\n    pass\n\ndef _apply_camera_knob_visibility(group, pairs):\n  cam_knobs={\n    1: ['cam_master_mix'],\n    2: ['cam_02_mix','Cam_02_offset'],\n    3: ['cam_03_mix','Cam_03_offset'],\n    4: ['cam_04_mix','Cam_04_offset'],\n    5: ['cam_05_mix','Cam_05_offset'],\n    6: ['cam_06_mix','Cam_06_offset'],\n    7: ['cam_07_mix','Cam_07_offset'],\n    8: ['cam_08_mix','Cam_08_offset'],\n  }\n  active={1: True}\n  for idx, spec in enumerate(pairs, start=1):\n    if idx == 1:\n      active[idx]=True\n      continue\n    try:\n      img=spec[3]\n      cam=spec[4]\n    except Exception:\n      img=None\n      cam=None\n    active[idx]=bool(img and cam)\n  for idx, names in cam_knobs.items():\n    visible = active.get(idx, False)\n    for name in names:\n      knob=group.knob(name)\n      if not visible and name.endswith('_mix') and knob:\n        try:\n          knob.setValue(0)\n        except Exception:\n          pass\n      _set_knob_visible(knob, visible)\n\npair_specs=_projection_pairs()\npairs=\[]\nfor img_name, cam_name, target_name, img_idx, cam_idx in pair_specs:\n  img=_safe_input(n, img_idx)\n  cam=_safe_input(n, cam_idx)\n  pairs.append((img_name, cam_name, target_name, img, cam))\n\npair_count=0\nfor img_name, cam_name, target_name, img, cam in pairs:\n  if img and cam:\n    pair_count+=1\n_update_pair_count(n, pair_count)\n_apply_camera_knob_visibility(n, pairs)\n\ninvalid_cams=\[]\nfor img_name, cam_name, target_name, img, cam in pairs:\n  if not cam:\n    continue\n  resolved=_resolve_camera_input(cam)\n  if not resolved:\n    invalid_cams.append(cam_name)\n    continue\n  _debug('updating ' + target_name + ' from ' + cam_name)\n  _update_camera_from_input(n, resolved, target_name)\n\nif invalid_cams:\n  try:\n    nuke.message('Camera inputs must be Camera/Camera2/Camera3: ' + ', '.join(invalid_cams))\n  except Exception:\n    pass\n\ngeo_input=_safe_input(n, 0)\nif geo_input:\n  _update_uv_size(n, geo_input)\n  _update_geo(n, geo_input)\n" +STARTLINE}
+ addUserKnob {22 project_texture l "Project Texture" T "n=nuke.thisNode()\n_DEBUG = True\n\ndef _debug(message):\n  if _DEBUG:\n    print('\[TextureBake] ' + message)\n\ndef _resolve(node, max_hops=32):\n  cur=node\n  visited=set()\n  hops=0\n  while cur and hops<max_hops:\n    if cur in visited:\n      break\n    visited.add(cur)\n    try:\n      if cur.Class() not in ('Dot','NoOp'):\n        return cur\n    except Exception:\n      return cur\n    try:\n      cur=cur.input(0)\n    except Exception:\n      cur=None\n    hops+=1\n  return node\n\ndef _find_upstream(start_node, class_names, max_hops=32):\n  current=start_node\n  visited=set()\n  hops=0\n  while current and hops<max_hops:\n    if current in visited:\n      break\n    visited.add(current)\n    try:\n      if current.Class() in class_names:\n        return current\n    except Exception:\n      pass\n    try:\n      current=current.input(0)\n    except Exception:\n      current=None\n    hops+=1\n  return None\n\ndef _collect_rig_cam_count(rig):\n  if not rig or not hasattr(rig, 'begin'):\n    return 0\n  rig.begin()\n  try:\n    cams=\[node for node in nuke.allNodes() if node.Class() in ('Camera3','Camera2','Camera') and node.name().startswith('Cam')]\n    return len(cams)\n  finally:\n    rig.end()\n\ndef _current_cam_count(group):\n  group.begin()\n  try:\n    cams=\[node for node in nuke.allNodes() if node.Class() in ('Camera3','Camera2','Camera') and node.name().startswith('Cam')]\n    return len(cams)\n  finally:\n    group.end()\n\ndef _ensure_rig_count_knob(group):\n  knob=group.knob('charon_rig_cam_count')\n  if knob:\n    return knob\n  knob=nuke.Int_Knob('charon_rig_cam_count', 'Projection Cameras Found')\n  try:\n    knob.setEnabled(False)\n  except Exception:\n    knob.setFlag(nuke.DISABLED)\n  group.addKnob(knob)\n  return knob\n\ndef _update_rig_camera_count(group, rig):\n  count=_collect_rig_cam_count(rig)\n  knob=_ensure_rig_count_knob(group)\n  try:\n    knob.setValue(count)\n  except Exception:\n    try:\n      knob.setValue(int(count))\n    except Exception:\n      pass\n\ndef _read_group_block(template_path):\n  try:\n    with open(template_path, 'r') as handle:\n      content=handle.read()\n  except Exception as exc:\n    _debug('failed to read template: \{0\}'.format(exc))\n    return None\n\n  lines=content.splitlines(True)\n  start_line=None\n  end_line=None\n  depth=0\n  for idx, line in enumerate(lines):\n    stripped=line.lstrip()\n    if stripped.startswith('Group \{'):\n      if start_line is None:\n        start_line=idx\n      depth+=1\n    elif stripped.startswith('end_group'):\n      if depth > 0:\n        depth-=1\n        if depth == 0 and start_line is not None:\n          end_line=idx\n          break\n  if start_line is None or end_line is None:\n    _debug('template missing Group block')\n    return None\n  return ''.join(lines\[start_line:end_line + 1]) + '\\n'\n\ndef _paste_group(script_content):\n  import tempfile\n  temp_path=''\n  try:\n    with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as handle:\n      handle.write(script_content)\n      temp_path=handle.name\n    for node in nuke.allNodes():\n      node.setSelected(False)\n    nuke.nodePaste(temp_path)\n    for node in nuke.selectedNodes():\n      if node.Class()=='Group':\n        return node\n  except Exception as exc:\n    _debug('paste failed: \{0\}'.format(exc))\n  finally:\n    if temp_path and os.path.exists(temp_path):\n      try:\n        os.unlink(temp_path)\n      except Exception:\n        pass\n  return None\n\ndef _collect_dependents(node):\n  deps=\[]\n  for other in nuke.allNodes(recurseGroups=False):\n    for i in range(other.inputs()):\n      try:\n        if other.input(i)==node:\n          deps.append((other,i))\n      except Exception:\n        pass\n  return deps\n\ndef _ensure_template_knob(group):\n  knob=group.knob('charon_template_dir')\n  if knob:\n    return knob\n  knob=nuke.String_Knob('charon_template_dir','Template Dir','')\n  knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)\n  group.addKnob(knob)\n  return knob\n\ndef _resolve_template_dir(group):\n  import os\n  import sys\n  template_dir=''\n  knob=None\n  try:\n    knob=_ensure_template_knob(group)\n  except Exception:\n    knob=None\n  if knob:\n    try:\n      template_dir=knob.value()\n    except Exception:\n      template_dir=''\n  if template_dir and os.path.exists(template_dir):\n    return template_dir\n  candidates=\[]\n  try:\n    env_dir=os.environ.get('CHARON_TEMPLATE_DIR') or ''\n  except Exception:\n    env_dir=''\n  if env_dir:\n    candidates.append(env_dir)\n  try:\n    import charon.paths as _charon_paths\n    candidates.append(os.path.join(_charon_paths.RESOURCE_DIR, 'nuke_template'))\n  except Exception:\n    pass\n  try:\n    for entry in list(sys.path):\n      if not entry:\n        continue\n      candidates.append(os.path.join(entry, 'charon', 'resources', 'nuke_template'))\n      candidates.append(os.path.join(entry, 'resources', 'nuke_template'))\n  except Exception:\n    pass\n  try:\n    import nuke as _nuke\n    for entry in _nuke.pluginPath():\n      if not entry:\n        continue\n      candidates.append(os.path.join(entry, 'charon', 'resources', 'nuke_template'))\n      candidates.append(os.path.join(entry, 'resources', 'nuke_template'))\n  except Exception:\n    pass\n  for candidate in candidates:\n    if candidate and os.path.exists(candidate):\n      candidate=os.path.normpath(candidate)\n      try:\n        if knob:\n          knob.setValue(candidate)\n        elif group.knob('charon_template_dir'):\n          group\['charon_template_dir'].setValue(candidate)\n      except Exception:\n        pass\n      return candidate\n  return template_dir\n\ndef _copy_knob_values(src, dst, names):\n  for name in names:\n    try:\n      if src.knob(name) and dst.knob(name):\n        dst\[name].setValue(src\[name].value())\n    except Exception:\n      pass\n\n\ndef _unique_name(base):\n  try:\n    existing=set(n.name() for n in nuke.allNodes(recurseGroups=False))\n  except Exception:\n    existing=set()\n  if base not in existing:\n    return base\n  idx=1\n  while True:\n    candidate='\{0\}_\{1\}'.format(base, idx)\n    if candidate not in existing:\n      return candidate\n    idx+=1\n\ndef _rebuild_for_count(group, count):\n  try:\n    count=int(count)\n  except Exception:\n    return None\n  template_dir=_resolve_template_dir(group)\n  if not template_dir:\n    nuke.message('Template directory missing.')\n    return None\n  template_path=os.path.normpath(os.path.join(template_dir, 'projection_texture_bake_\{0\}_cams.nk'.format(count)))\n  if not os.path.exists(template_path):\n    nuke.message('Template not found for \{0\} cams.'.format(count))\n    return None\n  script_content=_read_group_block(template_path)\n  if not script_content:\n    return None\n\n  input_nodes=\[group.input(i) for i in range(group.inputs())]\n  old_name=group.name()\n  old_pos=(group.xpos(), group.ypos())\n  downstream=_collect_dependents(group)\n  values=\{\}\n  for name in \['asset_name','subname','aces_mode','uvsize','bake_resolution']:\n    try:\n      if group.knob(name):\n        values\[name]=group\[name].value()\n    except Exception:\n      pass\n\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  new_group=_paste_group(script_content)\n  if not new_group:\n    nuke.message('Failed to rebuild bake group.')\n    return None\n\n  for idx, inp in enumerate(input_nodes):\n    try:\n      new_group.setInput(idx, inp)\n    except Exception:\n      pass\n  try:\n    new_group.setXYpos(old_pos\[0], old_pos\[1])\n  except Exception:\n    pass\n  _copy_knob_values(group, new_group, values.keys())\n\n  for dep, idx in downstream:\n    try:\n      dep.setInput(idx, new_group)\n    except Exception:\n      pass\n\n  temp_name=_unique_name('\{0\}_OLD'.format(old_name))\n  try:\n    group.setName(temp_name)\n  except Exception:\n    pass\n  try:\n    new_group.setName(old_name)\n  except Exception:\n    pass\n  try:\n    nuke.delete(group)\n  except Exception:\n    pass\n\n  _ensure_template_knob(new_group)\n  try:\n    new_group\['charon_template_dir'].setValue(template_dir)\n  except Exception:\n    pass\n\n  if current_group and current_group is not root:\n    current_group.begin()\n  return new_group\n\ndef _update_geo(group, geo_node):\n  if not geo_node:\n    return False\n  _debug('update_geo input: \{0\} (\{1\})'.format(geo_node.name(), geo_node.Class()))\n  if geo_node.Class() not in ('ReadGeo2','ReadGeo'):\n    upstream=_find_upstream(geo_node, ('ReadGeo2','ReadGeo'))\n    if upstream:\n      _debug('resolved upstream geo: \{0\} (\{1\})'.format(upstream.name(), upstream.Class()))\n      geo_node=upstream\n    else:\n      nuke.message('Geo input must be a ReadGeo/ReadGeo2 node.')\n      return False\n\n  parent=geo_node.parent() if hasattr(geo_node, 'parent') else None\n  if not parent:\n    parent=nuke.root()\n  current_group=nuke.thisGroup()\n  parent.begin()\n  original_selection=list(nuke.selectedNodes())\n  for n in original_selection:\n    n.setSelected(False)\n  try:\n    geo_node.setSelected(True)\n    try:\n      nuke.nodeCopy('%clipboard%')\n    except Exception as exc:\n      _debug('update_geo copy failed: \{0\}'.format(exc))\n      return False\n  finally:\n    geo_node.setSelected(False)\n    for n in original_selection:\n      try:\n        n.setSelected(True)\n      except Exception:\n        pass\n    if current_group and current_group is not parent:\n      current_group.begin()\n\n  group.begin()\n  try:\n    before_nodes=set(nuke.allNodes())\n    for n in nuke.selectedNodes():\n      n.setSelected(False)\n    nuke.nodePaste('%clipboard%')\n    pasted_nodes=list(nuke.selectedNodes())\n    after_nodes=\[node for node in nuke.allNodes() if node not in before_nodes]\n    if not after_nodes and not pasted_nodes:\n      nuke.message('Failed to paste geo node.')\n      return False\n\n    pasted=None\n    for node in pasted_nodes + after_nodes:\n      if node.Class() in ('ReadGeo2','ReadGeo'):\n        pasted=node\n        break\n    if pasted is None:\n      pasted=(pasted_nodes or after_nodes)\[0]\n\n    existing_geos=\[node for node in nuke.allNodes() if node.Class() in ('ReadGeo2','ReadGeo') and node is not pasted]\n\n    def _is_clone(node):\n      try:\n        return bool(node.isClone())\n      except Exception:\n        return False\n\n    def _collect_connections(nodes):\n      connections=\{node: \[] for node in nodes\}\n      for node in nuke.allNodes():\n        for i in range(node.inputs()):\n          try:\n            inp=node.input(i)\n          except Exception:\n            continue\n          if inp in connections:\n            connections\[inp].append((node,i))\n      return connections\n\n    def _create_clone(master):\n      for n in nuke.selectedNodes():\n        n.setSelected(False)\n      master.setSelected(True)\n      before=set(nuke.allNodes())\n      if hasattr(nuke, 'clone'):\n        try:\n          nuke.clone(master)\n        except TypeError:\n          nuke.clone()\n      else:\n        nuke.nodeCopy('%clipboard%')\n        nuke.nodePaste('%clipboard%')\n      created=\[node for node in nuke.allNodes() if node not in before]\n      if created:\n        return created\[0]\n      return None\n\n    if not existing_geos:\n      default_name='ReadGeo' if geo_node.Class()=='ReadGeo' else 'ReadGeo2'\n      try:\n        pasted.setName(default_name, unique=True)\n      except Exception:\n        pasted.setName(default_name)\n      return True\n\n    master_old=None\n    for node in existing_geos:\n      if node.name() in ('ReadGeo2','ReadGeo'):\n        master_old=node\n        break\n    if master_old is None:\n      for node in existing_geos:\n        if not _is_clone(node):\n          master_old=node\n          break\n    if master_old is None:\n      master_old=existing_geos\[0]\n\n    geo_specs=\[]\n    for node in existing_geos:\n      try:\n        input_nodes=\[node.input(i) for i in range(node.inputs())]\n      except Exception:\n        input_nodes=\[]\n      geo_specs.append(\{\n        'node': node,\n        'name': node.name(),\n        'pos': (node.xpos(), node.ypos()),\n        'is_master': node is master_old,\n        'inputs': input_nodes,\n      \})\n    connections=_collect_connections(\[spec\['node'] for spec in geo_specs])\n\n    new_nodes=\{\}\n    for spec in geo_specs:\n      if spec\['is_master']:\n        new_nodes\[spec\['node']]=pasted\n      else:\n        clone=_create_clone(pasted)\n        if clone:\n          new_nodes\[spec\['node']]=clone\n        else:\n          new_nodes\[spec\['node']]=pasted\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      new_node=new_nodes.get(old_node)\n      if new_node is None:\n        continue\n      inputs=spec.get('inputs', \[])\n      for idx, inp in enumerate(inputs):\n        if inp is None:\n          try:\n            new_node.setInput(idx, None)\n          except Exception:\n            pass\n          continue\n        replacement=new_nodes.get(inp, inp)\n        try:\n          new_node.setInput(idx, replacement)\n        except Exception:\n          pass\n\n    for old_node, new_node in new_nodes.items():\n      if old_node is new_node:\n        continue\n      for dep, idx in connections.get(old_node, \[]):\n        try:\n          dep.setInput(idx, new_node)\n        except Exception:\n          pass\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      new_node=new_nodes.get(old_node)\n      if new_node is None:\n        continue\n      try:\n        new_node.setXYpos(spec\['pos']\[0], spec\['pos']\[1])\n      except Exception:\n        pass\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      try:\n        nuke.delete(old_node)\n      except Exception:\n        pass\n\n    for spec in geo_specs:\n      new_node=new_nodes.get(spec\['node'])\n      if new_node is None:\n        continue\n      try:\n        new_node.setName(spec\['name'], unique=True)\n      except Exception:\n        try:\n          new_node.setName(spec\['name'])\n        except Exception:\n          pass\n\n    return True\n  finally:\n    group.end()\n\ndef _update_uv_size(group, geo_node):\n  if not geo_node:\n    _debug('uv size: geo input missing')\n    return\n  _debug('uv size: geo input ' + geo_node.name() + ' (' + geo_node.Class() + ')')\n  if geo_node.Class() not in ('ReadGeo2','ReadGeo'):\n    upstream=_find_upstream(geo_node, ('ReadGeo2','ReadGeo'))\n    if upstream:\n      _debug('uv size: resolved geo ' + upstream.name() + ' (' + upstream.Class() + ')')\n      geo_node=upstream\n    else:\n      _debug('uv size: uv source must be ReadGeo/ReadGeo2')\n      return\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  try:\n    def _get_geometry(node):\n      if not hasattr(node, 'geometry'):\n        _debug('uv size: geometry() not available on ' + node.Class())\n        return None\n      geo=None\n      try:\n        geo=node.geometry(nuke.frame())\n        _debug('uv size: geometry(frame) ok')\n      except Exception as exc:\n        _debug('uv size: geometry(frame) failed: ' + str(exc))\n      if not geo:\n        try:\n          geo=node.geometry()\n          _debug('uv size: geometry() ok')\n        except Exception as exc2:\n          _debug('uv size: geometry() failed: ' + str(exc2))\n      return geo\n\n    def _collect_uvs_from_geo(geo):\n      uvs=\[]\n      try:\n        attr=None\n        try:\n          attr=geo.pointAttrib('uv')\n        except Exception:\n          attr=None\n        if attr:\n          _debug('uv size: using point attrib uv')\n          for p in geo.points():\n            try:\n              uv=attr.value(p)\n            except Exception:\n              try:\n                uv=p.attribValue(attr)\n              except Exception:\n                uv=None\n            if uv:\n              uvs.append(uv)\n      except Exception as exc:\n        _debug('uv size: point attrib read failed: ' + str(exc))\n      if not uvs:\n        try:\n          for p in geo.points():\n            uv=None\n            try:\n              attrs=p.attributes()\n              if attrs:\n                uv=attrs.get('uv')\n            except Exception:\n              uv=None\n            if uv is None:\n              try:\n                uv=p.attribValue('uv')\n              except Exception:\n                uv=None\n            if uv:\n              uvs.append(uv)\n        except Exception as exc:\n          _debug('uv size: point attrib fallback failed: ' + str(exc))\n      if not uvs:\n        try:\n          attr=None\n          try:\n            attr=geo.vertexAttrib('uv')\n          except Exception:\n            attr=None\n          if attr:\n            _debug('uv size: using vertex attrib uv')\n            for vtx in geo.vertices():\n              try:\n                uv=attr.value(vtx)\n              except Exception:\n                try:\n                  uv=vtx.attribValue(attr)\n                except Exception:\n                  uv=None\n              if uv:\n                uvs.append(uv)\n        except Exception as exc:\n          _debug('uv size: vertex attrib read failed: ' + str(exc))\n      return uvs\n\n    def _compute_range(uvs):\n      import math\n      min_idx=None\n      max_idx=None\n      for uv in uvs:\n        try:\n          u=float(uv\[0])\n          v=float(uv\[1])\n        except Exception:\n          continue\n        tile_u=int(math.floor(u))\n        tile_v=int(math.floor(v))\n        idx=tile_u + (tile_v * 10)\n        if min_idx is None or idx < min_idx:\n          min_idx=idx\n        if max_idx is None or idx > max_idx:\n          max_idx=idx\n      return min_idx, max_idx\n\n    def _apply_range(min_idx, max_idx):\n      if min_idx is None or max_idx is None:\n        _debug('uv size: compute failed')\n        return False\n      try:\n        group\['uvsize'].setValue(\[int(min_idx), int(max_idx)])\n        _debug('uv size: set to ' + str(int(min_idx)) + '-' + str(int(max_idx)))\n        return True\n      except Exception as exc:\n        _debug('uv size: set failed: ' + str(exc))\n        return False\n\n    geo=_get_geometry(geo_node)\n    if geo:\n      uvs=_collect_uvs_from_geo(geo)\n      if uvs:\n        _debug('uv size: uv count ' + str(len(uvs)))\n        min_idx, max_idx=_compute_range(uvs)\n        if _apply_range(min_idx, max_idx):\n          return\n      else:\n        _debug('uv size: uv attribute not found on geometry')\n\n    _debug('uv size: WriteGeo fallback disabled')\n    return\n  finally:\n    if current_group and current_group is not root:\n      current_group.begin()\n\ndef _resolve_camera_input(node):\n  if not node:\n    return None\n  node=_resolve(node)\n  try:\n    if node and node.Class() in ('Camera3','Camera2','Camera'):\n      return node\n  except Exception:\n    pass\n  upstream=_find_upstream(node, ('Camera3','Camera2','Camera'))\n  if upstream:\n    return upstream\n  return None\n\ndef _safe_input(group, index):\n  try:\n    return group.input(index)\n  except Exception:\n    return None\n\ndef _collect_dependents_in_group(target):\n  deps=\[]\n  for other in nuke.allNodes():\n    for i in range(other.inputs()):\n      try:\n        if other.input(i)==target:\n          deps.append((other,i))\n      except Exception:\n        pass\n  return deps\n\ndef _update_camera_from_input(group, cam_node, target_name):\n  if not cam_node:\n    return False\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  original_selection=list(nuke.selectedNodes())\n  for n in original_selection:\n    n.setSelected(False)\n  try:\n    cam_node.setSelected(True)\n    nuke.nodeCopy('%clipboard%')\n  finally:\n    cam_node.setSelected(False)\n    for n in original_selection:\n      try:\n        n.setSelected(True)\n      except Exception:\n        pass\n    if current_group and current_group is not root:\n      current_group.begin()\n\n  group.begin()\n  try:\n    before_nodes=set(nuke.allNodes())\n    for n in nuke.selectedNodes():\n      n.setSelected(False)\n    nuke.nodePaste('%clipboard%')\n    pasted_nodes=list(nuke.selectedNodes())\n    after_nodes=\[node for node in nuke.allNodes() if node not in before_nodes]\n    new_cam=None\n    for node in pasted_nodes + after_nodes:\n      if node.Class() in ('Camera3','Camera2','Camera'):\n        new_cam=node\n        break\n    if not new_cam:\n      return False\n\n    old_cam=nuke.toNode(target_name)\n    if not old_cam:\n      try:\n        new_cam.setName(target_name, unique=True)\n      except Exception:\n        try:\n          new_cam.setName(target_name)\n        except Exception:\n          pass\n      return True\n\n    try:\n      old_inputs=\[old_cam.input(i) for i in range(old_cam.inputs())]\n    except Exception:\n      old_inputs=\[]\n    deps=_collect_dependents_in_group(old_cam)\n\n    for idx, inp in enumerate(old_inputs):\n      try:\n        new_cam.setInput(idx, inp)\n      except Exception:\n        pass\n\n    for dep, idx in deps:\n      try:\n        dep.setInput(idx, new_cam)\n      except Exception:\n        pass\n\n    try:\n      new_cam.setXYpos(old_cam.xpos(), old_cam.ypos())\n    except Exception:\n      pass\n\n    try:\n      nuke.delete(old_cam)\n    except Exception:\n      pass\n\n    try:\n      new_cam.setName(target_name, unique=True)\n    except Exception:\n      try:\n        new_cam.setName(target_name)\n      except Exception:\n        pass\n    return True\n  finally:\n    group.end()\n\ndef _projection_pairs():\n  return \[\n    ('Image_MASTER', 'Cam_MASTER', 'Charon_InitCam', 1, 2),\n    ('Image_2', 'Cam_2', 'Charon_InitCam1', 3, 4),\n    ('Image_3', 'Cam_3', 'Charon_InitCam2', 5, 6),\n    ('Image_4', 'Cam_4', 'Charon_InitCam3', 7, 8),\n    ('Image_5', 'Cam_5', 'Charon_InitCam4', 9, 10),\n    ('Image_6', 'Cam_6', 'Charon_InitCam5', 11, 12),\n    ('Image_7', 'Cam_7', 'Charon_InitCam6', 13, 14),\n    ('Image_8', 'Cam_8', 'Charon_InitCam7', 15, 16),\n  ]\n\ndef _update_pair_count(group, count):\n  knob=_ensure_rig_count_knob(group)\n  try:\n    knob.setValue(int(count))\n  except Exception:\n    try:\n      knob.setValue(float(count))\n    except Exception:\n      pass\n\ndef _set_knob_visible(group, knob, visible, name=None):\n  if not knob:\n    return\n  label=name if name else (knob.name() if hasattr(knob, 'name') else '?')\n  try:\n    if visible and hasattr(nuke, 'INVISIBLE'):\n      knob.clearFlag(nuke.INVISIBLE)\n  except Exception as exc:\n    _debug('visibility clearFlag failed for ' + label + ': ' + str(exc))\n  try:\n    knob.setVisible(visible)\n  except Exception as exc:\n    _debug('visibility setVisible failed for ' + label + ': ' + str(exc))\n  try:\n    knob.setEnabled(visible)\n  except Exception as exc:\n    _debug('visibility setEnabled failed for ' + label + ': ' + str(exc))\n  try:\n    inv=knob.getFlag(nuke.INVISIBLE) if hasattr(nuke, 'INVISIBLE') else None\n  except Exception:\n    inv=None\n  try:\n    en=knob.enabled()\n  except Exception:\n    en=None\n  _debug('visibility knob=\{0\} visible=\{1\} inv=\{2\} enabled=\{3\}'.format(label, visible, inv, en))\n  if visible and inv:\n    try:\n      group.removeKnob(knob)\n      group.addKnob(knob)\n      if hasattr(nuke, 'INVISIBLE'):\n        knob.clearFlag(nuke.INVISIBLE)\n      knob.setVisible(True)\n      knob.setEnabled(True)\n      fresh = group.knob(label)\n      if fresh:\n        try:\n          inv2 = fresh.getFlag(nuke.INVISIBLE) if hasattr(nuke, 'INVISIBLE') else None\n        except Exception:\n          inv2 = None\n        _debug('visibility re-added knob: \{0\} inv=\{1\}'.format(label, inv2))\n      else:\n        _debug('visibility re-add could not refetch knob: ' + label)\n    except Exception as exc:\n      _debug('visibility re-add failed for ' + label + ': ' + str(exc))\n\ndef _apply_camera_knob_visibility(group, pairs):\n  active=\{1: True\}\n  for idx, spec in enumerate(pairs, start=1):\n    if idx == 1:\n      active\[idx]=True\n      continue\n    try:\n      cam=spec\[4]\n    except Exception:\n      cam=None\n    active\[idx]=bool(cam)\n\n  knob_map=\{\}\n  try:\n    knob_items=group.knobs().items()\n  except Exception:\n    knob_items=\[]\n  for name, knob in knob_items:\n    if name == 'cam_master_mix':\n      knob_map.setdefault(1, \[]).append((name, knob))\n      continue\n    if name.startswith('cam_'):\n      parts=name.split('_')\n      if len(parts) >= 3 and parts\[1].isdigit():\n        idx=int(parts\[1])\n        suffix='_'.join(parts\[2:])\n        if suffix in ('mix','border_blur'):\n          knob_map.setdefault(idx, \[]).append((name, knob))\n          continue\n    if name.startswith('Cam_'):\n      parts=name.split('_')\n      if len(parts) >= 3 and parts\[1].isdigit():\n        idx=int(parts\[1])\n        suffix='_'.join(parts\[2:])\n        if suffix == 'offset':\n          knob_map.setdefault(idx, \[]).append((name, knob))\n          continue\n\n  _debug('visibility active: ' + str(active))\n  _debug('visibility knob_map: ' + str(\{k:\[n for n,_ in v] for k,v in knob_map.items()\}))\n\n  for idx, items in knob_map.items():\n    visible = active.get(idx, False)\n    _debug('visibility idx \{0\} -> \{1\} names=\{2\}'.format(idx, visible, \[n for n,_ in items]))\n    for name, knob in items:\n      if not visible and (name.endswith('_mix') or name.endswith('_border_blur')) and knob:\n        try:\n          knob.setValue(0)\n        except Exception as exc:\n          _debug('visibility setValue failed for ' + name + ': ' + str(exc))\n      _set_knob_visible(group, knob, visible, name)\n\npair_specs=_projection_pairs()\npairs=\[]\nfor img_name, cam_name, target_name, img_idx, cam_idx in pair_specs:\n  img=_safe_input(n, img_idx)\n  cam=_safe_input(n, cam_idx)\n  pairs.append((img_name, cam_name, target_name, img, cam))\n\npair_count=0\nfor img_name, cam_name, target_name, img, cam in pairs:\n  if img and cam:\n    pair_count+=1\n_update_pair_count(n, pair_count)\n_apply_camera_knob_visibility(n, pairs)\n\ninvalid_cams=\[]\nfor img_name, cam_name, target_name, img, cam in pairs:\n  if not cam:\n    continue\n  resolved=_resolve_camera_input(cam)\n  if not resolved:\n    invalid_cams.append(cam_name)\n    continue\n  _debug('updating ' + target_name + ' from ' + cam_name)\n  _update_camera_from_input(n, resolved, target_name)\n\nif invalid_cams:\n  try:\n    nuke.message('Camera inputs must be Camera/Camera2/Camera3: ' + ', '.join(invalid_cams))\n  except Exception:\n    pass\n\ngeo_input=_safe_input(n, 0)\nif geo_input:\n  _update_uv_size(n, geo_input)\n  _update_geo(n, geo_input)\n" +STARTLINE}
  addUserKnob {3 charon_rig_cam_count l "Projection Cameras Found" +DISABLED}
  charon_rig_cam_count 2
  addUserKnob {26 ""}
@@ -82,24 +83,31 @@ Group {
  addUserKnob {41 cam_master_mix l "Cam_Master Mix" T toggle_cam_master.mix}
  addUserKnob {26 ""}
  addUserKnob {41 cam_02_mix l "Cam_02 Mix" T toggle_cam_02.mix}
+ addUserKnob {41 cam_02_border_blur l "Cam_02 Blend" T Blur1.size}
  addUserKnob {7 Cam_02_offset l "Cam_02 Offset" R 0 50}
  addUserKnob {26 ""}
  addUserKnob {41 cam_03_mix l "Cam_03 Mix" T toggle_cam_03.mix}
+ addUserKnob {41 cam_03_border_blur l "Cam_03 Blend" T Blur2.size}
  addUserKnob {7 Cam_03_offset l "Cam_03 Offset"}
  addUserKnob {26 ""}
  addUserKnob {41 cam_04_mix l "Cam_04 Mix" T toggle_cam_04.mix}
+ addUserKnob {41 cam_04_border_blur l "Cam_04 Blend" T Blur3.size}
  addUserKnob {7 Cam_04_offset l "Cam_04 Offset"}
  addUserKnob {26 ""}
  addUserKnob {41 cam_05_mix l "Cam_05 Mix" T toggle_cam_05.mix}
+ addUserKnob {41 cam_05_border_blur l "Cam_05 Blend" T Blur4.size}
  addUserKnob {7 Cam_05_offset l "Cam_05 Offset"}
  addUserKnob {26 ""}
  addUserKnob {41 cam_06_mix l "Cam_06 Mix" T toggle_cam_06.mix}
+ addUserKnob {41 cam_06_border_blur l "Cam_06 Blend" T Blur5.size}
  addUserKnob {7 Cam_06_offset l "Cam_06 Offset"}
  addUserKnob {26 ""}
  addUserKnob {41 cam_07_mix l "Cam_07 Mix" T toggle_cam_07.mix}
+ addUserKnob {41 cam_07_border_blur l "Cam_07 Blend" T Blur6.size}
  addUserKnob {7 Cam_07_offset l "Cam_07 Offset"}
  addUserKnob {26 ""}
  addUserKnob {41 cam_08_mix l "Cam_08 Mix" T toggle_cam_08.mix}
+ addUserKnob {41 cam_08_border_blur l "Cam_08 Blend" T Blur7.size}
  addUserKnob {7 Cam_08_offset l "Cam_08 Offset"}
  addUserKnob {26 ""}
  addUserKnob {26 edget l "Edge Extend"}
@@ -140,7 +148,7 @@ push 0
   xpos 1218
   ypos 377
  }
-set N16833400 [stack 0]
+set N258c2500 [stack 0]
  Dot {
   name Dot8
   xpos 1339
@@ -151,7 +159,7 @@ set N16833400 [stack 0]
   xpos 1339
   ypos 692
  }
-push $N16833400
+push $N258c2500
  Input {
   inputs 0
   name Image_3
@@ -179,38 +187,16 @@ push $N16833400
   xpos 1208
   ypos 539
  }
- set C16833e00 [stack 0]
+ set C258c2f00 [stack 0]
  ReadGeo2 {
-  file //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/shots/Asset_Delivery/MDL_Lobster/Comp/nuke/work/geo/lobster.abc
+  file //buck/work/current/Work/work.kien/cube.obj
   version 1
-  use_geometry_colors false
   range_first 0
-  scene_view {
-   {0}
-   imported:
-   0
-   1
-   2
-   3
-   4
-   selected:
-   0
-   1
-   2
-   3
-   4
-   items:
-   /root/lobster_piggybank_grp/coin_01_geo/coin_01_geoShape
-   /root/lobster_piggybank_grp/coin_02_geo/coin_02_geoShape
-   /root/lobster_piggybank_grp/coin_03_geo/coin_03_geoShape
-   /root/lobster_piggybank_grp/coin_04_geo/coin_04_geoShape
-   /root/lobster_piggybank_grp/lobster_piggypank_geo/lobster_piggypank_geoShape
-  }
   name ReadGeo2
   xpos 1208
   ypos 596
  }
- set C16834300 [stack 0]
+ set C258c3400 [stack 0]
 push 0
 add_layer {N N.red N.green N.blue}
  ScanlineRender {
@@ -225,19 +211,19 @@ add_layer {N N.red N.green N.blue}
   xpos 1208
   ypos 689
  }
- set C16834800 [stack 0]
+ set C258c3900 [stack 0]
  Dot {
   name Dot14
   xpos 1242
   ypos 917
  }
-set N16892400 [stack 0]
+set N258ed000 [stack 0]
  Dot {
   name Dot15
   xpos 1242
   ypos 964
  }
-set N16892800 [stack 0]
+set N258ed400 [stack 0]
  Invert {
   name Invert3
   xpos 1273
@@ -250,7 +236,7 @@ set N16892800 [stack 0]
   xpos 1363
   ypos 961
  }
- set C16835700 [stack 0]
+ set C258c4800 [stack 0]
  Erode {
   channels all
   size -23
@@ -259,7 +245,7 @@ set N16892800 [stack 0]
   xpos 1447
   ypos 955
  }
-push $N16892400
+push $N258ed000
  Group {
   name NormalsRotate3
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -364,13 +350,13 @@ push $N16892400
    xpos 0
    ypos -347
   }
-set N168c5700 [stack 0]
+set N25938800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N168c5700
+push $N25938800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -555,7 +541,7 @@ push 0
   xpos 2118
   ypos 375
  }
-set N1bed7900 [stack 0]
+set N9086aa00 [stack 0]
  Dot {
   name Dot25
   xpos 2239
@@ -566,7 +552,7 @@ set N1bed7900 [stack 0]
   xpos 2239
   ypos 690
  }
-push $N1bed7900
+push $N9086aa00
  Input {
   inputs 0
   name Image_4
@@ -587,18 +573,18 @@ push $N1bed7900
   xpos 2108
   ypos 515
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos 2108
   ypos 537
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos 2108
   ypos 594
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos 2108
   ypos 687
@@ -609,19 +595,19 @@ clone $C16834800 {
   xpos 2142
   ypos 915
  }
-set N1bf0f000 [stack 0]
+set N90861c00 [stack 0]
  Dot {
   name Dot41
   xpos 2142
   ypos 962
  }
-set N1bf0f400 [stack 0]
+set N90964000 [stack 0]
  Invert {
   name Invert8
   xpos 2173
   ypos 953
  }
-clone $C16835700 {
+clone $C258c4800 {
   xpos 2263
   ypos 959
   selected false
@@ -634,7 +620,7 @@ clone $C16835700 {
   xpos 2347
   ypos 953
  }
-push $N1bf0f000
+push $N90861c00
  Group {
   name NormalsRotate6
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -739,13 +725,13 @@ push $N1bf0f000
    xpos 0
    ypos -347
   }
-set N1bf9a000 [stack 0]
+set N90974d00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1bf9a000
+push $N90974d00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -921,7 +907,7 @@ push 0
   xpos 4818
   ypos 365
  }
-set N1c019e00 [stack 0]
+set N90a34f00 [stack 0]
  Dot {
   name Dot79
   xpos 4939
@@ -932,7 +918,7 @@ set N1c019e00 [stack 0]
   xpos 4939
   ypos 680
  }
-push $N1c019e00
+push $N90a34f00
  Input {
   inputs 0
   name Image_7
@@ -953,18 +939,18 @@ push $N1c019e00
   xpos 4808
   ypos 505
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos 4808
   ypos 527
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos 4808
   ypos 584
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos 4808
   ypos 677
@@ -975,19 +961,19 @@ clone $C16834800 {
   xpos 4842
   ypos 905
  }
-set N1c062400 [stack 0]
+set N90a67000 [stack 0]
  Dot {
   name Dot83
   xpos 4842
   ypos 952
  }
-set N1c062800 [stack 0]
+set N90a67400 [stack 0]
  Dot {
   name Dot87
   xpos 4842
   ypos 1050
  }
-set N1c062c00 [stack 0]
+set N90a67800 [stack 0]
  Group {
   name NormalsRotate13
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -1091,13 +1077,13 @@ set N1c062c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N1c092f00 [stack 0]
+set N90ad4000 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c092f00
+push $N90ad4000
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1238,7 +1224,7 @@ push 0
   xpos 4932
   ypos 1175
  }
-set N1c063c00 [stack 0]
+set N90aea800 [stack 0]
  Axis3 {
   inputs 0
   translate {0 -0.2000000477 -1}
@@ -1258,7 +1244,7 @@ push 0
   xpos 5718
   ypos 365
  }
-set N1c130d00 [stack 0]
+set N90b51e00 [stack 0]
  Dot {
   name Dot93
   xpos 5839
@@ -1269,7 +1255,7 @@ set N1c130d00 [stack 0]
   xpos 5839
   ypos 680
  }
-push $N1c130d00
+push $N90b51e00
  Input {
   inputs 0
   name Image_8
@@ -1290,18 +1276,18 @@ push $N1c130d00
   xpos 5708
   ypos 505
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos 5708
   ypos 527
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos 5708
   ypos 584
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos 5708
   ypos 677
@@ -1312,25 +1298,25 @@ clone $C16834800 {
   xpos 5742
   ypos 905
  }
-set N1c161000 [stack 0]
+set N90aebc00 [stack 0]
  Dot {
   name Dot97
   xpos 5742
   ypos 952
  }
-set N1c161400 [stack 0]
+set N90bb4000 [stack 0]
  Dot {
   name Dot101
   xpos 5742
   ypos 1050
  }
-set N1c161800 [stack 0]
+set N90bb4400 [stack 0]
  Dot {
   name Dot102
   xpos 5742
   ypos 1175
  }
-set N1c161c00 [stack 0]
+set N90bb4800 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -1350,20 +1336,20 @@ set N1c161c00 [stack 0]
   xpos 5255
   ypos 1246
  }
-push $N1c063c00
+push $N90aea800
  Dot {
   name Dot103
   xpos 4932
   ypos 1214
  }
-set N1c1c6000 [stack 0]
-push $N1c161c00
+set N90bb4c00 [stack 0]
+push $N90bb4800
  Dot {
   name Dot104
   xpos 5742
   ypos 1214
  }
-set N1c1c6400 [stack 0]
+set N90bb5000 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -1390,7 +1376,7 @@ set N1c1c6400 [stack 0]
   xpos 5912
   ypos 1116
  }
-push $N1c161800
+push $N90bb4400
  Group {
   name NormalsRotate15
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -1494,13 +1480,13 @@ push $N1c161800
    xpos 0
    ypos -347
   }
-set N1c1d3e00 [stack 0]
+set N90c02f00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c1d3e00
+push $N90c02f00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1643,7 +1629,7 @@ push 0
   xpos 5798
   ypos 1246
  }
-push $N1c1c6400
+push $N90bb5000
  Dot {
   inputs 0
   name Dot77
@@ -1674,7 +1660,7 @@ push 0
   xpos 3918
   ypos 365
  }
-set N1c2a8500 [stack 0]
+set N90ca9200 [stack 0]
  Dot {
   name Dot65
   xpos 4039
@@ -1685,7 +1671,7 @@ set N1c2a8500 [stack 0]
   xpos 4039
   ypos 680
  }
-push $N1c2a8500
+push $N90ca9200
  Input {
   inputs 0
   name Image_6
@@ -1706,18 +1692,18 @@ push $N1c2a8500
   xpos 3908
   ypos 505
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos 3908
   ypos 527
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos 3908
   ypos 584
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos 3908
   ypos 677
@@ -1728,19 +1714,19 @@ clone $C16834800 {
   xpos 3942
   ypos 905
  }
-set N1c2a5400 [stack 0]
+set N90d20000 [stack 0]
  Dot {
   name Dot69
   xpos 3942
   ypos 952
  }
-set N1c2a5800 [stack 0]
+set N90d20400 [stack 0]
  Dot {
   name Dot73
   xpos 3942
   ypos 1050
  }
-set N1c2a5c00 [stack 0]
+set N90d20800 [stack 0]
  Group {
   name NormalsRotate11
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -1844,13 +1830,13 @@ set N1c2a5c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N1c2ab200 [stack 0]
+set N90cf8300 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c2ab200
+push $N90cf8300
   Unpremult {
    name Unpremult1
    xpos 0
@@ -1991,14 +1977,14 @@ push 0
   xpos 4032
   ypos 1175
  }
-set N1c340c00 [stack 0]
-push $N1c062c00
+set N90d21800 [stack 0]
+push $N90a67800
  Dot {
   name Dot88
   xpos 4842
   ypos 1175
  }
-set N1c341000 [stack 0]
+set N90d21c00 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -2018,20 +2004,20 @@ set N1c341000 [stack 0]
   xpos 4355
   ypos 1246
  }
-push $N1c340c00
+push $N90d21800
  Dot {
   name Dot89
   xpos 4032
   ypos 1214
  }
-set N1c341400 [stack 0]
-push $N1c341000
+set N90e02000 [stack 0]
+push $N90d21c00
  Dot {
   name Dot90
   xpos 4842
   ypos 1214
  }
-set N1c341800 [stack 0]
+set N90e02400 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -2047,7 +2033,7 @@ set N1c341800 [stack 0]
   xpos 4474
   ypos 1252
  }
-push $N1c1c6000
+push $N90bb4c00
  Blur {
   inputs 1+1
   size 50
@@ -2055,7 +2041,7 @@ push $N1c1c6000
   xpos 4898
   ypos 1246
  }
-push $N1c341800
+push $N90e02400
  Dot {
   inputs 0
   name Dot63
@@ -2086,7 +2072,7 @@ push 0
   xpos 3018
   ypos 375
  }
-set N1c3f1900 [stack 0]
+set N90e1ca00 [stack 0]
  Dot {
   name Dot27
   xpos 3139
@@ -2097,7 +2083,7 @@ set N1c3f1900 [stack 0]
   xpos 3139
   ypos 690
  }
-push $N1c3f1900
+push $N90e1ca00
  Input {
   inputs 0
   name Image_5
@@ -2118,18 +2104,18 @@ push $N1c3f1900
   xpos 3008
   ypos 515
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos 3008
   ypos 537
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos 3008
   ypos 594
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos 3008
   ypos 687
@@ -2140,19 +2126,19 @@ clone $C16834800 {
   xpos 3042
   ypos 915
  }
-set N1c407400 [stack 0]
+set N90e7c000 [stack 0]
  Dot {
   name Dot55
   xpos 3042
   ypos 962
  }
-set N1c407800 [stack 0]
+set N90e7c400 [stack 0]
  Dot {
   name Dot59
   xpos 3042
   ypos 1060
  }
-set N1c407c00 [stack 0]
+set N90e7c800 [stack 0]
  Group {
   name NormalsRotate8
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -2256,13 +2242,13 @@ set N1c407c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N1c488a00 [stack 0]
+set N90e1f700 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c488a00
+push $N90e1f700
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2403,14 +2389,14 @@ push 0
   xpos 3132
   ypos 1175
  }
-set N1c4a8c00 [stack 0]
-push $N1c2a5c00
+set N90e7d800 [stack 0]
+push $N90d20800
  Dot {
   name Dot74
   xpos 3942
   ypos 1175
  }
-set N1c4a9000 [stack 0]
+set N90e7dc00 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -2430,20 +2416,20 @@ set N1c4a9000 [stack 0]
   xpos 3455
   ypos 1246
  }
-push $N1c4a8c00
+push $N90e7d800
  Dot {
   name Dot75
   xpos 3132
   ypos 1214
  }
-set N1c4a9400 [stack 0]
-push $N1c4a9000
+set N90f5a000 [stack 0]
+push $N90e7dc00
  Dot {
   name Dot76
   xpos 3942
   ypos 1214
  }
-set N1c4a9800 [stack 0]
+set N90f5a400 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -2459,7 +2445,7 @@ set N1c4a9800 [stack 0]
   xpos 3574
   ypos 1252
  }
-push $N1c341400
+push $N90e02000
  Blur {
   inputs 1+1
   size 50
@@ -2467,7 +2453,7 @@ push $N1c341400
   xpos 3998
   ypos 1246
  }
-push $N1c4a9800
+push $N90f5a400
  Dot {
   inputs 0
   name Dot46
@@ -2479,13 +2465,13 @@ push $N1c4a9800
   xpos 2312
   ypos 1126
  }
-push $N1bf0f400
+push $N90964000
  Dot {
   name Dot42
   xpos 2142
   ypos 1060
  }
-set N1c564400 [stack 0]
+set N90f5b000 [stack 0]
  Group {
   name NormalsRotate5
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -2589,13 +2575,13 @@ set N1c564400 [stack 0]
    xpos 0
    ypos -347
   }
-set N1c553700 [stack 0]
+set N90f6e800 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c553700
+push $N90f6e800
   Unpremult {
    name Unpremult1
    xpos 0
@@ -2736,14 +2722,14 @@ push 0
   xpos 2232
   ypos 1185
  }
-set N1c565400 [stack 0]
-push $N1c407c00
+set N91042000 [stack 0]
+push $N90e7c800
  Dot {
   name Dot60
   xpos 3042
   ypos 1185
  }
-set N1c565800 [stack 0]
+set N91042400 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -2763,20 +2749,20 @@ set N1c565800 [stack 0]
   xpos 2555
   ypos 1256
  }
-push $N1c565400
+push $N91042000
  Dot {
   name Dot61
   xpos 2232
   ypos 1224
  }
-set N1c565c00 [stack 0]
-push $N1c565800
+set N91042800 [stack 0]
+push $N91042400
  Dot {
   name Dot62
   xpos 3042
   ypos 1224
  }
-set N1c650000 [stack 0]
+set N91042c00 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -2792,7 +2778,7 @@ set N1c650000 [stack 0]
   xpos 2674
   ypos 1262
  }
-push $N1c4a9400
+push $N90f5a000
  Blur {
   inputs 1+1
   size 50
@@ -2800,21 +2786,21 @@ push $N1c4a9400
   xpos 3098
   ypos 1256
  }
-push $N1c650000
+push $N91042c00
  Camera3 {
   inputs 0
   name Camera_DEFAULT_IGNORE
   xpos -1197
   ypos 788
  }
-clone $C16834300 {
+clone $C258c3400 {
   inputs 0
   xpos -1055
   ypos 712
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos -1055
   ypos 809
@@ -2825,7 +2811,7 @@ clone $C16834800 {
   xpos -838
   ypos 803
  }
-set N1c660d00 [stack 0]
+set N91073e00 [stack 0]
  Axis3 {
   inputs 0
   translate {0 -0.2000000477 -0.3000000119}
@@ -2845,7 +2831,7 @@ push 0
   xpos 318
   ypos 384
  }
-set N1c661700 [stack 0]
+set N91074800 [stack 0]
  Dot {
   name Dot3
   xpos 439
@@ -2856,7 +2842,7 @@ set N1c661700 [stack 0]
   xpos 439
   ypos 694
  }
-push $N1c661700
+push $N91074800
  Input {
   inputs 0
   name Image_2
@@ -2877,18 +2863,18 @@ push $N1c661700
   xpos 308
   ypos 517
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos 308
   ypos 541
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos 308
   ypos 600
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos 308
   ypos 691
@@ -2899,19 +2885,19 @@ clone $C16834800 {
   xpos 343
   ypos 914
  }
-set N1c651800 [stack 0]
+set N910f6400 [stack 0]
  Dot {
   name Dot33
   xpos 343
   ypos 961
  }
-set N1c651c00 [stack 0]
+set N910f6800 [stack 0]
  Invert {
   name Invert2
   xpos 374
   ypos 952
  }
-clone $C16835700 {
+clone $C258c4800 {
   inputs 1+1
   xpos 464
   ypos 958
@@ -2925,7 +2911,7 @@ clone $C16835700 {
   xpos 548
   ypos 952
  }
-push $N1c651800
+push $N910f6400
  Group {
   name NormalsRotate10
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -3030,13 +3016,13 @@ push $N1c651800
    xpos 0
    ypos -347
   }
-set N1c709e00 [stack 0]
+set N91140f00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c709e00
+push $N91140f00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3192,13 +3178,13 @@ push 0
   xpos 1412
   ypos 1128
  }
-push $N16892800
+push $N258ed400
  Dot {
   name Dot10
   xpos 1242
   ypos 1062
  }
-set N1c755c00 [stack 0]
+set N911f2800 [stack 0]
  Group {
   name NormalsRotate4
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -3302,13 +3288,13 @@ set N1c755c00 [stack 0]
    xpos 0
    ypos -347
   }
-set N1c7faa00 [stack 0]
+set N911e5700 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1c7faa00
+push $N911e5700
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3449,14 +3435,14 @@ push 0
   xpos 1332
   ypos 1185
  }
-set N1c820c00 [stack 0]
-push $N1c564400
+set N911f3800 [stack 0]
+push $N90f5b000
  Dot {
   name Dot43
   xpos 2142
   ypos 1185
  }
-set N1c821000 [stack 0]
+set N911f3c00 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -3476,20 +3462,20 @@ set N1c821000 [stack 0]
   xpos 1655
   ypos 1256
  }
-push $N1c820c00
+push $N911f3800
  Dot {
   name Dot44
   xpos 1332
   ypos 1224
  }
-set N1c821400 [stack 0]
-push $N1c821000
+set N912da000 [stack 0]
+push $N911f3c00
  Dot {
   name Dot45
   xpos 2142
   ypos 1224
  }
-set N1c821800 [stack 0]
+set N912da400 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -3505,7 +3491,7 @@ set N1c821800 [stack 0]
   xpos 1774
   ypos 1262
  }
-push $N1c565c00
+push $N91042800
  Blur {
   inputs 1+1
   size 50
@@ -3513,7 +3499,7 @@ push $N1c565c00
   xpos 2198
   ypos 1256
  }
-push $N1c821800
+push $N912da400
  Axis3 {
   inputs 0
   translate {0 -0.2000000477 -0.3000000119}
@@ -3533,7 +3519,7 @@ push 0
   xpos -550
   ypos 390
  }
-set N1d89ad00 [stack 0]
+set N912efe00 [stack 0]
  Dot {
   name Dot1
   xpos -428
@@ -3544,7 +3530,7 @@ set N1d89ad00 [stack 0]
   xpos -428
   ypos 699
  }
-push $N1d89ad00
+push $N912efe00
  Input {
   inputs 0
   name Image_MASTER
@@ -3566,18 +3552,18 @@ push $N1d89ad00
   xpos -560
   ypos 524
  }
-clone $C16833e00 {
+clone $C258c2f00 {
   xpos -560
   ypos 548
   selected false
  }
-clone $C16834300 {
+clone $C258c3400 {
   xpos -560
   ypos 600
   selected false
  }
 push 0
-clone $C16834800 {
+clone $C258c3900 {
   inputs 3
   xpos -560
   ypos 696
@@ -3588,26 +3574,26 @@ clone $C16834800 {
   xpos -525
   ypos 910
  }
-set N1d8d0c00 [stack 0]
+set N912db800 [stack 0]
  Dot {
   name Dot26
   xpos -525
   ypos 957
  }
-set N1d8d1000 [stack 0]
+set N912dbc00 [stack 0]
  Dot {
   name Dot18
   xpos -525
   ypos 1064
  }
-set N1d8d1400 [stack 0]
-push $N1c651c00
+set N9135a000 [stack 0]
+push $N910f6800
  Dot {
   name Dot7
   xpos 343
   ypos 1064
  }
-set N1d8d1800 [stack 0]
+set N9135a400 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -3627,20 +3613,20 @@ set N1d8d1800 [stack 0]
   xpos -202
   ypos 1135
  }
-push $N1d8d1400
+push $N9135a000
  Dot {
   name Dot19
   xpos -525
   ypos 1103
  }
-set N1d8d1c00 [stack 0]
-push $N1d8d1800
+set N9135a800 [stack 0]
+push $N9135a400
  Dot {
   name Dot20
   xpos 343
   ypos 1103
  }
-set N1d930000 [stack 0]
+set N9135ac00 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -3656,14 +3642,14 @@ set N1d930000 [stack 0]
   xpos -83
   ypos 1141
  }
-push $N1c660d00
-push $N1d8d1000
+push $N91073e00
+push $N912dbc00
  Invert {
   name Invert1
   xpos -501
   ypos 948
  }
-clone $C16835700 {
+clone $C258c4800 {
   inputs 1+1
   xpos -412
   ypos 954
@@ -3677,7 +3663,7 @@ clone $C16835700 {
   xpos -328
   ypos 948
  }
-push $N1d8d0c00
+push $N912db800
  Group {
   name NormalsRotate2
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -3782,13 +3768,13 @@ push $N1d8d0c00
    xpos 0
    ypos -347
   }
-set N1d95b400 [stack 0]
+set N913da500 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1d95b400
+push $N913da500
   Unpremult {
    name Unpremult1
    xpos 0
@@ -3944,7 +3930,7 @@ push 0
   xpos 536
   ypos 1098
  }
-push $N1d8d1800
+push $N9135a400
  Group {
   name NormalsRotate1
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -4049,13 +4035,13 @@ push $N1d8d1800
    xpos 0
    ypos -347
   }
-set N1da64000 [stack 0]
+set N91460d00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1da64000
+push $N91460d00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -4203,14 +4189,14 @@ push 0
   xpos 432
   ypos 1187
  }
-set N1da6ec00 [stack 0]
-push $N1c755c00
+set N9146f800 [stack 0]
+push $N911f2800
  Dot {
   name Dot22
   xpos 1242
   ypos 1187
  }
-set N1da6f000 [stack 0]
+set N9146fc00 [stack 0]
  Merge2 {
   inputs 2
   operation max
@@ -4230,20 +4216,20 @@ set N1da6f000 [stack 0]
   xpos 755
   ypos 1258
  }
-push $N1da6ec00
+push $N9146f800
  Dot {
   name Dot23
   xpos 432
   ypos 1226
  }
-set N1da6f400 [stack 0]
-push $N1da6f000
+set N91558000 [stack 0]
+push $N9146fc00
  Dot {
   name Dot24
   xpos 1242
   ypos 1226
  }
-set N1da6f800 [stack 0]
+set N91558400 [stack 0]
  Merge2 {
   inputs 2
   operation color-burn
@@ -4259,7 +4245,7 @@ set N1da6f800 [stack 0]
   xpos 874
   ypos 1264
  }
-push $N1c821400
+push $N912da000
  Blur {
   inputs 1+1
   size 50
@@ -4267,10 +4253,10 @@ push $N1c821400
   xpos 1298
   ypos 1258
  }
-push $N1da6f800
-push $N1da6f400
-push $N1d930000
-push $N1d8d1c00
+push $N91558400
+push $N91558000
+push $N9135ac00
+push $N9135a800
  Constant {
   inputs 0
   channels rgb
@@ -4339,7 +4325,7 @@ push $N1d8d1c00
   xpos 5742
   ypos 1647
  }
-set N1dd10800 [stack 0]
+set N916f1400 [stack 0]
  Keyer {
   operation "luminance key"
   range {0.650494937 1 1 1}
@@ -4347,7 +4333,7 @@ set N1dd10800 [stack 0]
   xpos 5798
   ypos 1638
  }
-push $N1dd10800
+push $N916f1400
  Grade {
   inputs 1+1
   mix 0.52
@@ -4360,7 +4346,7 @@ push $N1dd10800
   xpos 5742
   ypos 1740
  }
-set N1dd10c00 [stack 0]
+set N916f1800 [stack 0]
  Keyer {
   operation "luminance key"
   range {0.6586260448 0.9503800409 1 1}
@@ -4368,7 +4354,7 @@ set N1dd10c00 [stack 0]
   xpos 5798
   ypos 1731
  }
-push $N1dd10c00
+push $N916f1800
  Grade {
   inputs 1+1
   mix 0.67
@@ -4381,13 +4367,13 @@ push $N1dd10c00
   xpos 5708
   ypos 1946
  }
-push $N1c407800
+push $N90e7c400
  Invert {
   name Invert9
   xpos 3073
   ypos 953
  }
-clone $C16835700 {
+clone $C258c4800 {
   xpos 3163
   ypos 959
   selected false
@@ -4400,7 +4386,7 @@ clone $C16835700 {
   xpos 3247
   ypos 953
  }
-push $N1c407400
+push $N90e7c000
  Group {
   name NormalsRotate7
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -4505,13 +4491,13 @@ push $N1c407400
    xpos 0
    ypos -347
   }
-set N1dd95e00 [stack 0]
+set N9388ef00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1dd95e00
+push $N9388ef00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -4657,13 +4643,13 @@ push 0
   xpos 3361
   ypos 1026
  }
-push $N1c2a5800
+push $N90d20400
  Invert {
   name Invert11
   xpos 3973
   ypos 943
  }
-clone $C16835700 {
+clone $C258c4800 {
   xpos 4063
   ypos 949
   selected false
@@ -4676,7 +4662,7 @@ clone $C16835700 {
   xpos 4147
   ypos 943
  }
-push $N1c2a5400
+push $N90d20000
  Group {
   name NormalsRotate9
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -4781,13 +4767,13 @@ push $N1c2a5400
    xpos 0
    ypos -347
   }
-set N1deb8000 [stack 0]
+set N9394ed00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1deb8000
+push $N9394ed00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -4933,13 +4919,13 @@ push 0
   xpos 4261
   ypos 1016
  }
-push $N1c062800
+push $N90a67400
  Invert {
   name Invert13
   xpos 4873
   ypos 943
  }
-clone $C16835700 {
+clone $C258c4800 {
   xpos 4963
   ypos 949
   selected false
@@ -4952,7 +4938,7 @@ clone $C16835700 {
   xpos 5047
   ypos 943
  }
-push $N1c062400
+push $N90a67000
  Group {
   name NormalsRotate12
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -5057,13 +5043,13 @@ push $N1c062400
    xpos 0
    ypos -347
   }
-set N1df4be00 [stack 0]
+set N93a3cf00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1df4be00
+push $N93a3cf00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -5209,13 +5195,13 @@ push 0
   xpos 5161
   ypos 1016
  }
-push $N1c161400
+push $N90bb4000
  Invert {
   name Invert15
   xpos 5773
   ypos 943
  }
-clone $C16835700 {
+clone $C258c4800 {
   xpos 5863
   ypos 949
   selected false
@@ -5228,7 +5214,7 @@ clone $C16835700 {
   xpos 5947
   ypos 943
  }
-push $N1c161000
+push $N90aebc00
  Group {
   name NormalsRotate14
   onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
@@ -5333,13 +5319,13 @@ push $N1c161000
    xpos 0
    ypos -347
   }
-set N1e06c000 [stack 0]
+set N93afcd00 [stack 0]
   Dot {
    name Dot1
    xpos 315
    ypos 289
   }
-push $N1e06c000
+push $N93afcd00
   Unpremult {
    name Unpremult1
    xpos 0
@@ -5515,19 +5501,19 @@ push 0
  }
  Input {
   inputs 0
-  name Cam_8
-  xpos 362
-  ypos 31
-  number 16
- }
- Input {
-  inputs 0
   name Cam_6
   xpos 79
   ypos 26
   number 12
  }
-clone $C16834300 {
+ Input {
+  inputs 0
+  name Cam_8
+  xpos 362
+  ypos 31
+  number 16
+ }
+clone $C258c3400 {
   inputs 0
   xpos -1061
   ypos -26
