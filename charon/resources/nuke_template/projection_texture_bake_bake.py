@@ -2,6 +2,53 @@ import os
 import getpass
 import nuke
 
+INVERSE_VIEW_TRANSFORM_GROUP = """set cut_paste_input [stack 0]
+version 16.0 v3
+push $cut_paste_input
+Group {
+ name InverseViewTransform1
+ selected true
+ xpos 1274
+ ypos 1193
+ addUserKnob {20 User}
+ addUserKnob {26 viewTransform l "View Transform" T "Driven by Root > Color > Thumbnails setting\\n\\nAutomatic alpha channel detection"}
+ addUserKnob {41 view l "view transform" T OCIODisplayLinked1.view}
+ addUserKnob {41 display l "display device" T OCIODisplayLinked1.display}
+}
+ Input {
+  inputs 0
+  name Input1
+  xpos -468
+  ypos 495
+ }
+ OCIOColorSpace {
+  in_colorspace compositing_linear
+  out_colorspace default
+  name OCIOColorSpace2
+  xpos -468
+  ypos 626
+ }
+ OCIODisplay {
+  colorspace compositing_linear
+  display "sRGB Display"
+  view {{root.monitorLut x1002 1 x1023 1}}
+  invert true
+  name OCIODisplayLinked1
+  note_font Verdana
+  note_font_size 12
+  xpos -468
+  ypos 652
+  addUserKnob {20 User}
+  addUserKnob {26 viewer_note l "View Transform" T "Driven by Root > Color > Thumbnails setting"}
+ }
+ Output {
+  name Output1
+  xpos -468
+  ypos 776
+ }
+end_group
+"""
+
 n = nuke.thisNode()
 
 # CONFIG
@@ -104,7 +151,7 @@ def _ensure_contact_knob(node):
     return k
 
 
-def _build_contact_sheet(group, out_dir, tiles, cols, rows):
+def _build_contact_sheet(group, out_dir, tiles, cols, rows, aces_enabled=None):
     if not tiles:
         return
     parent = group.parent() or nuke.root()
@@ -216,21 +263,28 @@ def _build_contact_sheet(group, out_dir, tiles, cols, rows):
 
         last_node = cs
 
-        aces_enabled = False
-        try:
-            from charon import preferences
-            aces_enabled = preferences.get_preference("aces_mode_enabled", False)
-        except Exception:
-            aces_enabled = False
+        if aces_enabled is None:
+            try:
+                from charon import preferences
+                aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+            except Exception:
+                aces_enabled = False
 
         if aces_enabled:
             ivt_temp = None
             try:
                 import uuid
-                from charon.paths import get_charon_temp_dir
-                from charon.processor import INVERSE_VIEW_TRANSFORM_GROUP
+                temp_root = None
+                try:
+                    from charon.paths import get_charon_temp_dir
+                    temp_root = get_charon_temp_dir()
+                except Exception:
+                    temp_root = None
+                if not temp_root:
+                    import tempfile
+                    temp_root = tempfile.gettempdir()
                 ivt_temp = os.path.join(
-                    get_charon_temp_dir(),
+                    temp_root,
                     "ivt_cs_{0}.nk".format(str(uuid.uuid4())[:8]),
                 ).replace("\\", "/")
                 with open(ivt_temp, "w") as handle:
@@ -383,7 +437,7 @@ else:
                     max_v = max(t[1] for t in tiles)
                     cols = max_u - min_u + 1
                     rows = max_v - min_v + 1
-            _build_contact_sheet(n, out_dir_norm, tiles, cols, rows)
+            _build_contact_sheet(n, out_dir_norm, tiles, cols, rows, aces)
             nuke.message("Bake Complete!\\nSaved to: " + out_dir_display)
         except Exception as exc:
             nuke.message("Error during bake: " + str(exc))
