@@ -7,7 +7,22 @@ n = nuke.thisNode()
 # CONFIG
 asset = n['asset_name'].value()
 sub = n['subname'].value()
-aces = n['aces_mode'].value()
+def _scene_uses_aces():
+    try:
+        cm = nuke.root()["colorManagement"].value()
+    except Exception:
+        cm = ""
+    return "OCIO" in str(cm).upper()
+
+
+aces = _scene_uses_aces()
+try:
+    n["aces_mode"].setValue("ACES" if aces else "sRGB")
+except Exception:
+    try:
+        n["aces_mode"].setValue(1 if aces else 0)
+    except Exception:
+        pass
 
 # UV size: U/V tile counts (1-based). If either value is 0, treat as legacy start/end.
 uvs = n['uvsize'].value()
