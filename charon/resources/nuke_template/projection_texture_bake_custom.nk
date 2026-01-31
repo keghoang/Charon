@@ -1,0 +1,5536 @@
+#! C:/Program Files/Nuke16.0v3/nuke-16.0.3.dll -nx
+version 16.0 v3
+define_window_layout_xml {<?xml version="1.0" encoding="UTF-8"?>
+<layout version="1.0">
+    <window x="0" y="0" w="2559" h="1361" screen="0">
+        <splitter orientation="1">
+            <split size="40"/>
+            <dock id="" hideTitles="1" activePageId="Toolbar.1">
+                <page id="Toolbar.1"/>
+            </dock>
+            <split size="1896" stretch="1"/>
+            <splitter orientation="2">
+                <split size="773"/>
+                <dock id="" activePageId="Viewer.1">
+                    <page id="Viewer.1"/>
+                </dock>
+                <split size="543"/>
+                <dock id="" activePageId="DAG.1" focus="true">
+                    <page id="DAG.1"/>
+                    <page id="Curve Editor.1"/>
+                    <page id="DopeSheet.1"/>
+                    <page id="DAG.2"/>
+                </dock>
+            </splitter>
+            <split size="615"/>
+            <dock id="" activePageId="Properties.1">
+                <page id="Properties.1"/>
+                <page id="uk.co.thefoundry.backgroundrenderview.1"/>
+                <page id="Scenegraph.1"/>
+            </dock>
+        </splitter>
+    </window>
+</layout>
+}
+Root {
+ inputs 0
+ name C:/Users/kien/git/Charon/charon/resources/nuke_template/projection_texture_bake_custom.nk
+ proxy_type scale
+ proxy_format "1024 778 0 0 1024 778 1 1K_Super_35(full-ap)"
+ colorManagement Nuke
+ workingSpaceLUT linear
+ monitorLut sRGB
+ monitorOutLUT rec709
+ int8Lut sRGB
+ int16Lut sRGB
+ logLut Cineon
+ floatLut linear
+}
+Group {
+ inputs 0
+ name Projection_Texture_Bake
+ knobChanged "n=nuke.thisNode()\nk=nuke.thisKnob()\nif k.name() in ('asset_name', 'subname', 'showPanel'):\n import os, getpass\n p=os.environ.get('BUCK_PROJECT_PATH')\n u=getpass.getuser()\n a=n\['asset_name'].value()\n s=n\['subname'].value()\n if not p:\n  r=n.node('Read11')\n  if r:\n   f=r\['file'].value().replace('\\\\', '/')\n   if '/Production/' in f:\n    p=f.split('/Production/')\[0]\n msg = os.path.join(p, 'Production/MAYA/sourceimages/work.'+u+'/_CHARON', a, s).replace('\\\\', '/') if p else 'Path Not Found'\n n\['path_preview'].setValue(msg)\n"
+ xpos -179
+ ypos -150
+ addUserKnob {20 baketab l "Bake Setting"}
+ addUserKnob {30 uvsize l "UV size"}
+ uvsize {1 1}
+ addUserKnob {30 UVcoord l "UV coord"}
+ addUserKnob {22 project_texture l "Project Texture" T "n=nuke.thisNode()\n_DEBUG = False\n\ndef _debug(message):\n  if _DEBUG:\n    print('\[TextureBake] ' + message)\n\ndef _resolve(node, max_hops=32):\n  cur=node\n  visited=set()\n  hops=0\n  while cur and hops<max_hops:\n    if cur in visited:\n      break\n    visited.add(cur)\n    try:\n      if cur.Class() not in ('Dot','NoOp'):\n        return cur\n    except Exception:\n      return cur\n    try:\n      cur=cur.input(0)\n    except Exception:\n      cur=None\n    hops+=1\n  return node\n\ndef _find_upstream(start_node, class_names, max_hops=32):\n  current=start_node\n  visited=set()\n  hops=0\n  while current and hops<max_hops:\n    if current in visited:\n      break\n    visited.add(current)\n    try:\n      if current.Class() in class_names:\n        return current\n    except Exception:\n      pass\n    try:\n      current=current.input(0)\n    except Exception:\n      current=None\n    hops+=1\n  return None\n\ndef _collect_rig_cam_count(rig):\n  if not rig or not hasattr(rig, 'begin'):\n    return 0\n  rig.begin()\n  try:\n    cams=\[node for node in nuke.allNodes() if node.Class() in ('Camera3','Camera2','Camera') and node.name().startswith('Cam')]\n    return len(cams)\n  finally:\n    rig.end()\n\ndef _current_cam_count(group):\n  group.begin()\n  try:\n    cams=\[node for node in nuke.allNodes() if node.Class() in ('Camera3','Camera2','Camera') and node.name().startswith('Cam')]\n    return len(cams)\n  finally:\n    group.end()\n\ndef _ensure_rig_count_knob(group):\n  knob=group.knob('charon_rig_cam_count')\n  if knob:\n    return knob\n  knob=nuke.Int_Knob('charon_rig_cam_count', 'Projection Cameras Found')\n  try:\n    knob.setEnabled(False)\n  except Exception:\n    knob.setFlag(nuke.DISABLED)\n  group.addKnob(knob)\n  return knob\n\ndef _update_rig_camera_count(group, rig):\n  count=_collect_rig_cam_count(rig)\n  knob=_ensure_rig_count_knob(group)\n  try:\n    knob.setValue(count)\n  except Exception:\n    try:\n      knob.setValue(int(count))\n    except Exception:\n      pass\n\ndef _read_group_block(template_path):\n  try:\n    with open(template_path, 'r') as handle:\n      content=handle.read()\n  except Exception as exc:\n    _debug('failed to read template: \{0\}'.format(exc))\n    return None\n\n  lines=content.splitlines(True)\n  start_line=None\n  end_line=None\n  depth=0\n  for idx, line in enumerate(lines):\n    stripped=line.lstrip()\n    if stripped.startswith('Group \{'):\n      if start_line is None:\n        start_line=idx\n      depth+=1\n    elif stripped.startswith('end_group'):\n      if depth > 0:\n        depth-=1\n        if depth == 0 and start_line is not None:\n          end_line=idx\n          break\n  if start_line is None or end_line is None:\n    _debug('template missing Group block')\n    return None\n  return ''.join(lines\[start_line:end_line + 1]) + '\\n'\n\ndef _paste_group(script_content):\n  import tempfile\n  temp_path=''\n  try:\n    with tempfile.NamedTemporaryFile(mode='w', suffix='.nk', delete=False) as handle:\n      handle.write(script_content)\n      temp_path=handle.name\n    for node in nuke.allNodes():\n      node.setSelected(False)\n    nuke.nodePaste(temp_path)\n    for node in nuke.selectedNodes():\n      if node.Class()=='Group':\n        return node\n  except Exception as exc:\n    _debug('paste failed: \{0\}'.format(exc))\n  finally:\n    if temp_path and os.path.exists(temp_path):\n      try:\n        os.unlink(temp_path)\n      except Exception:\n        pass\n  return None\n\ndef _collect_dependents(node):\n  deps=\[]\n  for other in nuke.allNodes(recurseGroups=False):\n    for i in range(other.inputs()):\n      try:\n        if other.input(i)==node:\n          deps.append((other,i))\n      except Exception:\n        pass\n  return deps\n\ndef _ensure_template_knob(group):\n  knob=group.knob('charon_template_dir')\n  if knob:\n    return knob\n  knob=nuke.String_Knob('charon_template_dir','Template Dir','')\n  knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)\n  group.addKnob(knob)\n  return knob\n\ndef _resolve_template_dir(group):\n  import os\n  import sys\n  template_dir=''\n  knob=None\n  try:\n    knob=_ensure_template_knob(group)\n  except Exception:\n    knob=None\n  if knob:\n    try:\n      template_dir=knob.value()\n    except Exception:\n      template_dir=''\n  if template_dir and os.path.exists(template_dir):\n    return template_dir\n  candidates=\[]\n  try:\n    env_dir=os.environ.get('CHARON_TEMPLATE_DIR') or ''\n  except Exception:\n    env_dir=''\n  if env_dir:\n    candidates.append(env_dir)\n  try:\n    import charon.paths as _charon_paths\n    candidates.append(os.path.join(_charon_paths.RESOURCE_DIR, 'nuke_template'))\n  except Exception:\n    pass\n  try:\n    for entry in list(sys.path):\n      if not entry:\n        continue\n      candidates.append(os.path.join(entry, 'charon', 'resources', 'nuke_template'))\n      candidates.append(os.path.join(entry, 'resources', 'nuke_template'))\n  except Exception:\n    pass\n  try:\n    import nuke as _nuke\n    for entry in _nuke.pluginPath():\n      if not entry:\n        continue\n      candidates.append(os.path.join(entry, 'charon', 'resources', 'nuke_template'))\n      candidates.append(os.path.join(entry, 'resources', 'nuke_template'))\n  except Exception:\n    pass\n  for candidate in candidates:\n    if candidate and os.path.exists(candidate):\n      candidate=os.path.normpath(candidate)\n      try:\n        if knob:\n          knob.setValue(candidate)\n        elif group.knob('charon_template_dir'):\n          group\['charon_template_dir'].setValue(candidate)\n      except Exception:\n        pass\n      return candidate\n  return template_dir\n\ndef _copy_knob_values(src, dst, names):\n  for name in names:\n    try:\n      if src.knob(name) and dst.knob(name):\n        dst\[name].setValue(src\[name].value())\n    except Exception:\n      pass\n\n\ndef _unique_name(base):\n  try:\n    existing=set(n.name() for n in nuke.allNodes(recurseGroups=False))\n  except Exception:\n    existing=set()\n  if base not in existing:\n    return base\n  idx=1\n  while True:\n    candidate='\{0\}_\{1\}'.format(base, idx)\n    if candidate not in existing:\n      return candidate\n    idx+=1\n\ndef _rebuild_for_count(group, count):\n  try:\n    count=int(count)\n  except Exception:\n    return None\n  template_dir=_resolve_template_dir(group)\n  if not template_dir:\n    nuke.message('Template directory missing.')\n    return None\n  template_path=os.path.normpath(os.path.join(template_dir, 'projection_texture_bake_\{0\}_cams.nk'.format(count)))\n  if not os.path.exists(template_path):\n    nuke.message('Template not found for \{0\} cams.'.format(count))\n    return None\n  script_content=_read_group_block(template_path)\n  if not script_content:\n    return None\n\n  input_nodes=\[group.input(i) for i in range(group.inputs())]\n  old_name=group.name()\n  old_pos=(group.xpos(), group.ypos())\n  downstream=_collect_dependents(group)\n  values=\{\}\n  for name in \['asset_name','subname','aces_mode','uvsize','bake_resolution']:\n    try:\n      if group.knob(name):\n        values\[name]=group\[name].value()\n    except Exception:\n      pass\n\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  new_group=_paste_group(script_content)\n  if not new_group:\n    nuke.message('Failed to rebuild bake group.')\n    return None\n\n  for idx, inp in enumerate(input_nodes):\n    try:\n      new_group.setInput(idx, inp)\n    except Exception:\n      pass\n  try:\n    new_group.setXYpos(old_pos\[0], old_pos\[1])\n  except Exception:\n    pass\n  _copy_knob_values(group, new_group, values.keys())\n\n  for dep, idx in downstream:\n    try:\n      dep.setInput(idx, new_group)\n    except Exception:\n      pass\n\n  temp_name=_unique_name('\{0\}_OLD'.format(old_name))\n  try:\n    group.setName(temp_name)\n  except Exception:\n    pass\n  try:\n    new_group.setName(old_name)\n  except Exception:\n    pass\n  try:\n    nuke.delete(group)\n  except Exception:\n    pass\n\n  _ensure_template_knob(new_group)\n  try:\n    new_group\['charon_template_dir'].setValue(template_dir)\n  except Exception:\n    pass\n\n  if current_group and current_group is not root:\n    current_group.begin()\n  return new_group\n\ndef _update_geo(group, geo_node):\n  if not geo_node:\n    return False\n  _debug('update_geo input: \{0\} (\{1\})'.format(geo_node.name(), geo_node.Class()))\n  if geo_node.Class() not in ('ReadGeo2','ReadGeo'):\n    upstream=_find_upstream(geo_node, ('ReadGeo2','ReadGeo'))\n    if upstream:\n      _debug('resolved upstream geo: \{0\} (\{1\})'.format(upstream.name(), upstream.Class()))\n      geo_node=upstream\n    else:\n      nuke.message('Geo input must be a ReadGeo/ReadGeo2 node.')\n      return False\n\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  original_selection=list(nuke.selectedNodes())\n  for n in original_selection:\n    n.setSelected(False)\n  try:\n    geo_node.setSelected(True)\n    nuke.nodeCopy('%clipboard%')\n  finally:\n    geo_node.setSelected(False)\n    for n in original_selection:\n      try:\n        n.setSelected(True)\n      except Exception:\n        pass\n    if current_group and current_group is not root:\n      current_group.begin()\n\n  group.begin()\n  try:\n    before_nodes=set(nuke.allNodes())\n    for n in nuke.selectedNodes():\n      n.setSelected(False)\n    nuke.nodePaste('%clipboard%')\n    pasted_nodes=list(nuke.selectedNodes())\n    after_nodes=\[node for node in nuke.allNodes() if node not in before_nodes]\n    if not after_nodes and not pasted_nodes:\n      nuke.message('Failed to paste geo node.')\n      return False\n\n    pasted=None\n    for node in pasted_nodes + after_nodes:\n      if node.Class() in ('ReadGeo2','ReadGeo'):\n        pasted=node\n        break\n    if pasted is None:\n      pasted=(pasted_nodes or after_nodes)\[0]\n\n    existing_geos=\[node for node in nuke.allNodes() if node.Class() in ('ReadGeo2','ReadGeo') and node is not pasted]\n\n    def _is_clone(node):\n      try:\n        return bool(node.isClone())\n      except Exception:\n        return False\n\n    def _collect_connections(nodes):\n      connections=\{node: \[] for node in nodes\}\n      for node in nuke.allNodes():\n        for i in range(node.inputs()):\n          try:\n            inp=node.input(i)\n          except Exception:\n            continue\n          if inp in connections:\n            connections\[inp].append((node,i))\n      return connections\n\n    def _create_clone(master):\n      for n in nuke.selectedNodes():\n        n.setSelected(False)\n      master.setSelected(True)\n      before=set(nuke.allNodes())\n      if hasattr(nuke, 'clone'):\n        try:\n          nuke.clone(master)\n        except TypeError:\n          nuke.clone()\n      else:\n        nuke.nodeCopy('%clipboard%')\n        nuke.nodePaste('%clipboard%')\n      created=\[node for node in nuke.allNodes() if node not in before]\n      if created:\n        return created\[0]\n      return None\n\n    if not existing_geos:\n      default_name='ReadGeo' if geo_node.Class()=='ReadGeo' else 'ReadGeo2'\n      try:\n        pasted.setName(default_name, unique=True)\n      except Exception:\n        pasted.setName(default_name)\n      return True\n\n    master_old=None\n    for node in existing_geos:\n      if node.name() in ('ReadGeo2','ReadGeo'):\n        master_old=node\n        break\n    if master_old is None:\n      for node in existing_geos:\n        if not _is_clone(node):\n          master_old=node\n          break\n    if master_old is None:\n      master_old=existing_geos\[0]\n\n    geo_specs=\[]\n    for node in existing_geos:\n      try:\n        input_nodes=\[node.input(i) for i in range(node.inputs())]\n      except Exception:\n        input_nodes=\[]\n      geo_specs.append(\{\n        'node': node,\n        'name': node.name(),\n        'pos': (node.xpos(), node.ypos()),\n        'is_master': node is master_old,\n        'inputs': input_nodes,\n      \})\n    connections=_collect_connections(\[spec\['node'] for spec in geo_specs])\n\n    new_nodes=\{\}\n    for spec in geo_specs:\n      if spec\['is_master']:\n        new_nodes\[spec\['node']]=pasted\n      else:\n        clone=_create_clone(pasted)\n        if clone:\n          new_nodes\[spec\['node']]=clone\n        else:\n          new_nodes\[spec\['node']]=pasted\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      new_node=new_nodes.get(old_node)\n      if new_node is None:\n        continue\n      inputs=spec.get('inputs', \[])\n      for idx, inp in enumerate(inputs):\n        if inp is None:\n          try:\n            new_node.setInput(idx, None)\n          except Exception:\n            pass\n          continue\n        replacement=new_nodes.get(inp, inp)\n        try:\n          new_node.setInput(idx, replacement)\n        except Exception:\n          pass\n\n    for old_node, new_node in new_nodes.items():\n      if old_node is new_node:\n        continue\n      for dep, idx in connections.get(old_node, \[]):\n        try:\n          dep.setInput(idx, new_node)\n        except Exception:\n          pass\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      new_node=new_nodes.get(old_node)\n      if new_node is None:\n        continue\n      try:\n        new_node.setXYpos(spec\['pos']\[0], spec\['pos']\[1])\n      except Exception:\n        pass\n\n    for spec in geo_specs:\n      old_node=spec\['node']\n      try:\n        nuke.delete(old_node)\n      except Exception:\n        pass\n\n    for spec in geo_specs:\n      new_node=new_nodes.get(spec\['node'])\n      if new_node is None:\n        continue\n      try:\n        new_node.setName(spec\['name'], unique=True)\n      except Exception:\n        try:\n          new_node.setName(spec\['name'])\n        except Exception:\n          pass\n\n    return True\n  finally:\n    group.end()\n\ndef _update_uv_size(group, geo_node):\n  if not geo_node:\n    _debug('uv size: geo input missing')\n    return\n  _debug('uv size: geo input ' + geo_node.name() + ' (' + geo_node.Class() + ')')\n  if geo_node.Class() not in ('ReadGeo2','ReadGeo'):\n    upstream=_find_upstream(geo_node, ('ReadGeo2','ReadGeo'))\n    if upstream:\n      _debug('uv size: resolved geo ' + upstream.name() + ' (' + upstream.Class() + ')')\n      geo_node=upstream\n    else:\n      _debug('uv size: uv source must be ReadGeo/ReadGeo2')\n      return\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  try:\n    def _get_geometry(node):\n      if not hasattr(node, 'geometry'):\n        _debug('uv size: geometry() not available on ' + node.Class())\n        return None\n      geo=None\n      try:\n        geo=node.geometry(nuke.frame())\n        _debug('uv size: geometry(frame) ok')\n      except Exception as exc:\n        _debug('uv size: geometry(frame) failed: ' + str(exc))\n      if not geo:\n        try:\n          geo=node.geometry()\n          _debug('uv size: geometry() ok')\n        except Exception as exc2:\n          _debug('uv size: geometry() failed: ' + str(exc2))\n      return geo\n\n    def _collect_uvs_from_geo(geo):\n      uvs=\[]\n      try:\n        attr=None\n        try:\n          attr=geo.pointAttrib('uv')\n        except Exception:\n          attr=None\n        if attr:\n          _debug('uv size: using point attrib uv')\n          for p in geo.points():\n            try:\n              uv=attr.value(p)\n            except Exception:\n              try:\n                uv=p.attribValue(attr)\n              except Exception:\n                uv=None\n            if uv:\n              uvs.append(uv)\n      except Exception as exc:\n        _debug('uv size: point attrib read failed: ' + str(exc))\n      if not uvs:\n        try:\n          for p in geo.points():\n            uv=None\n            try:\n              attrs=p.attributes()\n              if attrs:\n                uv=attrs.get('uv')\n            except Exception:\n              uv=None\n            if uv is None:\n              try:\n                uv=p.attribValue('uv')\n              except Exception:\n                uv=None\n            if uv:\n              uvs.append(uv)\n        except Exception as exc:\n          _debug('uv size: point attrib fallback failed: ' + str(exc))\n      if not uvs:\n        try:\n          attr=None\n          try:\n            attr=geo.vertexAttrib('uv')\n          except Exception:\n            attr=None\n          if attr:\n            _debug('uv size: using vertex attrib uv')\n            for vtx in geo.vertices():\n              try:\n                uv=attr.value(vtx)\n              except Exception:\n                try:\n                  uv=vtx.attribValue(attr)\n                except Exception:\n                  uv=None\n              if uv:\n                uvs.append(uv)\n        except Exception as exc:\n          _debug('uv size: vertex attrib read failed: ' + str(exc))\n      return uvs\n\n    def _compute_range(uvs):\n      import math\n      min_idx=None\n      max_idx=None\n      for uv in uvs:\n        try:\n          u=float(uv\[0])\n          v=float(uv\[1])\n        except Exception:\n          continue\n        tile_u=int(math.floor(u))\n        tile_v=int(math.floor(v))\n        idx=tile_u + (tile_v * 10)\n        if min_idx is None or idx < min_idx:\n          min_idx=idx\n        if max_idx is None or idx > max_idx:\n          max_idx=idx\n      return min_idx, max_idx\n\n    def _apply_range(min_idx, max_idx):\n      if min_idx is None or max_idx is None:\n        _debug('uv size: compute failed')\n        return False\n      try:\n        group\['uvsize'].setValue(\[int(min_idx), int(max_idx)])\n        _debug('uv size: set to ' + str(int(min_idx)) + '-' + str(int(max_idx)))\n        return True\n      except Exception as exc:\n        _debug('uv size: set failed: ' + str(exc))\n        return False\n\n    geo=_get_geometry(geo_node)\n    if geo:\n      uvs=_collect_uvs_from_geo(geo)\n      if uvs:\n        _debug('uv size: uv count ' + str(len(uvs)))\n        min_idx, max_idx=_compute_range(uvs)\n        if _apply_range(min_idx, max_idx):\n          return\n      else:\n        _debug('uv size: uv attribute not found on geometry')\n\n    _debug('uv size: WriteGeo fallback disabled')\n    return\n  finally:\n    if current_group and current_group is not root:\n      current_group.begin()\n\ndef _resolve_camera_input(node):\n  if not node:\n    return None\n  node=_resolve(node)\n  try:\n    if node and node.Class() in ('Camera3','Camera2','Camera'):\n      return node\n  except Exception:\n    pass\n  upstream=_find_upstream(node, ('Camera3','Camera2','Camera'))\n  if upstream:\n    return upstream\n  return None\n\ndef _safe_input(group, index):\n  try:\n    return group.input(index)\n  except Exception:\n    return None\n\ndef _collect_dependents_in_group(target):\n  deps=\[]\n  for other in nuke.allNodes():\n    for i in range(other.inputs()):\n      try:\n        if other.input(i)==target:\n          deps.append((other,i))\n      except Exception:\n        pass\n  return deps\n\ndef _update_camera_from_input(group, cam_node, target_name):\n  if not cam_node:\n    return False\n  root=nuke.root()\n  current_group=nuke.thisGroup()\n  root.begin()\n  original_selection=list(nuke.selectedNodes())\n  for n in original_selection:\n    n.setSelected(False)\n  try:\n    cam_node.setSelected(True)\n    nuke.nodeCopy('%clipboard%')\n  finally:\n    cam_node.setSelected(False)\n    for n in original_selection:\n      try:\n        n.setSelected(True)\n      except Exception:\n        pass\n    if current_group and current_group is not root:\n      current_group.begin()\n\n  group.begin()\n  try:\n    before_nodes=set(nuke.allNodes())\n    for n in nuke.selectedNodes():\n      n.setSelected(False)\n    nuke.nodePaste('%clipboard%')\n    pasted_nodes=list(nuke.selectedNodes())\n    after_nodes=\[node for node in nuke.allNodes() if node not in before_nodes]\n    new_cam=None\n    for node in pasted_nodes + after_nodes:\n      if node.Class() in ('Camera3','Camera2','Camera'):\n        new_cam=node\n        break\n    if not new_cam:\n      return False\n\n    old_cam=nuke.toNode(target_name)\n    if not old_cam:\n      try:\n        new_cam.setName(target_name, unique=True)\n      except Exception:\n        try:\n          new_cam.setName(target_name)\n        except Exception:\n          pass\n      return True\n\n    try:\n      old_inputs=\[old_cam.input(i) for i in range(old_cam.inputs())]\n    except Exception:\n      old_inputs=\[]\n    deps=_collect_dependents_in_group(old_cam)\n\n    for idx, inp in enumerate(old_inputs):\n      try:\n        new_cam.setInput(idx, inp)\n      except Exception:\n        pass\n\n    for dep, idx in deps:\n      try:\n        dep.setInput(idx, new_cam)\n      except Exception:\n        pass\n\n    try:\n      new_cam.setXYpos(old_cam.xpos(), old_cam.ypos())\n    except Exception:\n      pass\n\n    try:\n      nuke.delete(old_cam)\n    except Exception:\n      pass\n\n    try:\n      new_cam.setName(target_name, unique=True)\n    except Exception:\n      try:\n        new_cam.setName(target_name)\n      except Exception:\n        pass\n    return True\n  finally:\n    group.end()\n\ndef _projection_pairs():\n  return \[\n    ('Image_MASTER', 'Cam_MASTER', 'Charon_InitCam', 1, 2),\n    ('Image_2', 'Cam_2', 'Charon_InitCam1', 3, 4),\n    ('Image_3', 'Cam_3', 'Charon_InitCam2', 5, 6),\n    ('Image_4', 'Cam_4', 'Charon_InitCam3', 7, 8),\n    ('Image_5', 'Cam_5', 'Charon_InitCam4', 9, 10),\n    ('Image_6', 'Cam_6', 'Charon_InitCam5', 11, 12),\n    ('Image_7', 'Cam_7', 'Charon_InitCam6', 13, 14),\n    ('Image_8', 'Cam_8', 'Charon_InitCam7', 15, 16),\n  ]\n\ndef _update_pair_count(group, count):\n  knob=_ensure_rig_count_knob(group)\n  try:\n    knob.setValue(int(count))\n  except Exception:\n    try:\n      knob.setValue(float(count))\n    except Exception:\n      pass\n\ndef _set_knob_visible(knob, visible):\n  if not knob:\n    return\n  try:\n    knob.setVisible(visible)\n    return\n  except Exception:\n    pass\n  try:\n    if visible:\n      knob.clearFlag(nuke.INVISIBLE)\n    else:\n      knob.setFlag(nuke.INVISIBLE)\n  except Exception:\n    pass\n\ndef _apply_camera_knob_visibility(group, pairs):\n  cam_knobs={\n    1: ['cam_master_mix'],\n    2: ['cam_02_mix','Cam_02_offset'],\n    3: ['cam_03_mix','Cam_03_offset'],\n    4: ['cam_04_mix','Cam_04_offset'],\n    5: ['cam_05_mix','Cam_05_offset'],\n    6: ['cam_06_mix','Cam_06_offset'],\n    7: ['cam_07_mix','Cam_07_offset'],\n    8: ['cam_08_mix','Cam_08_offset'],\n  }\n  active={1: True}\n  for idx, spec in enumerate(pairs, start=1):\n    if idx == 1:\n      active[idx]=True\n      continue\n    try:\n      img=spec[3]\n      cam=spec[4]\n    except Exception:\n      img=None\n      cam=None\n    active[idx]=bool(img and cam)\n  for idx, names in cam_knobs.items():\n    visible = active.get(idx, False)\n    for name in names:\n      knob=group.knob(name)\n      if not visible and name.endswith('_mix') and knob:\n        try:\n          knob.setValue(0)\n        except Exception:\n          pass\n      _set_knob_visible(knob, visible)\n\npair_specs=_projection_pairs()\npairs=\[]\nfor img_name, cam_name, target_name, img_idx, cam_idx in pair_specs:\n  img=_safe_input(n, img_idx)\n  cam=_safe_input(n, cam_idx)\n  pairs.append((img_name, cam_name, target_name, img, cam))\n\npair_count=0\nfor img_name, cam_name, target_name, img, cam in pairs:\n  if img and cam:\n    pair_count+=1\n_update_pair_count(n, pair_count)\n_apply_camera_knob_visibility(n, pairs)\n\ninvalid_cams=\[]\nfor img_name, cam_name, target_name, img, cam in pairs:\n  if not cam:\n    continue\n  resolved=_resolve_camera_input(cam)\n  if not resolved:\n    invalid_cams.append(cam_name)\n    continue\n  _debug('updating ' + target_name + ' from ' + cam_name)\n  _update_camera_from_input(n, resolved, target_name)\n\nif invalid_cams:\n  try:\n    nuke.message('Camera inputs must be Camera/Camera2/Camera3: ' + ', '.join(invalid_cams))\n  except Exception:\n    pass\n\ngeo_input=_safe_input(n, 0)\nif geo_input:\n  _update_uv_size(n, geo_input)\n  _update_geo(n, geo_input)\n" +STARTLINE}
+ addUserKnob {3 charon_rig_cam_count l "Projection Cameras Found" +DISABLED}
+ charon_rig_cam_count 2
+ addUserKnob {26 ""}
+ addUserKnob {26 output_setting l "OUTPUT SETTINGS"}
+ addUserKnob {1 asset_name l "Asset Name"}
+ asset_name asset_lobster
+ addUserKnob {1 subname l "Sub Name"}
+ subname ALL
+ addUserKnob {7 bake_resolution l "Bake Resolution"}
+ bake_resolution 8000
+ addUserKnob {22 debug_resolution l "Debug Resolution" -STARTLINE T "n=nuke.thisNode()\nimport nuke\nroot=nuke.root()\ntry:\n  res=int(n\['bake_resolution'].value())\nexcept Exception:\n  nuke.message('Bake Resolution must be a number')\n  raise SystemExit\nname='bake_\{0\}'.format(res)\nfmt_string='\{0\} \{0\} 0 0 \{0\} \{0\} 1 \{1\}'.format(res, name)\ntry:\n  nuke.addFormat(fmt_string)\nexcept Exception:\n  pass\ntry:\n  for f in nuke.formats():\n    if f.name()==name:\n      root\['format'].setValue(f)\n      raise SystemExit\nexcept SystemExit:\n  pass\nexcept Exception:\n  pass\ntry:\n  root\['format'].setValue(name)\nexcept Exception:\n  pass\n"}
+ addUserKnob {6 aces_mode l "ACES Mode" +STARTLINE}
+ aces_mode true
+ addUserKnob {26 path_preview l "Preview Path" T //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/MAYA/sourceimages/work.kien/_CHARON/asset_lobster/ALL}
+ addUserKnob {22 write l "Bake Texture" T "import os\nimport nuke\n\nn = nuke.thisNode()\n\ntry:\n    template_dir = n\[\"charon_template_dir\"].value()\nexcept Exception:\n    template_dir = \"\"\n\nif not template_dir:\n    nuke.message(\"Template directory missing.\")\nelse:\n    script_path = os.path.join(template_dir, \"projection_texture_bake_bake.py\")\n    if not os.path.exists(script_path):\n        nuke.message(\"Bake script missing: \" + script_path)\n    else:\n        globals_dict = dict(__name__=\"__main__\", nuke=nuke)\n        exec(open(script_path, \"r\").read(), globals_dict)\n" +STARTLINE}
+ addUserKnob {22 open_folder l "Open Output Location" -STARTLINE T "n=nuke.thisNode()\nimport os, getpass, subprocess\nasset = n\['asset_name'].value()\nsub = n\['subname'].value()\nproject_path = os.environ.get('BUCK_PROJECT_PATH')\nuser = getpass.getuser()\nif not project_path:\n    ref = n.node('Read11')\n    if ref:\n        path = ref\['file'].value().replace('\\\\', '/')\n        if '/Production/' in path:\n            project_path = path.split('/Production/')\[0]\nif project_path:\n    out_dir = os.path.join(project_path, \"Production\", \"MAYA\", \"sourceimages\", \"work.\{\}\".format(user), \"_CHARON\", asset, sub)\n    out_dir_norm = os.path.normpath(out_dir)\n    out_dir_display = out_dir_norm.replace('\\\\', '/')\n    if os.path.exists(out_dir_norm):\n        if os.name == 'nt':\n            os.startfile(out_dir_norm)\n        elif os.name == 'posix':\n            subprocess.Popen(\['open', out_dir_norm])\n        else:\n            subprocess.Popen(\['xdg-open', out_dir_norm])\n    else:\n        nuke.message('Folder does not exist yet: ' + out_dir_display)\nelse:\n    nuke.message('Could not determine project path.')"}
+ addUserKnob {1 charon_template_dir l "Template Dir" +INVISIBLE}
+ charon_template_dir "C:\\Users\\kien\\git\\Charon\\charon\\resources\\nuke_template"
+ addUserKnob {1 charon_contact_sheet l "Contact Sheet" +INVISIBLE}
+ charon_contact_sheet Charon_ContactSheet_Projection_Texture_Bake
+ addUserKnob {7 charon_link_anchor l Anchor +INVISIBLE}
+ addUserKnob {20 Projectiontab l "Projection Fine-tune"}
+ addUserKnob {41 cam_master_mix l "Cam_Master Mix" T toggle_cam_master.mix}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_02_mix l "Cam_02 Mix" T toggle_cam_02.mix}
+ addUserKnob {7 Cam_02_offset l "Cam_02 Offset" R 0 50}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_03_mix l "Cam_03 Mix" T toggle_cam_03.mix}
+ addUserKnob {7 Cam_03_offset l "Cam_03 Offset"}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_04_mix l "Cam_04 Mix" T toggle_cam_04.mix}
+ addUserKnob {7 Cam_04_offset l "Cam_04 Offset"}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_05_mix l "Cam_05 Mix" T toggle_cam_05.mix}
+ addUserKnob {7 Cam_05_offset l "Cam_05 Offset"}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_06_mix l "Cam_06 Mix" T toggle_cam_06.mix}
+ addUserKnob {7 Cam_06_offset l "Cam_06 Offset"}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_07_mix l "Cam_07 Mix" T toggle_cam_07.mix}
+ addUserKnob {7 Cam_07_offset l "Cam_07 Offset"}
+ addUserKnob {26 ""}
+ addUserKnob {41 cam_08_mix l "Cam_08 Mix" T toggle_cam_08.mix}
+ addUserKnob {7 Cam_08_offset l "Cam_08 Offset"}
+ addUserKnob {26 ""}
+ addUserKnob {26 edget l "Edge Extend"}
+ addUserKnob {41 slice_width l "slice width" T EdgeExtend.slice_width}
+ addUserKnob {26 ""}
+ addUserKnob {26 Highlight l "Highlight Clamps"}
+ addUserKnob {41 range T Keyer3.range}
+ addUserKnob {41 white l gain T Grade13.white}
+ addUserKnob {41 range_1 l range T Keyer4.range}
+ addUserKnob {41 white_1 l gain T Grade14.white}
+}
+ BackdropNode {
+  inputs 0
+  name BackdropNode1
+  tile_color 0x8e388e00
+  label GEO
+  note_font_size 42
+  xpos -1077
+  ypos -95
+  bdheight 120
+ }
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -1}
+  name Charon_CamTarget2
+  tile_color 0x7f00ffff
+  xpos 1218
+  ypos 268
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-10.80000019 -15 -99}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam2
+  tile_color 0x7f00ffff
+  xpos 1218
+  ypos 377
+ }
+set N16833400 [stack 0]
+ Dot {
+  name Dot8
+  xpos 1339
+  ypos 401
+ }
+ Dot {
+  name Dot9
+  xpos 1339
+  ypos 692
+ }
+push $N16833400
+ Input {
+  inputs 0
+  name Image_3
+  xpos 1071
+  ypos 440
+  number 5
+ }
+ Dot {
+  name Dot13
+  xpos 1105
+  ypos 520
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D3
+  xpos 1208
+  ypos 517
+ }
+ UVTile2 {
+  tile_u {{parent.UVcoord.u}}
+  tile_v {{parent.UVcoord.v}}
+  name UVTile1
+  xpos 1208
+  ypos 539
+ }
+ set C16833e00 [stack 0]
+ ReadGeo2 {
+  file //buck/work/current/LIGHTHOUSE_LOBSTER_ROLL_ANCME-L0001/Production/shots/Asset_Delivery/MDL_Lobster/Comp/nuke/work/geo/lobster.abc
+  version 1
+  use_geometry_colors false
+  range_first 0
+  scene_view {
+   {0}
+   imported:
+   0
+   1
+   2
+   3
+   4
+   selected:
+   0
+   1
+   2
+   3
+   4
+   items:
+   /root/lobster_piggybank_grp/coin_01_geo/coin_01_geoShape
+   /root/lobster_piggybank_grp/coin_02_geo/coin_02_geoShape
+   /root/lobster_piggybank_grp/coin_03_geo/coin_03_geoShape
+   /root/lobster_piggybank_grp/coin_04_geo/coin_04_geoShape
+   /root/lobster_piggybank_grp/lobster_piggypank_geo/lobster_piggypank_geoShape
+  }
+  name ReadGeo2
+  xpos 1208
+  ypos 596
+ }
+ set C16834300 [stack 0]
+push 0
+add_layer {N N.red N.green N.blue}
+ ScanlineRender {
+  inputs 3
+  conservative_shader_sampling false
+  antialiasing high
+  projection_mode uv
+  motion_vectors_type off
+  output_shader_vectors true
+  N_channel N
+  name ScanlineRender1
+  xpos 1208
+  ypos 689
+ }
+ set C16834800 [stack 0]
+ Dot {
+  name Dot14
+  xpos 1242
+  ypos 917
+ }
+set N16892400 [stack 0]
+ Dot {
+  name Dot15
+  xpos 1242
+  ypos 964
+ }
+set N16892800 [stack 0]
+ Invert {
+  name Invert3
+  xpos 1273
+  ypos 955
+ }
+ Grade {
+  channels rgba
+  white 0
+  name Grade12
+  xpos 1363
+  ypos 961
+ }
+ set C16835700 [stack 0]
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode3
+  xpos 1447
+  ypos 955
+ }
+push $N16892400
+ Group {
+  name NormalsRotate3
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 1386
+  ypos 914
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam2.world_matrix.2, Charon_InitCam2.world_matrix.10))+degrees(atan2(Charon_InitCam2.world_matrix.2, Charon_InitCam2.world_matrix.10)) + parent.Cam_04_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N168c5700 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N168c5700
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot16
+  xpos 1561
+  ypos 917
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade6
+  xpos 1527
+  ypos 961
+ }
+ Dot {
+  name Dot17
+  xpos 1561
+  ypos 1028
+ }
+ Input {
+  inputs 0
+  name Cam_2
+  xpos -414
+  ypos 29
+  number 4
+ }
+ Input {
+  inputs 0
+  name Cam_MASTER
+  xpos -525
+  ypos 29
+  number 2
+ }
+ Input {
+  inputs 0
+  name geo
+  xpos -637
+  ypos 29
+ }
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -1}
+  name Charon_CamTarget3
+  tile_color 0x7f00ffff
+  xpos 2118
+  ypos 266
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-10.80000019 -15 -99}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam3
+  tile_color 0x7f00ffff
+  xpos 2118
+  ypos 375
+ }
+set N1bed7900 [stack 0]
+ Dot {
+  name Dot25
+  xpos 2239
+  ypos 399
+ }
+ Dot {
+  name Dot38
+  xpos 2239
+  ypos 690
+ }
+push $N1bed7900
+ Input {
+  inputs 0
+  name Image_4
+  xpos 1971
+  ypos 465
+  number 7
+ }
+ Dot {
+  name Dot39
+  xpos 2005
+  ypos 518
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D4
+  xpos 2108
+  ypos 515
+ }
+clone $C16833e00 {
+  xpos 2108
+  ypos 537
+  selected false
+ }
+clone $C16834300 {
+  xpos 2108
+  ypos 594
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos 2108
+  ypos 687
+  selected false
+ }
+ Dot {
+  name Dot40
+  xpos 2142
+  ypos 915
+ }
+set N1bf0f000 [stack 0]
+ Dot {
+  name Dot41
+  xpos 2142
+  ypos 962
+ }
+set N1bf0f400 [stack 0]
+ Invert {
+  name Invert8
+  xpos 2173
+  ypos 953
+ }
+clone $C16835700 {
+  xpos 2263
+  ypos 959
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode7
+  xpos 2347
+  ypos 953
+ }
+push $N1bf0f000
+ Group {
+  name NormalsRotate6
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 2286
+  ypos 912
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam3.world_matrix.2, Charon_InitCam3.world_matrix.10))+degrees(atan2(Charon_InitCam3.world_matrix.2, Charon_InitCam3.world_matrix.10)) + parent.Cam_05_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1bf9a000 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1bf9a000
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot51
+  xpos 2461
+  ypos 915
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade15
+  xpos 2427
+  ypos 959
+ }
+ Dot {
+  name Dot52
+  xpos 2461
+  ypos 1026
+ }
+ Dot {
+  inputs 0
+  name Dot91
+  xpos 5012
+  ypos 1013
+ }
+ Dot {
+  name Dot92
+  xpos 5012
+  ypos 1116
+ }
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -1}
+  name Charon_CamTarget6
+  tile_color 0x7f00ffff
+  xpos 4818
+  ypos 256
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-10.80000019 -15 -99}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam6
+  tile_color 0x7f00ffff
+  xpos 4818
+  ypos 365
+ }
+set N1c019e00 [stack 0]
+ Dot {
+  name Dot79
+  xpos 4939
+  ypos 389
+ }
+ Dot {
+  name Dot80
+  xpos 4939
+  ypos 680
+ }
+push $N1c019e00
+ Input {
+  inputs 0
+  name Image_7
+  xpos 4671
+  ypos 454
+  number 13
+ }
+ Dot {
+  name Dot81
+  xpos 4705
+  ypos 508
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D7
+  xpos 4808
+  ypos 505
+ }
+clone $C16833e00 {
+  xpos 4808
+  ypos 527
+  selected false
+ }
+clone $C16834300 {
+  xpos 4808
+  ypos 584
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos 4808
+  ypos 677
+  selected false
+ }
+ Dot {
+  name Dot82
+  xpos 4842
+  ypos 905
+ }
+set N1c062400 [stack 0]
+ Dot {
+  name Dot83
+  xpos 4842
+  ypos 952
+ }
+set N1c062800 [stack 0]
+ Dot {
+  name Dot87
+  xpos 4842
+  ypos 1050
+ }
+set N1c062c00 [stack 0]
+ Group {
+  name NormalsRotate13
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 4898
+  ypos 1047
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam6.world_matrix.2, Charon_InitCam6.world_matrix.10))-15"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1.25
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 4
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c092f00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c092f00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade22
+  xpos 4898
+  ypos 1113
+ }
+ Dot {
+  name Dot100
+  xpos 4932
+  ypos 1175
+ }
+set N1c063c00 [stack 0]
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -1}
+  name Charon_CamTarget7
+  tile_color 0x7f00ffff
+  xpos 5718
+  ypos 256
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-10.80000019 -15 -99}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam7
+  tile_color 0x7f00ffff
+  xpos 5718
+  ypos 365
+ }
+set N1c130d00 [stack 0]
+ Dot {
+  name Dot93
+  xpos 5839
+  ypos 389
+ }
+ Dot {
+  name Dot94
+  xpos 5839
+  ypos 680
+ }
+push $N1c130d00
+ Input {
+  inputs 0
+  name Image_8
+  xpos 5571
+  ypos 454
+  number 15
+ }
+ Dot {
+  name Dot95
+  xpos 5605
+  ypos 508
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D8
+  xpos 5708
+  ypos 505
+ }
+clone $C16833e00 {
+  xpos 5708
+  ypos 527
+  selected false
+ }
+clone $C16834300 {
+  xpos 5708
+  ypos 584
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos 5708
+  ypos 677
+  selected false
+ }
+ Dot {
+  name Dot96
+  xpos 5742
+  ypos 905
+ }
+set N1c161000 [stack 0]
+ Dot {
+  name Dot97
+  xpos 5742
+  ypos 952
+ }
+set N1c161400 [stack 0]
+ Dot {
+  name Dot101
+  xpos 5742
+  ypos 1050
+ }
+set N1c161800 [stack 0]
+ Dot {
+  name Dot102
+  xpos 5742
+  ypos 1175
+ }
+set N1c161c00 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge13
+  xpos 5133
+  ypos 1172
+ }
+ Invert {
+  name Invert16
+  xpos 5133
+  ypos 1246
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode15
+  xpos 5255
+  ypos 1246
+ }
+push $N1c063c00
+ Dot {
+  name Dot103
+  xpos 4932
+  ypos 1214
+ }
+set N1c1c6000 [stack 0]
+push $N1c161c00
+ Dot {
+  name Dot104
+  xpos 5742
+  ypos 1214
+ }
+set N1c1c6400 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge14
+  xpos 5374
+  ypos 1211
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade24
+  xpos 5374
+  ypos 1252
+ }
+ Dot {
+  inputs 0
+  name Dot105
+  xpos 5912
+  ypos 1013
+ }
+ Dot {
+  name Dot106
+  xpos 5912
+  ypos 1116
+ }
+push $N1c161800
+ Group {
+  name NormalsRotate15
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 5798
+  ypos 1047
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam7.world_matrix.2, Charon_InitCam7.world_matrix.10))-15"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1.25
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 4
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c1d3e00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c1d3e00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade25
+  xpos 5798
+  ypos 1113
+ }
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur7
+  xpos 5798
+  ypos 1246
+ }
+push $N1c1c6400
+ Dot {
+  inputs 0
+  name Dot77
+  xpos 4112
+  ypos 1013
+ }
+ Dot {
+  name Dot78
+  xpos 4112
+  ypos 1116
+ }
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -1}
+  name Charon_CamTarget5
+  tile_color 0x7f00ffff
+  xpos 3918
+  ypos 256
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-10.80000019 -15 -99}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam5
+  tile_color 0x7f00ffff
+  xpos 3918
+  ypos 365
+ }
+set N1c2a8500 [stack 0]
+ Dot {
+  name Dot65
+  xpos 4039
+  ypos 389
+ }
+ Dot {
+  name Dot66
+  xpos 4039
+  ypos 680
+ }
+push $N1c2a8500
+ Input {
+  inputs 0
+  name Image_6
+  xpos 3771
+  ypos 451
+  number 11
+ }
+ Dot {
+  name Dot67
+  xpos 3805
+  ypos 508
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D6
+  xpos 3908
+  ypos 505
+ }
+clone $C16833e00 {
+  xpos 3908
+  ypos 527
+  selected false
+ }
+clone $C16834300 {
+  xpos 3908
+  ypos 584
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos 3908
+  ypos 677
+  selected false
+ }
+ Dot {
+  name Dot68
+  xpos 3942
+  ypos 905
+ }
+set N1c2a5400 [stack 0]
+ Dot {
+  name Dot69
+  xpos 3942
+  ypos 952
+ }
+set N1c2a5800 [stack 0]
+ Dot {
+  name Dot73
+  xpos 3942
+  ypos 1050
+ }
+set N1c2a5c00 [stack 0]
+ Group {
+  name NormalsRotate11
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 3998
+  ypos 1047
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam5.world_matrix.2, Charon_InitCam5.world_matrix.10))-15"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1.25
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 4
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c2ab200 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c2ab200
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade19
+  xpos 3998
+  ypos 1113
+ }
+ Dot {
+  name Dot86
+  xpos 4032
+  ypos 1175
+ }
+set N1c340c00 [stack 0]
+push $N1c062c00
+ Dot {
+  name Dot88
+  xpos 4842
+  ypos 1175
+ }
+set N1c341000 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge11
+  xpos 4233
+  ypos 1172
+ }
+ Invert {
+  name Invert14
+  xpos 4233
+  ypos 1246
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode13
+  xpos 4355
+  ypos 1246
+ }
+push $N1c340c00
+ Dot {
+  name Dot89
+  xpos 4032
+  ypos 1214
+ }
+set N1c341400 [stack 0]
+push $N1c341000
+ Dot {
+  name Dot90
+  xpos 4842
+  ypos 1214
+ }
+set N1c341800 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge12
+  xpos 4474
+  ypos 1211
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade21
+  xpos 4474
+  ypos 1252
+ }
+push $N1c1c6000
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur6
+  xpos 4898
+  ypos 1246
+ }
+push $N1c341800
+ Dot {
+  inputs 0
+  name Dot63
+  xpos 3212
+  ypos 1023
+ }
+ Dot {
+  name Dot64
+  xpos 3212
+  ypos 1126
+ }
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -1}
+  name Charon_CamTarget4
+  tile_color 0x7f00ffff
+  xpos 3018
+  ypos 266
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-10.80000019 -15 -99}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam4
+  tile_color 0x7f00ffff
+  xpos 3018
+  ypos 375
+ }
+set N1c3f1900 [stack 0]
+ Dot {
+  name Dot27
+  xpos 3139
+  ypos 399
+ }
+ Dot {
+  name Dot50
+  xpos 3139
+  ypos 690
+ }
+push $N1c3f1900
+ Input {
+  inputs 0
+  name Image_5
+  xpos 2871
+  ypos 460
+  number 9
+ }
+ Dot {
+  name Dot53
+  xpos 2905
+  ypos 518
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D5
+  xpos 3008
+  ypos 515
+ }
+clone $C16833e00 {
+  xpos 3008
+  ypos 537
+  selected false
+ }
+clone $C16834300 {
+  xpos 3008
+  ypos 594
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos 3008
+  ypos 687
+  selected false
+ }
+ Dot {
+  name Dot54
+  xpos 3042
+  ypos 915
+ }
+set N1c407400 [stack 0]
+ Dot {
+  name Dot55
+  xpos 3042
+  ypos 962
+ }
+set N1c407800 [stack 0]
+ Dot {
+  name Dot59
+  xpos 3042
+  ypos 1060
+ }
+set N1c407c00 [stack 0]
+ Group {
+  name NormalsRotate8
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 3098
+  ypos 1057
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam4.world_matrix.2, Charon_InitCam4.world_matrix.10))-15"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1.25
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 4
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c488a00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c488a00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade16
+  xpos 3098
+  ypos 1123
+ }
+ Dot {
+  name Dot72
+  xpos 3132
+  ypos 1175
+ }
+set N1c4a8c00 [stack 0]
+push $N1c2a5c00
+ Dot {
+  name Dot74
+  xpos 3942
+  ypos 1175
+ }
+set N1c4a9000 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge9
+  xpos 3333
+  ypos 1172
+ }
+ Invert {
+  name Invert12
+  xpos 3333
+  ypos 1246
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode11
+  xpos 3455
+  ypos 1246
+ }
+push $N1c4a8c00
+ Dot {
+  name Dot75
+  xpos 3132
+  ypos 1214
+ }
+set N1c4a9400 [stack 0]
+push $N1c4a9000
+ Dot {
+  name Dot76
+  xpos 3942
+  ypos 1214
+ }
+set N1c4a9800 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge10
+  xpos 3574
+  ypos 1211
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade18
+  xpos 3574
+  ypos 1252
+ }
+push $N1c341400
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur5
+  xpos 3998
+  ypos 1246
+ }
+push $N1c4a9800
+ Dot {
+  inputs 0
+  name Dot46
+  xpos 2312
+  ypos 1023
+ }
+ Dot {
+  name Dot47
+  xpos 2312
+  ypos 1126
+ }
+push $N1bf0f400
+ Dot {
+  name Dot42
+  xpos 2142
+  ypos 1060
+ }
+set N1c564400 [stack 0]
+ Group {
+  name NormalsRotate5
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 2198
+  ypos 1057
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam3.world_matrix.2, Charon_InitCam3.world_matrix.10))-15"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1.25
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 4
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c553700 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c553700
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade10
+  xpos 2198
+  ypos 1123
+ }
+ Dot {
+  name Dot58
+  xpos 2232
+  ypos 1185
+ }
+set N1c565400 [stack 0]
+push $N1c407c00
+ Dot {
+  name Dot60
+  xpos 3042
+  ypos 1185
+ }
+set N1c565800 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge7
+  xpos 2433
+  ypos 1182
+ }
+ Invert {
+  name Invert10
+  xpos 2433
+  ypos 1256
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode9
+  xpos 2555
+  ypos 1256
+ }
+push $N1c565400
+ Dot {
+  name Dot61
+  xpos 2232
+  ypos 1224
+ }
+set N1c565c00 [stack 0]
+push $N1c565800
+ Dot {
+  name Dot62
+  xpos 3042
+  ypos 1224
+ }
+set N1c650000 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge8
+  xpos 2674
+  ypos 1221
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade11
+  xpos 2674
+  ypos 1262
+ }
+push $N1c4a9400
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur4
+  xpos 3098
+  ypos 1256
+ }
+push $N1c650000
+ Camera3 {
+  inputs 0
+  name Camera_DEFAULT_IGNORE
+  xpos -1197
+  ypos 788
+ }
+clone $C16834300 {
+  inputs 0
+  xpos -1055
+  ypos 712
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos -1055
+  ypos 809
+  selected false
+ }
+ Invert {
+  name Invert5
+  xpos -838
+  ypos 803
+ }
+set N1c660d00 [stack 0]
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -0.3000000119}
+  name Charon_CamTarget1
+  tile_color 0x7f00ffff
+  xpos 318
+  ypos 276
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {-94 89 -58}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam1
+  tile_color 0x7f00ffff
+  xpos 318
+  ypos 384
+ }
+set N1c661700 [stack 0]
+ Dot {
+  name Dot3
+  xpos 439
+  ypos 408
+ }
+ Dot {
+  name Dot4
+  xpos 439
+  ypos 694
+ }
+push $N1c661700
+ Input {
+  inputs 0
+  name Image_2
+  xpos 180
+  ypos 451
+  number 3
+ }
+ Dot {
+  name Dot12
+  xpos 214
+  ypos 520
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  occlusion_mode world
+  name Project3D2
+  xpos 308
+  ypos 517
+ }
+clone $C16833e00 {
+  xpos 308
+  ypos 541
+  selected false
+ }
+clone $C16834300 {
+  xpos 308
+  ypos 600
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos 308
+  ypos 691
+  selected false
+ }
+ Dot {
+  name Dot32
+  xpos 343
+  ypos 914
+ }
+set N1c651800 [stack 0]
+ Dot {
+  name Dot33
+  xpos 343
+  ypos 961
+ }
+set N1c651c00 [stack 0]
+ Invert {
+  name Invert2
+  xpos 374
+  ypos 952
+ }
+clone $C16835700 {
+  inputs 1+1
+  xpos 464
+  ypos 958
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode2
+  xpos 548
+  ypos 952
+ }
+push $N1c651800
+ Group {
+  name NormalsRotate10
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 487
+  ypos 911
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam1.world_matrix.2, Charon_InitCam1.world_matrix.10)) + parent.Cam_03_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c709e00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c709e00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot34
+  xpos 662
+  ypos 914
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade4
+  xpos 628
+  ypos 958
+ }
+ Dot {
+  name Dot35
+  xpos 662
+  ypos 1025
+ }
+ Dot {
+  name Dot36
+  xpos 1412
+  ypos 1025
+ }
+ Dot {
+  name Dot37
+  xpos 1412
+  ypos 1128
+ }
+push $N16892800
+ Dot {
+  name Dot10
+  xpos 1242
+  ypos 1062
+ }
+set N1c755c00 [stack 0]
+ Group {
+  name NormalsRotate4
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 1298
+  ypos 1059
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam2.world_matrix.2, Charon_InitCam2.world_matrix.10))-15"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1.25
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 4
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1c7faa00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1c7faa00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade5
+  xpos 1298
+  ypos 1125
+ }
+ Dot {
+  name Dot5
+  xpos 1332
+  ypos 1185
+ }
+set N1c820c00 [stack 0]
+push $N1c564400
+ Dot {
+  name Dot43
+  xpos 2142
+  ypos 1185
+ }
+set N1c821000 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge1
+  xpos 1533
+  ypos 1182
+ }
+ Invert {
+  name Invert7
+  xpos 1533
+  ypos 1256
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode6
+  xpos 1655
+  ypos 1256
+ }
+push $N1c820c00
+ Dot {
+  name Dot44
+  xpos 1332
+  ypos 1224
+ }
+set N1c821400 [stack 0]
+push $N1c821000
+ Dot {
+  name Dot45
+  xpos 2142
+  ypos 1224
+ }
+set N1c821800 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge2
+  xpos 1774
+  ypos 1221
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade9
+  xpos 1774
+  ypos 1262
+ }
+push $N1c565c00
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur3
+  xpos 2198
+  ypos 1256
+ }
+push $N1c821800
+ Axis3 {
+  inputs 0
+  translate {0 -0.2000000477 -0.3000000119}
+  name Charon_CamTarget
+  tile_color 0x7f00ffff
+  xpos -550
+  ypos 275
+ }
+push 0
+ Camera3 {
+  inputs 2
+  translate {54.40000153 95.04000092 37.58000183}
+  uniform_scale 90
+  focal 100
+  name Charon_InitCam
+  tile_color 0x7f00ffff
+  xpos -550
+  ypos 390
+ }
+set N1d89ad00 [stack 0]
+ Dot {
+  name Dot1
+  xpos -428
+  ypos 414
+ }
+ Dot {
+  name Dot2
+  xpos -428
+  ypos 699
+ }
+push $N1d89ad00
+ Input {
+  inputs 0
+  name Image_MASTER
+  xpos -744
+  ypos 466
+  number 1
+ }
+ Dot {
+  name Dot11
+  xpos -710
+  ypos 527
+ }
+ Project3D2 {
+  inputs 2
+  project_on front
+  crop false
+  occlusion_mode world
+  name Project3D1
+  xpos -560
+  ypos 524
+ }
+clone $C16833e00 {
+  xpos -560
+  ypos 548
+  selected false
+ }
+clone $C16834300 {
+  xpos -560
+  ypos 600
+  selected false
+ }
+push 0
+clone $C16834800 {
+  inputs 3
+  xpos -560
+  ypos 696
+  selected false
+ }
+ Dot {
+  name Dot6
+  xpos -525
+  ypos 910
+ }
+set N1d8d0c00 [stack 0]
+ Dot {
+  name Dot26
+  xpos -525
+  ypos 957
+ }
+set N1d8d1000 [stack 0]
+ Dot {
+  name Dot18
+  xpos -525
+  ypos 1064
+ }
+set N1d8d1400 [stack 0]
+push $N1c651c00
+ Dot {
+  name Dot7
+  xpos 343
+  ypos 1064
+ }
+set N1d8d1800 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge4
+  xpos -324
+  ypos 1061
+ }
+ Invert {
+  name Invert4
+  xpos -324
+  ypos 1135
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode4
+  xpos -202
+  ypos 1135
+ }
+push $N1d8d1400
+ Dot {
+  name Dot19
+  xpos -525
+  ypos 1103
+ }
+set N1d8d1c00 [stack 0]
+push $N1d8d1800
+ Dot {
+  name Dot20
+  xpos 343
+  ypos 1103
+ }
+set N1d930000 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge3
+  xpos -83
+  ypos 1100
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade7
+  xpos -83
+  ypos 1141
+ }
+push $N1c660d00
+push $N1d8d1000
+ Invert {
+  name Invert1
+  xpos -501
+  ypos 948
+ }
+clone $C16835700 {
+  inputs 1+1
+  xpos -412
+  ypos 954
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode1
+  xpos -328
+  ypos 948
+ }
+push $N1d8d0c00
+ Group {
+  name NormalsRotate2
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos -401
+  ypos 907
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam.world_matrix.2, Charon_InitCam.world_matrix.10))+Projection_Texture_Bake.Cam_02_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1d95b400 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1d95b400
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot28
+  xpos -206
+  ypos 910
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade3
+  xpos -240
+  ypos 954
+ }
+ Dot {
+  name Dot31
+  xpos -206
+  ypos 1021
+ }
+ Dot {
+  name Dot30
+  xpos 536
+  ypos 1021
+ }
+ Dot {
+  name Dot29
+  xpos 536
+  ypos 1098
+ }
+push $N1d8d1800
+ Group {
+  name NormalsRotate1
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 398
+  ypos 1061
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam1.world_matrix.2, Charon_InitCam1.world_matrix.10))"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 1
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  mblack -0.07
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 6
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1da64000 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1da64000
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade2
+  xpos 398
+  ypos 1095
+ }
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur1
+  xpos 398
+  ypos 1135
+ }
+ Dot {
+  name Dot21
+  xpos 432
+  ypos 1187
+ }
+set N1da6ec00 [stack 0]
+push $N1c755c00
+ Dot {
+  name Dot22
+  xpos 1242
+  ypos 1187
+ }
+set N1da6f000 [stack 0]
+ Merge2 {
+  inputs 2
+  operation max
+  name Merge5
+  xpos 633
+  ypos 1184
+ }
+ Invert {
+  name Invert6
+  xpos 633
+  ypos 1258
+ }
+ Erode {
+  size -34
+  blur 0.745
+  name Erode5
+  xpos 755
+  ypos 1258
+ }
+push $N1da6ec00
+ Dot {
+  name Dot23
+  xpos 432
+  ypos 1226
+ }
+set N1da6f400 [stack 0]
+push $N1da6f000
+ Dot {
+  name Dot24
+  xpos 1242
+  ypos 1226
+ }
+set N1da6f800 [stack 0]
+ Merge2 {
+  inputs 2
+  operation color-burn
+  name Merge6
+  xpos 874
+  ypos 1223
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade8
+  xpos 874
+  ypos 1264
+ }
+push $N1c821400
+ Blur {
+  inputs 1+1
+  size 50
+  name Blur2
+  xpos 1298
+  ypos 1258
+ }
+push $N1da6f800
+push $N1da6f400
+push $N1d930000
+push $N1d8d1c00
+ Constant {
+  inputs 0
+  channels rgb
+  name Constant2
+  xpos -740
+  ypos 1296
+ }
+ Merge2 {
+  inputs 2
+  operation copy
+  name toggle_cam_master
+  xpos -559
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_02
+  xpos 308
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_03
+  xpos 1208
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_04
+  xpos 2108
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_05
+  xpos 3008
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_06
+  xpos 3908
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_07
+  xpos 4808
+  ypos 1320
+ }
+ Merge2 {
+  inputs 2+1
+  name toggle_cam_08
+  xpos 5708
+  ypos 1320
+ }
+ EdgeExtend {
+  name EdgeExtend
+  xpos 5708
+  ypos 1579
+  slice_width 5
+  blurResult 10
+ }
+ Dot {
+  name Dot48
+  xpos 5742
+  ypos 1647
+ }
+set N1dd10800 [stack 0]
+ Keyer {
+  operation "luminance key"
+  range {0.650494937 1 1 1}
+  name Keyer3
+  xpos 5798
+  ypos 1638
+ }
+push $N1dd10800
+ Grade {
+  inputs 1+1
+  mix 0.52
+  name Grade13
+  xpos 5708
+  ypos 1701
+ }
+ Dot {
+  name Dot49
+  xpos 5742
+  ypos 1740
+ }
+set N1dd10c00 [stack 0]
+ Keyer {
+  operation "luminance key"
+  range {0.6586260448 0.9503800409 1 1}
+  name Keyer4
+  xpos 5798
+  ypos 1731
+ }
+push $N1dd10c00
+ Grade {
+  inputs 1+1
+  mix 0.67
+  name Grade14
+  xpos 5708
+  ypos 1794
+ }
+ Output {
+  name Output1
+  xpos 5708
+  ypos 1946
+ }
+push $N1c407800
+ Invert {
+  name Invert9
+  xpos 3073
+  ypos 953
+ }
+clone $C16835700 {
+  xpos 3163
+  ypos 959
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode8
+  xpos 3247
+  ypos 953
+ }
+push $N1c407400
+ Group {
+  name NormalsRotate7
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 3188
+  ypos 912
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam4.world_matrix.2, Charon_InitCam4.world_matrix.10))+degrees(atan2(Charon_InitCam4.world_matrix.2, Charon_InitCam4.world_matrix.10)) + parent.Cam_06_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1dd95e00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1dd95e00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot56
+  xpos 3361
+  ypos 915
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade1
+  xpos 3327
+  ypos 959
+ }
+ Dot {
+  name Dot57
+  xpos 3361
+  ypos 1026
+ }
+push $N1c2a5800
+ Invert {
+  name Invert11
+  xpos 3973
+  ypos 943
+ }
+clone $C16835700 {
+  xpos 4063
+  ypos 949
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode10
+  xpos 4147
+  ypos 943
+ }
+push $N1c2a5400
+ Group {
+  name NormalsRotate9
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 4086
+  ypos 902
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam5.world_matrix.2, Charon_InitCam5.world_matrix.10))+degrees(atan2(Charon_InitCam5.world_matrix.2, Charon_InitCam5.world_matrix.10)) + parent.Cam_07_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1deb8000 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1deb8000
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot70
+  xpos 4261
+  ypos 905
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade17
+  xpos 4227
+  ypos 949
+ }
+ Dot {
+  name Dot71
+  xpos 4261
+  ypos 1016
+ }
+push $N1c062800
+ Invert {
+  name Invert13
+  xpos 4873
+  ypos 943
+ }
+clone $C16835700 {
+  xpos 4963
+  ypos 949
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode12
+  xpos 5047
+  ypos 943
+ }
+push $N1c062400
+ Group {
+  name NormalsRotate12
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 4986
+  ypos 902
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam6.world_matrix.2, Charon_InitCam6.world_matrix.10))+degrees(atan2(Charon_InitCam6.world_matrix.2, Charon_InitCam6.world_matrix.10)) + parent.Cam_08_offset"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1df4be00 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1df4be00
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot84
+  xpos 5161
+  ypos 905
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade20
+  xpos 5127
+  ypos 949
+ }
+ Dot {
+  name Dot85
+  xpos 5161
+  ypos 1016
+ }
+push $N1c161400
+ Invert {
+  name Invert15
+  xpos 5773
+  ypos 943
+ }
+clone $C16835700 {
+  xpos 5863
+  ypos 949
+  selected false
+ }
+ Erode {
+  channels all
+  size -23
+  blur 0.365
+  name Erode14
+  xpos 5947
+  ypos 943
+ }
+push $N1c161000
+ Group {
+  name NormalsRotate14
+  onCreate "\nn=nuke.thisNode()\nn\['mblack'].setFlag(0x0000000000000004)\nn\['mgain'].setFlag(0x0000000000000004)\nn\['mgamma'].setFlag(0x0000000000000004)\n"
+  tile_color 0xff00ff
+  xpos 5886
+  ypos 902
+  addUserKnob {20 User}
+  addUserKnob {41 in l "Normals in" t "Select the layer containing the \nnormals" T Shuffle1.in}
+  addUserKnob {41 pick l "Pick Plane" T Plane.pick}
+  addUserKnob {22 planereset l Reset -STARTLINE T "nuke.thisNode().knob(\"pick\").setValue(0,0)\nnuke.thisNode().knob(\"pick\").setValue(0,1)\nnuke.thisNode().knob(\"pick\").setValue(1,2)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 divider_2 l "" +STARTLINE T " "}
+  addUserKnob {26 manual l "<b>Manual Rotation</b>" -STARTLINE T "  "}
+  addUserKnob {22 rotreset l Reset -STARTLINE T "nuke.thisNode().knob(\"yoffset\").setValue(0)\nnuke.thisNode().knob(\"xzrot\").setValue(0)"}
+  addUserKnob {7 yoffset l Horizontal t "Rotate around the world Y axis" R -180 180}
+  yoffset {{"degrees(atan2(Charon_InitCam7.world_matrix.2, Charon_InitCam7.world_matrix.10))"}}
+  addUserKnob {7 xzrot l Vertical t "Rotates around the rotated X axis" R -180 180}
+  addUserKnob {26 ""}
+  addUserKnob {26 matte l "@b;Matte Output" T "      "}
+  addUserKnob {6 inv l "Invert    " t "This happens before the matte \ntweaks" -STARTLINE}
+  addUserKnob {6 amask l "Mask by Alpha    " -STARTLINE}
+  amask true
+  addUserKnob {6 unpre l Unpremult -STARTLINE}
+  addUserKnob {7 exp l Exponent t "Exponential falloff" R 1 10}
+  exp 2
+  addUserKnob {22 expreset l Reset -STARTLINE T "nuke.thisNode().knob(\"exp\").setValue(2)"}
+  addUserKnob {7 mblack l Black R -1 1}
+  addUserKnob {22 mblackreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mblack\").setValue(0)"}
+  addUserKnob {7 mgain l White R 0 4}
+  mgain 2
+  addUserKnob {22 mgainreset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgain\").setValue(1)"}
+  addUserKnob {7 mgamma l Gamma R 0 4}
+  mgamma 1
+  addUserKnob {22 mgammareset l Reset -STARTLINE T "nuke.thisNode().knob(\"mgamma\").setValue(1)"}
+  addUserKnob {26 ""}
+  addUserKnob {26 "" l mask T ""}
+  addUserKnob {41 maskChannelInput l "" -STARTLINE T Merge1.maskChannelInput}
+  addUserKnob {41 inject -STARTLINE T Merge1.inject}
+  addUserKnob {41 invert_mask l invert -STARTLINE T Merge1.invert_mask}
+  addUserKnob {41 fringe -STARTLINE T Merge1.fringe}
+  addUserKnob {41 mix T Merge1.mix}
+  addUserKnob {20 info l Info}
+  addUserKnob {26 infotext l "" +STARTLINE T "W_SuperNormal generates a surface angle based matte using normals.\n\n1. Select the layer containing normals in the dropdown menu.\n2. Enable color picker and pick the point where you want the matte to be white.\n  (I look at the alpha output, hold ctrl+alt and \"glide\" over the surfaces.)\n3. You can also manually rotate the matte. When you colorpick a new point,\n  it is recommended that you reset the manual rotation values to 0.\n"}
+  addUserKnob {20 v2_1_group l "v2.1 - Feb 2019" n 1}
+  v2_1_group 0
+  addUserKnob {26 v2_1_text l "" +STARTLINE T "  -Manual rotation working as originally envisioned: It is more intuitive \n   and faster to reach any desired angle with horizontal(Y) and vertical\n   rotation than with separate XYZ rotations.\n  -General cleanup & refinements.\n"}
+  addUserKnob {20 endGroup n -1}
+  addUserKnob {20 v2group l "v2.0 - 2018" n 1}
+  v2group 0
+  addUserKnob {26 v2text l "" +STARTLINE T "  -Adopted a different method for rotating normals shown to me by Daniel Pelc\n  -Simpler math for converting normals into a matte with the help of Erwan Leroy\n"}
+  addUserKnob {20 endGroup_1 l endGroup n -1}
+  addUserKnob {26 v1_1_text l "" +STARTLINE T "    v1.1 - 2016"}
+  addUserKnob {26 ""}
+  addUserKnob {26 spacer_1 l "" +STARTLINE T "     "}
+  addUserKnob {26 copyright l "&#169;  Wes Heo" -STARTLINE T " "}
+ }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.yoffset} 0}
+   name Axis10
+   label H
+   xpos -173
+   ypos -163
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {{parent.xzrot} {-degrees(parent.Plane.picked.g)} 0}
+   name Axis2
+   label V
+   xpos -171
+   ypos -62
+  }
+  Axis2 {
+   inputs 0
+   rot_order YXZ
+   rotate {0 {-parent.Axis2.rotate.y} 0}
+   name Axis5
+   label V
+   xpos -170
+   ypos 34
+  }
+  Input {
+   inputs 0
+   name Inputmask
+   xpos 132
+   ypos 544
+   number 1
+  }
+  Input {
+   inputs 0
+   name N
+   xpos 0
+   ypos -425
+  }
+  Shuffle {
+   in N
+   alpha red2
+   out rgb
+   name Shuffle1
+   xpos 0
+   ypos -347
+  }
+set N1e06c000 [stack 0]
+  Dot {
+   name Dot1
+   xpos 315
+   ypos 289
+  }
+push $N1e06c000
+  Unpremult {
+   name Unpremult1
+   xpos 0
+   ypos -286
+   disable {{!parent.unpre}}
+  }
+  NoOp {
+   name Plane
+   xpos 0
+   ypos -218
+   addUserKnob {20 User}
+   addUserKnob {18 pick l "User Picked Plane" R -1 1}
+   pick {0 0 1}
+   addUserKnob {6 pick_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+   addUserKnob {20 calc l "Internal Conversions"}
+   addUserKnob {18 picked}
+   picked {0 {"(atan2(pick.r, pick.b))"} 0}
+   addUserKnob {6 picked_panelDropped l "panel dropped state" -STARTLINE +HIDDEN}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis10.world_matrix.0} {parent.Axis10.world_matrix.1} {parent.Axis10.world_matrix.2}}
+        {{parent.Axis10.world_matrix.4} {parent.Axis10.world_matrix.5} {parent.Axis10.world_matrix.6}}
+        {{parent.Axis10.world_matrix.8} {parent.Axis10.world_matrix.9} {parent.Axis10.world_matrix.10}}
+   }
+   name ColorMatrix2
+   xpos 0
+   ypos -148
+   disable {{parent.yoffset==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis2.world_matrix.0} {parent.Axis2.world_matrix.1} {parent.Axis2.world_matrix.2}}
+        {{parent.Axis2.world_matrix.4} {parent.Axis2.world_matrix.5} {parent.Axis2.world_matrix.6}}
+        {{parent.Axis2.world_matrix.8} {parent.Axis2.world_matrix.9} {parent.Axis2.world_matrix.10}}
+   }
+   name ColorMatrix3
+   xpos 0
+   ypos -42
+   disable {{parent.xzrot==0}}
+  }
+  ColorMatrix {
+   matrix {
+    
+        {{parent.Axis5.world_matrix.0} {parent.Axis5.world_matrix.1} {parent.Axis5.world_matrix.2}}
+        {{parent.Axis5.world_matrix.4} {parent.Axis5.world_matrix.5} {parent.Axis5.world_matrix.6}}
+        {{parent.Axis5.world_matrix.8} {parent.Axis5.world_matrix.9} {parent.Axis5.world_matrix.10}}
+   }
+   name ColorMatrix5
+   xpos 0
+   ypos 54
+   disable {{parent.xzrot==0}}
+  }
+  Expression {
+   temp_name0 nx
+   temp_expr0 parent.Plane.pick.r
+   temp_name1 ny
+   temp_expr1 parent.Plane.pick.g
+   temp_name2 nz
+   temp_expr2 parent.Plane.pick.b
+   channel0 {rgba.red -rgba.green -rgba.blue -rgba.alpha}
+   expr0 r*nx
+   channel1 {-rgba.red rgba.green -rgba.blue none}
+   expr1 g*ny
+   channel2 {-rgba.red -rgba.green rgba.blue none}
+   expr2 b*nz
+   channel3 {none none none -rgba.alpha}
+   name Expression1
+   xpos 0
+   ypos 121
+   cached true
+  }
+  Expression {
+   expr3 clamp(r+g+b)
+   name Expression3
+   xpos 0
+   ypos 187
+  }
+  Invert {
+   channels alpha
+   name Invert1
+   xpos 0
+   ypos 249
+   disable {{!parent.inv}}
+  }
+  Expression {
+   expr3 pow(a,max(1,parent.exp))
+   name Expression4
+   xpos 0
+   ypos 317
+  }
+  Grade {
+   channels alpha
+   blackpoint {{-parent.mblack}}
+   white {{parent.mgain}}
+   gamma {{max(0.001,parent.mgamma)}}
+   white_clamp true
+   name Grade1
+   xpos 0
+   ypos 369
+  }
+  ChannelMerge {
+   inputs 2
+   operation multiply
+   name ChannelMerge1
+   xpos 0
+   ypos 444
+   disable {{!parent.amask}}
+  }
+push 0
+  Merge2 {
+   inputs 2+1
+   operation copy
+   also_merge all
+   name Merge1
+   label "\[ expr \{ \[value mix] == 1 ? \" \" : \[concat Mix: \[value mix]] \}]"
+   xpos 0
+   ypos 544
+  }
+  Output {
+   name Output1
+   xpos 0
+   ypos 623
+  }
+ end_group
+ Dot {
+  name Dot98
+  xpos 6061
+  ypos 905
+ }
+ Grade {
+  inputs 1+1
+  channels rgba
+  white 0
+  name Grade23
+  xpos 6027
+  ypos 949
+ }
+ Dot {
+  name Dot99
+  xpos 6061
+  ypos 1016
+ }
+ Input {
+  inputs 0
+  name Cam_3
+  xpos -302
+  ypos 29
+  number 6
+ }
+ Input {
+  inputs 0
+  name Cam_4
+  xpos -186
+  ypos 29
+  number 8
+ }
+ Input {
+  inputs 0
+  name Cam_5
+  xpos -61
+  ypos 29
+  number 10
+ }
+ Input {
+  inputs 0
+  name Cam_7
+  xpos 215
+  ypos 33
+  number 14
+ }
+ Input {
+  inputs 0
+  name Cam_8
+  xpos 362
+  ypos 31
+  number 16
+ }
+ Input {
+  inputs 0
+  name Cam_6
+  xpos 79
+  ypos 26
+  number 12
+ }
+clone $C16834300 {
+  inputs 0
+  xpos -1061
+  ypos -26
+  selected false
+ }
+end_group
