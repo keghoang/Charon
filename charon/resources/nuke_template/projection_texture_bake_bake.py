@@ -265,8 +265,8 @@ def _build_contact_sheet(group, out_dir, tiles, cols, rows, aces_enabled=None):
 
         if aces_enabled is None:
             try:
-                from charon import preferences
-                aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                from charon import color_management
+                aces_enabled = color_management.is_aces_enabled()
             except Exception:
                 aces_enabled = False
 

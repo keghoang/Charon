@@ -1128,8 +1128,8 @@ def _apply_aces_pre_write_transform(node_to_render, aces_enabled: bool):
 
 def _render_nuke_node(node_to_render, path):
     import nuke
-    from . import preferences
-    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+    from .color_management import is_aces_enabled
+    aces_enabled = is_aces_enabled()
     
     transformed_node = _apply_aces_pre_write_transform(node_to_render, aces_enabled)
 
@@ -1244,8 +1244,8 @@ def _handle_recursive_updates(node, last_output):
                 
                 # ACES Handling
                 try:
-                    from . import preferences
-                    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                    from .color_management import is_aces_enabled
+                    aces_enabled = is_aces_enabled()
                     if aces_enabled:
                         # Check for existing InverseViewTransform downstream
                         deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
@@ -3179,8 +3179,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         crop_node = None
 
                 write_node = nuke.createNode('Write', inpanel=False)
-                from . import preferences
-                aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                from .color_management import is_aces_enabled
+                aces_enabled = is_aces_enabled()
                 
                 transformed_source_node = _apply_aces_pre_write_transform(source_node, aces_enabled)
                 write_node.setInput(0, transformed_source_node)
@@ -4268,8 +4268,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 read_node.setXYpos(int(target_node.xpos()), int(target_node.ypos()) + 50)
                             except: pass
                             
-                            from . import preferences
-                            aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                            from .color_management import is_aces_enabled
+                            aces_enabled = is_aces_enabled()
                             final_source_node = read_node
                             
                             if aces_enabled:
@@ -4707,8 +4707,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         layout_index += 1
 
                                         # --- NEW CODE START ---
-                                        from . import preferences
-                                        aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+                                        from .color_management import is_aces_enabled
+                                        aces_enabled = is_aces_enabled()
                                         
                                         if aces_enabled:
                                             ivt_temp = os.path.join(temp_root, f"ivt_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
@@ -5529,8 +5529,8 @@ def _create_generic_result_group(charon_node, image_paths, columns_override=None
     last_node = cs
     
     # Apply ACES if enabled (Inside Group)
-    from . import preferences
-    aces_enabled = preferences.get_preference("aces_mode_enabled", False)
+    from .color_management import is_aces_enabled
+    aces_enabled = is_aces_enabled()
     if aces_enabled:
         from .paths import get_charon_temp_dir
         ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_cs_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")

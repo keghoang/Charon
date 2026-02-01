@@ -19,6 +19,7 @@ from .scene_nodes_panel import SceneNodesPanel as CharonBoardPanel
 from ..model_transfer_manager import manager as transfer_manager
 
 import threading
+import weakref
 
 # Import config with fallback
 try:
@@ -68,6 +69,8 @@ COLOR_NEW_WORKFLOW_HOVER = "#94b6e7"
 COLOR_NEW_WORKFLOW_PRESSED = "#7393bf"
 
 _TEXTURE_BAKE_TEMPLATE_HOOK_INSTALLED = False
+_COLOR_MODE_HOOK_INSTALLED = False
+_COLOR_MODE_WINDOWS = weakref.WeakSet()
 
 
 def _ensure_projection_texture_bake_template_dirs() -> int:
@@ -144,6 +147,47 @@ def _install_projection_texture_bake_template_hook() -> None:
         return
 
     _TEXTURE_BAKE_TEMPLATE_HOOK_INSTALLED = True
+
+
+def _install_color_mode_hook() -> None:
+    global _COLOR_MODE_HOOK_INSTALLED
+    if _COLOR_MODE_HOOK_INSTALLED:
+        return
+
+    try:
+        import nuke
+    except Exception:
+        return
+
+    def _notify_windows() -> None:
+        for window in list(_COLOR_MODE_WINDOWS):
+            try:
+                window._update_color_mode_label()
+            except Exception:
+                pass
+
+    def _on_root_knob_changed() -> None:
+        try:
+            knob = nuke.thisKnob()
+            knob_name = knob.name() if knob else ""
+            if knob_name and knob_name not in (
+                "colorManagement",
+                "OCIO_config",
+                "ocio_config",
+                "color_management",
+            ):
+                return
+        except Exception:
+            pass
+        _notify_windows()
+
+    try:
+        nuke.addKnobChanged(_on_root_knob_changed, nodeClass="Root")
+        nuke.addOnScriptLoad(_notify_windows)
+    except Exception:
+        return
+
+    _COLOR_MODE_HOOK_INSTALLED = True
 
 
 class CharonWindow(QtWidgets.QWidget):
@@ -3048,20 +3092,18 @@ _run()
         
         info_layout.addWidget(self.mode_3d_button)
         
-        # ACEScg Toggle Button
-        self._aces_off_style = """
-            QPushButton {
+        # Color Mode Badge
+        self._color_mode_srgb_style = """
+            QLabel {
                 padding: 0px 8px;
                 border: 1px solid #2c323c;
                 border-radius: 4px;
                 background-color: #37383D;
                 color: #e8eaef;
             }
-            QPushButton:hover { background-color: #404248; }
-            QPushButton:pressed { background-color: #2f3034; }
         """
-        self._aces_on_style = """
-            QPushButton {
+        self._color_mode_aces_style = """
+            QLabel {
                 padding: 0px 8px;
                 border: 1px solid #1c7ed6;
                 border-radius: 4px;
@@ -3069,26 +3111,16 @@ _run()
                 color: white;
                 font-weight: normal;
             }
-            QPushButton:hover { background-color: #4dabf7; }
         """
-        
-        self.aces_toggle_button = QtWidgets.QPushButton("ACES Off", info_container)
-        self.aces_toggle_button.setCheckable(True)
-        self.aces_toggle_button.setFixedHeight(24)
-        self.aces_toggle_button.setFixedWidth(80)
-        self.aces_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.aces_toggle_button.setStyleSheet(self._aces_off_style)
-        self.aces_toggle_button.setToolTip("Toggle ACEScg color space handling for ComfyUI integration")
-        self.aces_toggle_button.toggled.connect(self._on_aces_toggle_changed)
-        
-        from .. import preferences
-        initial_aces_state = preferences.get_preference("aces_mode_enabled", False)
-        self.aces_toggle_button.setChecked(initial_aces_state)
-        if initial_aces_state:
-             self.aces_toggle_button.setText("ACES On")
-             self.aces_toggle_button.setStyleSheet(self._aces_on_style)
 
-        info_layout.addWidget(self.aces_toggle_button)
+        self.color_mode_label = QtWidgets.QLabel("sRGB", info_container)
+        self.color_mode_label.setFixedHeight(24)
+        self.color_mode_label.setFixedWidth(80)
+        self.color_mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.color_mode_label.setStyleSheet(self._color_mode_srgb_style)
+        self.color_mode_label.setToolTip("Scene color management mode")
+        info_layout.addWidget(self.color_mode_label)
+        self._register_color_mode_status()
         
 
         
@@ -3727,21 +3759,26 @@ QPushButton#NewWorkflowButton:pressed {{
         if handler:
             handler()
 
-    def _on_aces_toggle_changed(self, checked: bool) -> None:
-        """Save the ACEScg toggle state to preferences."""
-        from .. import preferences
-        preferences.set_preference("aces_mode_enabled", checked)
-        system_debug(f"ACEScg mode toggled: {checked}")
-        
-        if hasattr(self, 'aces_toggle_button'):
-            if checked:
-                self.aces_toggle_button.setText("ACES On")
-                if hasattr(self, '_aces_on_style'):
-                    self.aces_toggle_button.setStyleSheet(self._aces_on_style)
-            else:
-                self.aces_toggle_button.setText("ACES Off")
-                if hasattr(self, '_aces_off_style'):
-                    self.aces_toggle_button.setStyleSheet(self._aces_off_style)
+    def _register_color_mode_status(self) -> None:
+        _COLOR_MODE_WINDOWS.add(self)
+        _install_color_mode_hook()
+        self._update_color_mode_label()
+
+    def _update_color_mode_label(self) -> None:
+        if not hasattr(self, "color_mode_label"):
+            return
+        from ..color_management import current_color_mode
+        mode = current_color_mode()
+        try:
+            self.color_mode_label.setText(mode)
+        except Exception:
+            return
+        if mode == "ACES":
+            if hasattr(self, "_color_mode_aces_style"):
+                self.color_mode_label.setStyleSheet(self._color_mode_aces_style)
+        else:
+            if hasattr(self, "_color_mode_srgb_style"):
+                self.color_mode_label.setStyleSheet(self._color_mode_srgb_style)
     
     def _run_script_by_path(self, script_path: str):
         """Run a script by its path - delegates to execute_script."""
