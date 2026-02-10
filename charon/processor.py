@@ -21,6 +21,7 @@ from .paths import (
     allocate_charon_output_path,
     allocate_custom_output_path,
     get_default_comfy_launch_path,
+    get_charon_temp_dir,
     get_nuke_script_hash,
     get_placeholder_image_path,
     _normalize_charon_root,
@@ -1631,7 +1632,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             text = str(value).strip().lower()
             if not text:
                 return ""
-            return text[:12]
+            max_len = max(4, int(getattr(config, "CHARON_NODE_ID_LENGTH", 12)))
+            return text[:max_len]
 
         def _normalize_script_hash(value: Optional[str]) -> str:
             if not value:
@@ -2940,14 +2942,71 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 node.knob('charon_temp_dir').setValue(temp_root)
             except Exception:
                 pass
+
+        trace_log_path = ""
+        trace_step_counter = 0
+
+        def trace_step(message: str, **fields) -> None:
+            nonlocal trace_step_counter
+            trace_step_counter += 1
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            line = f"[{timestamp}] step={trace_step_counter:04d} {message}"
+            if fields:
+                serialized = ", ".join(f"{key}={fields[key]}" for key in sorted(fields))
+                if serialized:
+                    line = f"{line} | {serialized}"
+            try:
+                log_debug(f"[STEP] {line}")
+            except Exception:
+                pass
+            if not trace_log_path:
+                return
+            try:
+                with open(trace_log_path, "a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            except Exception:
+                pass
+
+        try:
+            debug_root = get_charon_temp_dir(temp_root)
+        except Exception:
+            debug_root = _normalize_charon_root(temp_root)
+            try:
+                os.makedirs(debug_root, exist_ok=True)
+                for _subdir in ("temp", "exports", "results", "debug"):
+                    os.makedirs(os.path.join(debug_root, _subdir), exist_ok=True)
+            except Exception:
+                pass
+        debug_dir = os.path.join(debug_root, "debug")
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
+        except Exception:
+            pass
+        trace_log_path = os.path.join(
+            debug_dir,
+            f"charon_step_trace_{int(time.time())}_{(charon_node_id or 'unknown')}_{str(uuid.uuid4())[:8]}.log",
+        ).replace("\\", "/")
+        trace_step(
+            "trace_started",
+            trace_log=trace_log_path,
+            node_name=getattr(node, "name", lambda: "unknown")(),
+            node_id=charon_node_id or "",
+            recursive=int(bool(is_recursive_call)),
+        )
         try:
             workflow_path = node.knob('workflow_path').value()
         except Exception:
             workflow_path = ''
 
         workflow_display_name = _resolve_workflow_display_name()
+        trace_step("workflow_context_loaded", workflow_path=workflow_path or "", workflow_name=workflow_display_name)
 
         if not workflow_data_str or not input_mapping_str:
+            trace_step(
+                "missing_workflow_or_input_mapping",
+                has_workflow_data=int(bool(workflow_data_str)),
+                has_input_mapping=int(bool(input_mapping_str)),
+            )
             log_debug('No workflow data found on CharonOp node', 'ERROR')
             raise RuntimeError('Missing workflow data on CharonOp node')
 
@@ -2958,6 +3017,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
 
         input_mapping = json.loads(input_mapping_str)
+        trace_step(
+            "payloads_decoded",
+            workflow_type=type(workflow_data).__name__,
+            input_mapping_type=type(input_mapping).__name__,
+        )
         parameter_specs = _load_parameter_specs(node)
         workflow_is_api = is_api_prompt(workflow_data)
         try:
@@ -3092,7 +3156,14 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             })
         elif not render_jobs and expected_inputs > 0:
             log_debug('Expected input nodes but none are connected', 'ERROR')
+            trace_step("missing_connected_inputs", expected_inputs=expected_inputs, connected_inputs=len(connected_inputs))
             raise RuntimeError('Please connect the required input nodes before processing')
+        trace_step(
+            "input_resolution_completed",
+            connected_inputs=len(connected_inputs),
+            render_jobs=len(render_jobs),
+            expected_inputs=expected_inputs,
+        )
 
         primary_job = None
         for job in render_jobs:
@@ -3106,6 +3177,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         rendered_files = {}
         if render_jobs:
+            trace_step("input_rendering_started", jobs=len(render_jobs))
             current_frame = int(nuke.frame())
             for job in render_jobs:
                 idx = job['index']
@@ -3213,6 +3285,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                 rendered_files[idx] = temp_path
                 log_debug(f"Rendered '{friendly_name}' to {temp_path_nuke}")
+                trace_step(
+                    "input_rendered",
+                    index=idx,
+                    name=friendly_name,
+                    file=temp_path_nuke,
+                )
+            trace_step("input_rendering_completed", rendered_files=len(rendered_files))
 
         _charon_window, comfy_client, comfy_path = _resolve_comfy_environment()
         if not comfy_client:
@@ -3361,6 +3440,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     except Exception:
                         pass
             try:
+                trace_step("background_process_started", batch_count=batch_count)
                 update_progress(0.05, 'Starting processing')
                 conversion_extra = {}
                 cache_hit = None
@@ -3370,6 +3450,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 needs_conversion_local = needs_conversion
 
                 if initial_prompt_data is not None:
+                    trace_step("conversion_skipped_using_initial_prompt", has_prompt_path=int(bool(converted_prompt_path)))
                     if converted_prompt_path:
                         conversion_extra.update({
                             'converted_prompt_path': converted_prompt_path,
@@ -3381,6 +3462,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     needs_conversion_local = False
 
                 if needs_conversion_local and workflow_hash and workflow_folder:
+                    trace_step("conversion_cache_lookup", workflow_hash=(workflow_hash or "")[:12], has_folder=int(bool(workflow_folder)))
                     try:
                         cache_hit = load_cached_conversion(workflow_folder, workflow_hash)
                     except Exception as exc:
@@ -3389,6 +3471,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                 if needs_conversion_local:
                     if cache_hit:
+                        trace_step("conversion_cache_hit", prompt_path=cache_hit.get("prompt_path", ""))
                         try:
                             with open(cache_hit['prompt_path'], 'r', encoding='utf-8') as handle:
                                 prompt_data = json.load(handle)
@@ -3406,6 +3489,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             converted_prompt_path = None
 
                     if not cache_hit:
+                        trace_step("conversion_start")
                         update_progress(0.1, 'Converting workflow')
                         if not comfy_path:
                             raise RuntimeError(
@@ -3413,7 +3497,9 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             )
                         try:
                             converted_prompt = runtime_convert_workflow(workflow_data, comfy_path)
+                            trace_step("conversion_completed")
                         except Exception as exc:
+                            trace_step("conversion_failed", error=str(exc))
                             log_debug(f'Workflow conversion failed: {exc}', 'ERROR')
                             raise
                         if not is_api_prompt(converted_prompt):
@@ -3514,6 +3600,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     update_progress(0.2, 'Uploading images', extra=conversion_extra or None)
                 else:
                     update_progress(0.2, 'Preparing submission', extra=conversion_extra or None)
+                trace_step("submission_prepared", render_jobs=len(render_jobs))
 
                 workflow_copy = copy.deepcopy(prompt_data)
                 applied_overrides = _apply_parameter_overrides(
@@ -3528,6 +3615,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     )
 
                 uploaded_assets = {}
+                upload_retries = max(1, int(getattr(config, "COMFY_UPLOAD_RETRIES", 3)))
+                upload_retry_delay = float(getattr(config, "COMFY_UPLOAD_RETRY_DELAY_SEC", 1.0))
                 for job in render_jobs:
                     idx = job['index']
                     temp_path = rendered_files.get(idx)
@@ -3535,11 +3624,52 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     friendly_name = mapping.get('name', f'Input {idx + 1}') if isinstance(mapping, dict) else f'Input {idx + 1}'
                     if not temp_path or not os.path.exists(temp_path):
                         raise Exception(f"Temp file missing for '{friendly_name}'")
-                    uploaded_filename = comfy_client.upload_image(temp_path)
+                    trace_step(
+                        "input_upload_start",
+                        index=idx,
+                        name=friendly_name,
+                        file=temp_path.replace("\\", "/"),
+                        retries=upload_retries,
+                    )
+                    uploaded_filename = None
+                    last_upload_error = ""
+                    for upload_attempt in range(upload_retries):
+                        trace_step(
+                            "input_upload_attempt",
+                            index=idx,
+                            attempt=upload_attempt + 1,
+                            total_attempts=upload_retries,
+                        )
+                        try:
+                            uploaded_filename = comfy_client.upload_image(temp_path)
+                        except Exception as upload_exc:
+                            uploaded_filename = None
+                            last_upload_error = str(upload_exc)
+                        if not uploaded_filename and not last_upload_error:
+                            try:
+                                last_upload_error = str(getattr(comfy_client, "last_error", "") or "")
+                            except Exception:
+                                last_upload_error = ""
+                        if uploaded_filename:
+                            break
+                        if not last_upload_error:
+                            last_upload_error = "empty_upload_response"
+                        if upload_attempt < upload_retries - 1:
+                            time.sleep(upload_retry_delay)
                     if not uploaded_filename:
-                        raise Exception(f"Failed to upload '{friendly_name}' to ComfyUI")
+                        trace_step(
+                            "input_upload_failed",
+                            index=idx,
+                            name=friendly_name,
+                            error=last_upload_error or "unknown_upload_error",
+                        )
+                        raise Exception(
+                            f"Failed to upload '{friendly_name}' to ComfyUI after {upload_retries} attempt(s). "
+                            f"Last error: {last_upload_error or 'unknown'}"
+                        )
                     uploaded_assets[idx] = uploaded_filename
                     log_debug(f"Uploaded '{friendly_name}' as {uploaded_filename}")
+                    trace_step("input_uploaded", index=idx, uploaded_name=uploaded_filename)
                     progress = 0.2 + (0.2 * (len(uploaded_assets) / len(render_jobs)))
                     update_progress(progress, f'Uploaded {len(uploaded_assets)}/{len(render_jobs)} images')
 
@@ -3906,6 +4036,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
 
                 for batch_index in range(batch_count):
+                    trace_step("batch_started", batch=batch_index + 1, total=batch_count)
                     seed_offset = batch_index * 9973
                     prompt_payload = copy.deepcopy(base_prompt)
                     
@@ -3950,6 +4081,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             save_hint = f' (converted prompt saved to {converted_prompt_path})'
                         log_debug(f'ComfyUI did not return a prompt id{save_hint}', 'ERROR')
                         raise Exception(f'Failed to submit workflow{save_hint}')
+                    trace_step("batch_submitted", batch=batch_index + 1, prompt_id=prompt_id)
 
                     try:
                         node.knob('charon_prompt_id').setValue(prompt_id)
@@ -3958,6 +4090,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                     start_time = time.time()
                     timeout = _resolve_batch_timeout()
+                    poll_iteration = 0
+                    next_poll_trace_at = start_time
                     update_progress(
                         _progress_for(batch_index, 0.1),
                         f'{batch_label}: queued on ComfyUI',
@@ -3970,9 +4104,26 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     )
 
                     while time.time() - start_time < timeout:
+                        poll_iteration += 1
+                        now_poll = time.time()
+                        if now_poll >= next_poll_trace_at:
+                            trace_step(
+                                "batch_poll_tick",
+                                batch=batch_index + 1,
+                                iteration=poll_iteration,
+                                elapsed_sec=f"{now_poll - start_time:.1f}",
+                            )
+                            next_poll_trace_at = now_poll + 5.0
                         status_str = None
                         if hasattr(comfy_client, 'get_progress_for_prompt'):
+                            trace_step("batch_poll_progress_start", batch=batch_index + 1, iteration=poll_iteration)
                             progress_val = comfy_client.get_progress_for_prompt(prompt_id)
+                            trace_step(
+                                "batch_poll_progress_done",
+                                batch=batch_index + 1,
+                                iteration=poll_iteration,
+                                progress=float(progress_val or 0.0),
+                            )
                             if progress_val > 0:
                                 mapped_progress = _progress_for(batch_index, 0.2 + (progress_val * 0.6))
                                 update_progress(
@@ -3986,41 +4137,91 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     },
                                 )
 
+                            trace_step("batch_poll_history_start", batch=batch_index + 1, iteration=poll_iteration)
                             history = comfy_client.get_history(prompt_id)
+                            trace_step(
+                                "batch_poll_history_done",
+                                batch=batch_index + 1,
+                                iteration=poll_iteration,
+                                has_history=int(bool(history)),
+                            )
                             if history and prompt_id in history:
                                 history_data = history[prompt_id]
                                 status_str = history_data.get('status', {}).get('status_str')
+                                trace_step(
+                                    "batch_poll_status",
+                                    batch=batch_index + 1,
+                                    iteration=poll_iteration,
+                                    status=status_str or "",
+                                )
                                 if status_str == 'success':
+                                    trace_step("batch_history_success", batch=batch_index + 1, prompt_id=prompt_id)
                                     outputs = history_data.get('outputs', {})
                                     artifacts = _collect_output_artifacts(outputs, base_prompt) if outputs else []
                                     if not artifacts:
-                                        artifacts = _recover_cached_artifacts(prompt_payload, prompt_id)
-                                    if not artifacts:
-                                        # Attempt prefix-based recovery using any SaveImage filename prefixes
                                         prefixes = []
                                         for node_entry in prompt_payload.values():
                                             if not isinstance(node_entry, dict):
                                                 continue
+                                            prefix_val = None
                                             if (node_entry.get("class_type") or "").lower() == "saveimage":
                                                 prefix_val = node_entry.get("inputs", {}).get("filename_prefix")
                                             if isinstance(prefix_val, str):
                                                 prefixes.append(prefix_val)
-                                        if prefixes:
-                                            artifacts = _recover_artifacts_by_prefix(prefixes)
+                                        history_recovery_enabled = bool(
+                                            getattr(config, "COMFY_ENABLE_HISTORY_RECOVERY", False)
+                                        )
+                                        if history_recovery_enabled:
+                                            trace_step("history_recovery_start", batch=batch_index + 1)
+                                            artifacts = _recover_cached_artifacts(prompt_payload, prompt_id)
+                                            trace_step(
+                                                "history_recovery_done",
+                                                batch=batch_index + 1,
+                                                recovered=len(artifacts),
+                                            )
+                                        else:
+                                            trace_step("history_recovery_skipped", batch=batch_index + 1)
                                         if not artifacts and prefixes:
                                             grace = float(getattr(config, "COMFY_OUTPUT_SCAN_GRACE_SEC", 30))
                                             scan_since = max(0.0, start_time - grace)
+                                            trace_step(
+                                                "output_dir_recovery_start",
+                                                batch=batch_index + 1,
+                                                prefixes=len(prefixes),
+                                                scan_since=f"{scan_since:.2f}",
+                                            )
                                             artifacts = _recover_artifacts_from_output_dir(
                                                 prefixes, comfy_output_root, scan_since
+                                            )
+                                            trace_step(
+                                                "output_dir_recovery_done",
+                                                batch=batch_index + 1,
+                                                recovered=len(artifacts),
                                             )
                                             if artifacts:
                                                 log_debug(
                                                     f"Recovered {len(artifacts)} outputs from local ComfyUI output scan"
                                                 )
+                                        if not artifacts and prefixes and history_recovery_enabled:
+                                            trace_step("prefix_history_recovery_start", batch=batch_index + 1)
+                                            artifacts = _recover_artifacts_by_prefix(prefixes)
+                                            trace_step(
+                                                "prefix_history_recovery_done",
+                                                batch=batch_index + 1,
+                                                recovered=len(artifacts),
+                                            )
                                     if not artifacts:
+                                        trace_step("no_artifacts_after_recovery", batch=batch_index + 1)
                                         raise Exception('ComfyUI did not return an output file')
 
                                     for artifact_index, artifact in enumerate(artifacts):
+                                        trace_step(
+                                            "artifact_download_start",
+                                            batch=batch_index + 1,
+                                            artifact_index=artifact_index + 1,
+                                            artifact_total=len(artifacts),
+                                            filename=artifact.get("filename", ""),
+                                        )
                                         artifact_progress = 0.8 + (0.2 * ((artifact_index + 1) / len(artifacts)))
                                         update_progress(
                                             _progress_for(batch_index, artifact_progress),
@@ -4137,6 +4338,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                         )
                                                         success = False
                                         if not success:
+                                            trace_step(
+                                                "artifact_download_failed",
+                                                batch=batch_index + 1,
+                                                filename=artifact.get("filename", ""),
+                                            )
                                             raise Exception('Failed to download result file from ComfyUI')
 
                                         final_output_path = allocated_output_path
@@ -4145,6 +4351,12 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             obj_target = os.path.splitext(allocated_output_path)[0] + ".obj"
                                             log_debug(f'Converting GLB to OBJ: {allocated_output_path} -> {obj_target}')
                                             final_output_path = _convert_glb_to_obj(allocated_output_path, obj_target)
+                                            trace_step(
+                                                "glb_converted",
+                                                batch=batch_index + 1,
+                                                source=allocated_output_path.replace("\\", "/"),
+                                                target=final_output_path.replace("\\", "/"),
+                                            )
                                             converted_from = allocated_output_path
 
                                         elapsed = time.time() - start_time
@@ -4187,6 +4399,12 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             log_debug(f"Skipped recording ignored output: {batch_entry['original_filename']}")
                                             continue
                                         batch_outputs.append(batch_entry)
+                                        trace_step(
+                                            "artifact_recorded",
+                                            batch=batch_index + 1,
+                                            output_path=normalized_output_path,
+                                            output_kind=category,
+                                        )
 
                                     if batch_outputs:
                                         last_entry = batch_outputs[-1]
@@ -4204,6 +4422,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             f'{batch_label}: completed',
                                             extra=extra_payload,
                                         )
+                                        trace_step("batch_completed", batch=batch_index + 1, outputs=len(batch_outputs))
                                     break
                             elif status_str == 'error':
                                 error_msg = history_data.get('status', {}).get('status_message', 'Unknown error')
@@ -4215,6 +4434,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         raise Exception('Processing timed out')
 
                 if not batch_outputs:
+                    trace_step("no_outputs_generated")
                     raise Exception('No outputs were generated by ComfyUI')
 
                 node_x, node_y = _safe_node_coords()
@@ -4234,10 +4454,12 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     'output_kind': last_kind,
                 }
                 _write_result_file(result_data)
+                trace_step("result_file_written_success", result_file=result_file.replace("\\", "/"), outputs=len(batch_outputs))
                 return
 
             except Exception as exc:
                 message = f'Error: {exc}'
+                trace_step("background_process_error", error=str(exc))
                 update_progress(-1.0, message, error=str(exc))
                 node_x, node_y = _safe_node_coords()
                 result_data = {
@@ -4247,6 +4469,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     'node_y': node_y,
                 }
                 _write_result_file(result_data)
+                trace_step("result_file_written_error", result_file=result_file.replace("\\", "/"))
 
         # Early Spawn for Recursive Mode (Iteration 0) - Executed in Main Thread (After Input Resolution)
         if rec_enabled_captured and rec_current_captured == 0 and rec_loop_start_captured:
@@ -4350,6 +4573,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         bg_thread = threading.Thread(target=background_process)
         bg_thread.daemon = True
         bg_thread.start()
+        trace_step("background_thread_started")
 
         def _resolve_result_watch_timeout() -> float:
             base_timeout = float(getattr(config, "COMFY_RESULT_WATCH_TIMEOUT_SEC", 300))
@@ -4360,6 +4584,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             watch_start = time.time()
             watch_timeout = _resolve_result_watch_timeout()
             last_read_error = 0.0
+            trace_step("result_watcher_started", timeout_sec=watch_timeout)
             while time.time() - watch_start < watch_timeout:
                 if os.path.exists(result_file):
                     try:
@@ -4372,6 +4597,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     try:
                         with open(result_file, 'r') as fp:
                             result_data = json.load(fp)
+                        trace_step(
+                            "result_file_detected",
+                            success=int(bool(result_data.get("success"))),
+                            result_file=result_file.replace("\\", "/"),
+                        )
                         if result_data.get('success'):
                             def cleanup_files():
                                 try:
@@ -4399,6 +4629,27 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                             if resolve_auto_import():
                                 def update_or_create_read_nodes():
+                                    trace_step("mainthread_import_enter")
+                                    ingest_started_at = time.time()
+                                    log_debug("Starting output ingestion into Nuke nodes.")
+                                    max_auto_import_outputs = int(
+                                        getattr(config, "AUTO_IMPORT_MAX_OUTPUTS", 200)
+                                    )
+                                    max_auto_import_per_group = int(
+                                        getattr(config, "AUTO_IMPORT_MAX_PER_GROUP", 120)
+                                    )
+                                    limited_entries = list(entries)
+                                    if (
+                                        max_auto_import_outputs > 0
+                                        and len(limited_entries) > max_auto_import_outputs
+                                    ):
+                                        dropped = len(limited_entries) - max_auto_import_outputs
+                                        limited_entries = limited_entries[-max_auto_import_outputs:]
+                                        log_debug(
+                                            f"Auto-import capped to last {max_auto_import_outputs} outputs "
+                                            f"(dropped {dropped} older entries).",
+                                            "WARNING",
+                                        )
                                     reuse_existing = True
                                     try:
                                         reuse_knob = node.knob('charon_reuse_output')
@@ -4408,26 +4659,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         reuse_existing = False
 
                                     def _matches_parent(candidate):
-                                        normalized_parent = (charon_node_id or "").strip().lower()
+                                        normalized_parent = _normalize_node_id(charon_node_id)
                                         if not normalized_parent:
                                             return False
-                                        try:
-                                            meta_parent = (candidate.metadata('charon/parent_id') or "").strip().lower()
-                                        except Exception:
-                                            meta_parent = ""
-                                        if meta_parent == normalized_parent:
-                                            return True
-                                        try:
-                                            knob_parent = (candidate.knob('charon_parent_id').value() or "").strip().lower()
-                                        except Exception:
-                                            knob_parent = ""
-                                        if knob_parent == normalized_parent:
-                                            return True
-                                        try:
-                                            meta_charon = (candidate.metadata('charon/node_id') or "").strip().lower()
-                                        except Exception:
-                                            meta_charon = ""
-                                        return meta_charon == normalized_parent
+                                        return _normalize_node_id(read_node_parent_id(candidate)) == normalized_parent
 
                                     def _remove_mismatched_reads(required_class: str):
                                         try:
@@ -4504,11 +4739,23 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             base = f"{base}_{_sanitize_name(str(node_id_val), '')}"
                                         return base
 
-                                    def _find_grouped_read(required_class: str, parent_norm: str, group_label: str):
+                                    parent_norm = _normalize_node_id(charon_node_id)
+                                    if not parent_norm:
+                                        log_debug(
+                                            "Charon node ID is missing; skipping auto-import to avoid orphaned read nodes.",
+                                            "ERROR",
+                                        )
+                                        cleanup_files()
+                                        return
+
+                                    grouped_candidates: Dict[str, Dict[str, Any]] = {"Read": {}, "ReadGeo2": {}}
+
+                                    def _index_grouped_reads(required_class: str):
                                         try:
                                             candidates = list(nuke.allNodes(required_class))
                                         except Exception:
                                             candidates = []
+                                        label_map: Dict[str, Any] = {}
                                         for candidate in candidates:
                                             if not _matches_parent(candidate):
                                                 continue
@@ -4523,11 +4770,17 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                         current_label = str(knob_val.value() or "").strip().lower()
                                                 except Exception:
                                                     current_label = ""
-                                            if current_label == group_label.lower():
-                                                return candidate
-                                        return None
+                                            if current_label and current_label not in label_map:
+                                                label_map[current_label] = candidate
+                                        grouped_candidates[required_class] = label_map
 
-                                    parent_norm = _normalize_node_id(charon_node_id)
+                                    def _find_grouped_read(required_class: str, group_label: str):
+                                        class_map = grouped_candidates.get(required_class) or {}
+                                        return class_map.get((group_label or "").lower())
+
+                                    _index_grouped_reads("Read")
+                                    _index_grouped_reads("ReadGeo2")
+
                                     placeholder_norm = ""
                                     try:
                                         placeholder_norm = (get_placeholder_image_path() or "").replace("\\", "/").lower()
@@ -4562,13 +4815,23 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 except Exception:
                                                     pass
 
-                                    image_entries = [e for e in entries if _is_image_entry(e)]
-                                    mesh_entries = [e for e in entries if _is_mesh_entry(e)]
-                                    camera_entries = [e for e in entries if _is_camera_entry(e)]
+                                    image_entries = [e for e in limited_entries if _is_image_entry(e)]
+                                    mesh_entries = [e for e in limited_entries if _is_mesh_entry(e)]
+                                    camera_entries = [e for e in limited_entries if _is_camera_entry(e)]
+                                    trace_step(
+                                        "mainthread_import_classified",
+                                        image_entries=len(image_entries),
+                                        mesh_entries=len(mesh_entries),
+                                        camera_entries=len(camera_entries),
+                                    )
 
                                     if not image_entries and not mesh_entries and not camera_entries:
                                         log_debug('No output paths available for Read update.', 'WARNING')
                                         cleanup_files()
+                                        log_debug(
+                                            f"Output ingestion finished with no importable entries in "
+                                            f"{time.time() - ingest_started_at:.2f}s."
+                                        )
                                         return
                                         
 
@@ -4606,6 +4869,216 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             except Exception:
                                                 pass
 
+                                    def _ensure_inverse_view_transform(read_node) -> None:
+                                        outcome = "unknown"
+                                        outcome_details: Dict[str, Any] = {}
+                                        enable_ivt = bool(getattr(config, "AUTO_IMPORT_ATTACH_IVT", True))
+                                        if not enable_ivt:
+                                            log_debug("Skipping IVT attach: disabled by config.")
+                                            outcome = "skipped"
+                                            outcome_details["reason"] = "disabled_by_config"
+                                            try:
+                                                trace_step("mainthread_ivt_skipped", reason="disabled_by_config")
+                                            except Exception:
+                                                pass
+                                            try:
+                                                trace_step(
+                                                    "mainthread_ivt_outcome",
+                                                    outcome=outcome,
+                                                    read_node=read_node.name(),
+                                                    **outcome_details,
+                                                )
+                                            except Exception:
+                                                pass
+                                            return
+                                        try:
+                                            from .color_management import is_aces_enabled
+                                            aces_enabled = bool(is_aces_enabled())
+                                        except Exception as aces_error:
+                                            log_debug(f"Skipping IVT attach: ACES check failed ({aces_error}).", "WARNING")
+                                            outcome = "skipped"
+                                            outcome_details["reason"] = "aces_check_error"
+                                            outcome_details["error"] = str(aces_error)
+                                            try:
+                                                trace_step(
+                                                    "mainthread_ivt_skipped",
+                                                    reason="aces_check_error",
+                                                    error=str(aces_error),
+                                                )
+                                            except Exception:
+                                                pass
+                                            try:
+                                                trace_step(
+                                                    "mainthread_ivt_outcome",
+                                                    outcome=outcome,
+                                                    read_node=read_node.name(),
+                                                    **outcome_details,
+                                                )
+                                            except Exception:
+                                                pass
+                                            return
+                                        if not aces_enabled:
+                                            log_debug("Skipping IVT attach: ACES is disabled.")
+                                            outcome = "skipped"
+                                            outcome_details["reason"] = "aces_disabled"
+                                            try:
+                                                trace_step("mainthread_ivt_skipped", reason="aces_disabled")
+                                            except Exception:
+                                                pass
+                                            try:
+                                                trace_step(
+                                                    "mainthread_ivt_outcome",
+                                                    outcome=outcome,
+                                                    read_node=read_node.name(),
+                                                    **outcome_details,
+                                                )
+                                            except Exception:
+                                                pass
+                                            return
+
+                                        try:
+                                            deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=False)
+                                        except Exception:
+                                            deps = []
+                                        for dep in deps:
+                                            try:
+                                                dep_name = dep.name()
+                                            except Exception:
+                                                dep_name = ""
+                                            if "InverseViewTransform" in dep_name:
+                                                is_wired = False
+                                                try:
+                                                    is_wired = dep.input(0) is read_node
+                                                except Exception:
+                                                    is_wired = False
+                                                if not is_wired:
+                                                    continue
+                                                log_debug(
+                                                    f"Skipping IVT attach: IVT already wired to {read_node.name()}."
+                                                )
+                                                outcome = "skipped"
+                                                outcome_details["reason"] = "already_present"
+                                                try:
+                                                    trace_step(
+                                                        "mainthread_ivt_skipped",
+                                                        reason="already_present",
+                                                        read_node=read_node.name(),
+                                                    )
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    trace_step(
+                                                        "mainthread_ivt_outcome",
+                                                        outcome=outcome,
+                                                        read_node=read_node.name(),
+                                                        **outcome_details,
+                                                    )
+                                                except Exception:
+                                                    pass
+                                                return
+
+                                        ivt_temp = os.path.join(
+                                            _normalize_charon_root(temp_root),
+                                            f"ivt_import_{str(uuid.uuid4())[:8]}.nk",
+                                        ).replace("\\", "/")
+                                        try:
+                                            try:
+                                                os.makedirs(os.path.dirname(ivt_temp), exist_ok=True)
+                                            except Exception:
+                                                pass
+                                            parent_ctx = None
+                                            try:
+                                                parent_ctx = read_node.parent() or nuke.root()
+                                            except Exception:
+                                                parent_ctx = nuke.root()
+
+                                            with open(ivt_temp, "w", encoding="utf-8") as handle:
+                                                handle.write(INVERSE_VIEW_TRANSFORM_GROUP)
+                                            with parent_ctx:
+                                                try:
+                                                    for selected in nuke.selectedNodes():
+                                                        selected.setSelected(False)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    read_node.setSelected(True)
+                                                except Exception:
+                                                    pass
+                                                nuke.nodePaste(ivt_temp)
+                                                ivt_node = nuke.selectedNode()
+                                            if ivt_node is not None:
+                                                ivt_name = ""
+                                                try:
+                                                    ivt_name = ivt_node.name() or ""
+                                                except Exception:
+                                                    ivt_name = ""
+                                                if "InverseViewTransform" not in ivt_name:
+                                                    raise RuntimeError(
+                                                        f"Pasted node is not InverseViewTransform: '{ivt_name}'"
+                                                    )
+                                                try:
+                                                    ivt_node.setInput(0, read_node)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    ivt_node.setXpos(read_node.xpos())
+                                                    ivt_node.setYpos(read_node.ypos() + 120)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    ivt_node['tile_color'].setValue(0x0000FFFF)
+                                                    ivt_node['gl_color'].setValue(0x0000FFFF)
+                                                except Exception:
+                                                    pass
+                                                try:
+                                                    trace_step(
+                                                        "mainthread_ivt_attached",
+                                                        read_node=read_node.name(),
+                                                        ivt_node=ivt_node.name(),
+                                                    )
+                                                except Exception:
+                                                    pass
+                                                log_debug(
+                                                    f"Attached IVT node {ivt_node.name()} to read {read_node.name()}."
+                                                )
+                                                outcome = "attached"
+                                                outcome_details["ivt_node"] = ivt_node.name()
+                                            else:
+                                                log_debug("Failed to attach IVT: nodePaste returned no selected node.")
+                                                outcome = "error"
+                                                outcome_details["reason"] = "paste_returned_no_node"
+                                                try:
+                                                    trace_step(
+                                                        "mainthread_ivt_attach_error",
+                                                        error="paste_returned_no_node",
+                                                    )
+                                                except Exception:
+                                                    pass
+                                        except Exception as ivt_error:
+                                            log_debug(f"Failed to attach InverseViewTransform: {ivt_error}", "WARNING")
+                                            outcome = "error"
+                                            outcome_details["reason"] = "attach_exception"
+                                            outcome_details["error"] = str(ivt_error)
+                                            try:
+                                                trace_step("mainthread_ivt_attach_error", error=str(ivt_error))
+                                            except Exception:
+                                                pass
+                                        finally:
+                                            try:
+                                                if os.path.exists(ivt_temp):
+                                                    os.remove(ivt_temp)
+                                            except Exception:
+                                                pass
+                                        try:
+                                            trace_step(
+                                                "mainthread_ivt_outcome",
+                                                outcome=outcome,
+                                                read_node=read_node.name(),
+                                                **outcome_details,
+                                            )
+                                        except Exception:
+                                            pass
+
                                     grouped_images: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in image_entries:
                                         label = _output_label(entry, "Output2D")
@@ -4616,11 +5089,29 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     y_base = node_y + 60
 
                                     for group_index, (label, group_entries) in enumerate(grouped_images.items()):
+                                        trace_step(
+                                            "mainthread_import_image_group",
+                                            label=label,
+                                            entries=len(group_entries),
+                                            group_index=group_index + 1,
+                                        )
+                                        if (
+                                            max_auto_import_per_group > 0
+                                            and len(group_entries) > max_auto_import_per_group
+                                        ):
+                                            dropped = len(group_entries) - max_auto_import_per_group
+                                            group_entries = group_entries[-max_auto_import_per_group:]
+                                            log_debug(
+                                                f"Auto-import capped image group '{label}' to "
+                                                f"{max_auto_import_per_group} entries "
+                                                f"(dropped {dropped} older entries).",
+                                                "WARNING",
+                                            )
                                         group_paths = [e.get('output_path') for e in group_entries if e.get('output_path')]
                                         if not group_paths:
                                             continue
                                         required_class = "Read"
-                                        read_node = _find_grouped_read(required_class, parent_norm, label)
+                                        read_node = _find_grouped_read(required_class, label)
                                         if read_node is None:
                                             try:
                                                 read_node = nuke.createNode(required_class)
@@ -4701,50 +5192,30 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         _ensure_output_label_metadata(read_node, label)
                                         mark_read_node(read_node)
                                         try:
+                                            trace_step("mainthread_ivt_check", read_node=read_node.name())
+                                        except Exception:
+                                            pass
+                                        try:
+                                            _ensure_inverse_view_transform(read_node)
+                                        except Exception as ivt_call_error:
+                                            log_debug(
+                                                f"IVT attach call failed for {getattr(read_node, 'name', lambda: 'unknown')()}: {ivt_call_error}",
+                                                "WARNING",
+                                            )
+                                            try:
+                                                trace_step(
+                                                    "mainthread_ivt_call_error",
+                                                    read_node=getattr(read_node, "name", lambda: "unknown")(),
+                                                    error=str(ivt_call_error),
+                                                )
+                                            except Exception:
+                                                pass
+                                        grouped_candidates.setdefault(required_class, {})[label.lower()] = read_node
+                                        try:
                                             apply_status_color(current_node_state, read_node)
                                         except Exception:
                                             pass
                                         layout_index += 1
-
-                                        # --- NEW CODE START ---
-                                        from .color_management import is_aces_enabled
-                                        aces_enabled = is_aces_enabled()
-                                        
-                                        if aces_enabled:
-                                            ivt_temp = os.path.join(temp_root, f"ivt_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
-                                            try:
-                                                with open(ivt_temp, "w") as f:
-                                                    f.write(INVERSE_VIEW_TRANSFORM_GROUP)
-                                                
-                                                ivt_node = None
-                                                try:
-                                                    for dep in read_node.dependent():
-                                                        if "InverseViewTransform" in dep.name() and dep.knob("viewTransform"):
-                                                            ivt_node = dep
-                                                            break
-                                                except: pass
-                                                
-                                                if not ivt_node:
-                                                    nuke.nodePaste(ivt_temp)
-                                                    ivt_node = nuke.selectedNode()
-                                                
-                                                if ivt_node:
-                                                    ivt_node.setInput(0, read_node)
-                                                    ivt_node.setXpos(read_node.xpos())
-                                                    ivt_node.setYpos(read_node.ypos() + 125)
-                                                    try:
-                                                        ivt_node['tile_color'].setValue(0x0000FFFF)
-                                                        ivt_node['gl_color'].setValue(0x0000FFFF)
-                                                    except: pass
-                                                    
-                                            except Exception as paste_error:
-                                                log_debug(f"Failed to paste InverseViewTransform: {paste_error}", "WARNING")
-                                            finally:
-                                                if os.path.exists(ivt_temp):
-                                                    try:
-                                                        os.remove(ivt_temp)
-                                                    except: pass
-                                        # --- NEW CODE END ---
 
                                     grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in mesh_entries:
@@ -4755,11 +5226,29 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     mesh_x_offset_step = 140
 
                                     for group_index, (label, group_entries) in enumerate(grouped_meshes.items()):
+                                        trace_step(
+                                            "mainthread_import_mesh_group",
+                                            label=label,
+                                            entries=len(group_entries),
+                                            group_index=group_index + 1,
+                                        )
+                                        if (
+                                            max_auto_import_per_group > 0
+                                            and len(group_entries) > max_auto_import_per_group
+                                        ):
+                                            dropped = len(group_entries) - max_auto_import_per_group
+                                            group_entries = group_entries[-max_auto_import_per_group:]
+                                            log_debug(
+                                                f"Auto-import capped mesh group '{label}' to "
+                                                f"{max_auto_import_per_group} entries "
+                                                f"(dropped {dropped} older entries).",
+                                                "WARNING",
+                                            )
                                         group_paths = [e.get('output_path') for e in group_entries if e.get('output_path')]
                                         if not group_paths:
                                             continue
                                         required_class = "ReadGeo2"
-                                        read_node = _find_grouped_read(required_class, parent_norm, label)
+                                        read_node = _find_grouped_read(required_class, label)
                                         if read_node is None:
                                             try:
                                                 read_node = nuke.createNode(required_class)
@@ -4913,10 +5402,33 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             mark_read_node(read_node)
                                         except Exception:
                                             pass
+                                        grouped_candidates.setdefault(required_class, {})[label.lower()] = read_node
 
                                     if camera_entries:
                                         parent_norm_local = _normalize_node_id(charon_node_id)
+                                        imported_camera_paths = set()
+                                        try:
+                                            for candidate in nuke.allNodes():
+                                                try:
+                                                    meta_path = (candidate.metadata('charon/camera_path') or '').strip()
+                                                except Exception:
+                                                    meta_path = ''
+                                                if meta_path:
+                                                    imported_camera_paths.add(
+                                                        os.path.normpath(meta_path).lower()
+                                                    )
+                                        except Exception:
+                                            imported_camera_paths = set()
                                         for camera_entry in camera_entries:
+                                            trace_step(
+                                                "mainthread_import_camera_entry",
+                                                path=(
+                                                    camera_entry.get('output_path')
+                                                    or camera_entry.get('download_path')
+                                                    or camera_entry.get('original_filename')
+                                                    or ''
+                                                ),
+                                            )
                                             camera_path = (
                                                 camera_entry.get('output_path')
                                                 or camera_entry.get('download_path')
@@ -4928,21 +5440,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 log_debug(f'Skipping camera import; file missing: {camera_path}', 'WARNING')
                                                 continue
 
-                                            def _already_imported(target: str) -> bool:
-                                                try:
-                                                    nodes = list(nuke.allNodes())
-                                                except Exception:
-                                                    nodes = []
-                                                for candidate in nodes:
-                                                    try:
-                                                        meta_path = (candidate.metadata('charon/camera_path') or '').strip()
-                                                    except Exception:
-                                                        meta_path = ''
-                                                    if os.path.normpath(meta_path).lower() == os.path.normpath(target).lower():
-                                                        return True
-                                                return False
-
-                                            if _already_imported(camera_path_norm):
+                                            camera_path_key = os.path.normpath(camera_path_norm).lower()
+                                            if camera_path_key in imported_camera_paths:
                                                 log_debug(f'Camera already imported: {camera_path_norm}')
                                                 continue
 
@@ -5071,12 +5570,35 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 except Exception:
                                                     pass
                                                 layout_index += 1
+                                            imported_camera_paths.add(camera_path_key)
 
+                                    log_debug(
+                                        f"Output ingestion completed: {len(image_entries)} image group entries, "
+                                        f"{len(mesh_entries)} mesh group entries, {len(camera_entries)} camera entries "
+                                        f"in {time.time() - ingest_started_at:.2f}s."
+                                    )
+                                    trace_step(
+                                        "mainthread_import_completed",
+                                        duration_sec=f"{time.time() - ingest_started_at:.2f}",
+                                    )
                                     cleanup_files()
+                                    trace_step("mainthread_import_cleanup_done")
 
+                                trace_step("mainthread_import_dispatch")
                                 nuke.executeInMainThread(update_or_create_read_nodes)
+                                trace_step("mainthread_import_returned")
 
                                 def check_auto_contact_sheet():
+                                    trace_step("mainthread_contact_sheet_enter")
+                                    auto_contact_sheet = bool(
+                                        getattr(config, "AUTO_CREATE_CONTACT_SHEET", False)
+                                    )
+                                    if not auto_contact_sheet:
+                                        log_debug(
+                                            "Auto contact-sheet creation is disabled; skipping."
+                                        )
+                                        trace_step("mainthread_contact_sheet_skipped")
+                                        return
                                     try:
                                         if entries:
                                             write_metadata('charon/batch_outputs', json.dumps(entries))
@@ -5087,10 +5609,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         create_contact_sheet_from_charonop(node)
                                     except Exception as cs_err:
                                         log_debug(f"Contact Sheet creation failed: {cs_err}", "WARNING")
-                                
+                                        trace_step("mainthread_contact_sheet_error", error=str(cs_err))
+                                    else:
+                                        trace_step("mainthread_contact_sheet_completed")
+
+                                trace_step("mainthread_contact_sheet_dispatch")
                                 nuke.executeInMainThread(check_auto_contact_sheet)
+                                trace_step("mainthread_contact_sheet_returned")
 
                                 def handle_recursion():
+                                    trace_step("mainthread_recursion_enter")
                                     try:
                                         is_recursive = bool(node.knob('charon_recursive_enable').value())
                                         iterations = int(node.knob('charon_recursive_iterations').value())
@@ -5188,10 +5716,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         import traceback
                                         traceback.print_exc()
                                         log_debug(f"Recursive trigger failed: {rec_err}", "WARNING")
-                                
+                                        trace_step("mainthread_recursion_error", error=str(rec_err))
+                                    else:
+                                        trace_step("mainthread_recursion_completed")
+
+                                trace_step("mainthread_recursion_dispatch")
                                 nuke.executeInMainThread(handle_recursion)
+                                trace_step("mainthread_recursion_returned")
                             else:
                                 log_debug('Auto import disabled; skipping Read node creation.')
+                                trace_step("auto_import_disabled")
                                 for idx, entry in enumerate(entries, start=1):
                                     output_path = entry.get('output_path')
                                     if output_path:
@@ -5202,9 +5736,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 except Exception:
                                     pass
                                 cleanup_files()
+                                trace_step("cleanup_done_no_auto_import")
                         else:
                             error_msg = result_data.get('error', 'Unknown error')
                             log_debug(f'Processing failed: {error_msg}', 'ERROR')
+                            trace_step("result_data_error", error=error_msg)
                             try:
                                 for temp_path in list(rendered_files.values()):
                                     if os.path.exists(temp_path):
@@ -5216,6 +5752,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         now_tick = time.time()
                         if now_tick - last_read_error > 2.0:
                             log_debug(f'Error reading result: {exc}', 'WARNING')
+                            trace_step("result_read_error", error=str(exc))
                             last_read_error = now_tick
                         time.sleep(0.2)
                         continue
@@ -5223,15 +5760,22 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 time.sleep(1.0)
             else:
                 log_debug('Timed out waiting for result file.', 'WARNING')
+                trace_step("result_watcher_timeout", timeout_sec=watch_timeout)
 
         watcher_thread = threading.Thread(target=result_watcher)
         watcher_thread.daemon = True
         watcher_thread.start()
+        trace_step("result_watcher_thread_started")
 
         log_debug('Processing started in background')
+        trace_step("process_charonop_node_returning")
 
     except Exception as exc:
         log_debug(f'Error: {exc}', 'ERROR')
+        try:
+            trace_step("process_charonop_node_error", error=str(exc))
+        except Exception:
+            pass
         message = f'Error: {exc}'
         try:
             node.knob('charon_status').setValue(message)
@@ -5327,16 +5871,22 @@ def create_contact_sheet_from_charonop(node_override=None):
                 if ext in IMAGE_OUTPUT_EXTENSIONS:
                     image_paths.append(path)
 
-    # Fallback: Scan directory if we have a hint but missing items
-    # This helps when metadata is truncated or lost but files exist
-    if len(image_paths) > 0:
+    # Optional fallback scan when metadata is incomplete.
+    # Disabled by default to avoid heavy scans on large output folders.
+    scan_contact_sheet_dir = bool(
+        getattr(config, "CONTACT_SHEET_SCAN_OUTPUT_DIR", False)
+    )
+    if scan_contact_sheet_dir and len(image_paths) > 0:
         ref_path = image_paths[0]
         parent_dir = os.path.dirname(ref_path)
         
         if parent_dir and os.path.isdir(parent_dir):
             scanned = []
+            max_scan_items = int(getattr(config, "CONTACT_SHEET_MAX_SCAN_FILES", 400))
             try:
                 for fname in os.listdir(parent_dir):
+                    if max_scan_items > 0 and len(scanned) >= max_scan_items:
+                        break
                     ext = os.path.splitext(fname)[1].lower()
                     if ext in IMAGE_OUTPUT_EXTENSIONS:
                         if fname.startswith("."): continue
@@ -5352,6 +5902,18 @@ def create_contact_sheet_from_charonop(node_override=None):
         if node_override is None:
             nuke.message("No image outputs found.")
         return
+
+    max_contact_sheet_images = int(
+        getattr(config, "CONTACT_SHEET_MAX_IMAGES", 48)
+    )
+    if max_contact_sheet_images > 0 and len(image_paths) > max_contact_sheet_images:
+        dropped = len(image_paths) - max_contact_sheet_images
+        image_paths = image_paths[-max_contact_sheet_images:]
+        log_debug(
+            f"Contact Sheet capped to last {max_contact_sheet_images} images "
+            f"(dropped {dropped} older images).",
+            "WARNING",
+        )
 
     columns_override = None
     try:

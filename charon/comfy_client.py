@@ -20,6 +20,7 @@ class ComfyUIClient:
         self.timeout = timeout  # Total wait time for workflow completion
         self.request_timeout = request_timeout  # Socket timeout for standard API calls
         self.connect_timeout = connect_timeout  # Socket timeout for connection checks
+        self.last_error = ""
 
     def test_connection(self):
         try:
@@ -56,6 +57,7 @@ class ComfyUIClient:
 
     def upload_image(self, image_path):
         try:
+            self.last_error = ""
             if not os.path.exists(image_path):
                 raise FileNotFoundError(f"Image file not found: {image_path}")
 
@@ -95,8 +97,10 @@ class ComfyUIClient:
                 if response.getcode() == 200:
                     reply = json.loads(response.read().decode("utf-8"))
                     return reply.get("name") or reply.get("filename")
+            self.last_error = "upload_image_http_non_200"
             return None
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("Failed to upload image: %s", exc)
             return None
 
