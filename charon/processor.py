@@ -29,6 +29,7 @@ from .paths import (
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from .workflow_overrides import apply_validation_model_overrides
+from .workflow_local_store import get_local_workflow_folder
 from .comfy_client import ComfyUIClient
 from . import config, preferences
 from .node_factory import generate_charon_node_id, reset_charon_node_state, update_charon_node_identity
@@ -2945,8 +2946,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         trace_log_path = ""
         trace_step_counter = 0
+        trace_enabled = bool(getattr(config, "DEBUG_STEP_TRACE", False))
 
         def trace_step(message: str, **fields) -> None:
+            if not trace_enabled:
+                return
             nonlocal trace_step_counter
             trace_step_counter += 1
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -2967,32 +2971,33 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             except Exception:
                 pass
 
-        try:
-            debug_root = get_charon_temp_dir(temp_root)
-        except Exception:
-            debug_root = _normalize_charon_root(temp_root)
+        if trace_enabled:
             try:
-                os.makedirs(debug_root, exist_ok=True)
-                for _subdir in ("temp", "exports", "results", "debug"):
-                    os.makedirs(os.path.join(debug_root, _subdir), exist_ok=True)
+                debug_root = get_charon_temp_dir(temp_root)
+            except Exception:
+                debug_root = _normalize_charon_root(temp_root)
+                try:
+                    os.makedirs(debug_root, exist_ok=True)
+                    for _subdir in ("temp", "exports", "results", "debug"):
+                        os.makedirs(os.path.join(debug_root, _subdir), exist_ok=True)
+                except Exception:
+                    pass
+            debug_dir = os.path.join(debug_root, "debug")
+            try:
+                os.makedirs(debug_dir, exist_ok=True)
             except Exception:
                 pass
-        debug_dir = os.path.join(debug_root, "debug")
-        try:
-            os.makedirs(debug_dir, exist_ok=True)
-        except Exception:
-            pass
-        trace_log_path = os.path.join(
-            debug_dir,
-            f"charon_step_trace_{int(time.time())}_{(charon_node_id or 'unknown')}_{str(uuid.uuid4())[:8]}.log",
-        ).replace("\\", "/")
-        trace_step(
-            "trace_started",
-            trace_log=trace_log_path,
-            node_name=getattr(node, "name", lambda: "unknown")(),
-            node_id=charon_node_id or "",
-            recursive=int(bool(is_recursive_call)),
-        )
+            trace_log_path = os.path.join(
+                debug_dir,
+                f"charon_step_trace_{int(time.time())}_{(charon_node_id or 'unknown')}_{str(uuid.uuid4())[:8]}.log",
+            ).replace("\\", "/")
+            trace_step(
+                "trace_started",
+                trace_log=trace_log_path,
+                node_name=getattr(node, "name", lambda: "unknown")(),
+                node_id=charon_node_id or "",
+                recursive=int(bool(is_recursive_call)),
+            )
         try:
             workflow_path = node.knob('workflow_path').value()
         except Exception:
@@ -3091,12 +3096,15 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         os.makedirs(temp_dir, exist_ok=True)
 
         converted_prompt_path = None
-        workflow_folder = ''
+        workflow_cache_folder = ''
+        workflow_repository_folder = ''
         candidate_paths = [workflow_path]
         try:
             source_candidate = node.knob('charon_source_workflow_path').value()
         except Exception:
             source_candidate = ''
+        meta_path = ''
+        meta_source_path = ''
         if source_candidate and source_candidate not in candidate_paths:
             candidate_paths.append(source_candidate)
         try:
@@ -3112,13 +3120,46 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         except Exception:
             pass
 
-        for candidate in candidate_paths:
-            if not candidate:
-                continue
-            folder_candidate = candidate if os.path.isdir(candidate) else os.path.dirname(candidate)
+        def _resolve_existing_folder(path_value):
+            if not path_value:
+                return ''
+            folder_candidate = path_value if os.path.isdir(path_value) else os.path.dirname(path_value)
             if folder_candidate and os.path.isdir(folder_candidate):
-                workflow_folder = folder_candidate
+                return folder_candidate
+            return ''
+
+        source_candidates = [source_candidate]
+        try:
+            if meta_source_path and meta_source_path not in source_candidates:
+                source_candidates.append(meta_source_path)
+        except Exception:
+            pass
+
+        repo_root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
+        for source_path in source_candidates:
+            source_folder = _resolve_existing_folder(source_path)
+            if not source_folder:
+                continue
+            source_abs = os.path.abspath(source_folder)
+            if source_abs.lower().startswith(repo_root.lower()):
+                workflow_repository_folder = source_folder
                 break
+
+        for candidate in candidate_paths:
+            folder_candidate = _resolve_existing_folder(candidate)
+            if folder_candidate:
+                workflow_cache_folder = folder_candidate
+                break
+
+        if not workflow_cache_folder and workflow_repository_folder:
+            try:
+                workflow_cache_folder = get_local_workflow_folder(workflow_repository_folder, ensure=True)
+            except Exception as exc:
+                log_debug(f'Failed to resolve local workflow mirror: {exc}', 'WARNING')
+                workflow_cache_folder = workflow_repository_folder
+
+        if not workflow_repository_folder:
+            workflow_repository_folder = workflow_cache_folder
 
         connected_inputs = {}
         total_inputs = node.inputs()
@@ -3325,6 +3366,26 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             if clamped_progress >= 0.999:
                 clamped_progress = 1.0
 
+            # Nuke node/metadata writes are not thread-safe from worker threads.
+            # Route progress updates back to the main thread.
+            if threading.current_thread() is not threading.main_thread():
+                safe_extra = dict(extra) if isinstance(extra, dict) else extra
+                try:
+                    nuke.executeInMainThread(
+                        lambda: update_progress(
+                            progress=clamped_progress,
+                            status=status,
+                            error=error,
+                            extra=safe_extra,
+                        )
+                    )
+                except Exception as dispatch_exc:
+                    try:
+                        log_debug(f'Failed to dispatch progress update to main thread: {dispatch_exc}', 'WARNING')
+                    except Exception:
+                        pass
+                return
+
             try:
                 node.knob('charon_progress').setValue(clamped_progress)
                 node.knob('charon_status').setValue(status)
@@ -3340,14 +3401,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
             current_node_state = lifecycle
             now_tick = time.time()
-            interval = getattr(config, "STATUS_COLOR_UPDATE_INTERVAL_SEC", 0.5)
-            should_apply = lifecycle != last_status_color_state or (now_tick - last_status_color_time) >= interval
+            should_apply = lifecycle != last_status_color_state
             if should_apply:
                 last_status_color_state = lifecycle
                 last_status_color_time = now_tick
                 apply_status_color(current_node_state)
-                for candidate in _collect_target_reads():
-                    apply_status_color(current_node_state, candidate)
 
             payload = load_status_payload()
             runs = ensure_history(payload)
@@ -3461,10 +3519,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             store_cached_prompt(converted_prompt_path, workflow_hash)
                     needs_conversion_local = False
 
-                if needs_conversion_local and workflow_hash and workflow_folder:
-                    trace_step("conversion_cache_lookup", workflow_hash=(workflow_hash or "")[:12], has_folder=int(bool(workflow_folder)))
+                if needs_conversion_local and workflow_hash and workflow_cache_folder:
+                    trace_step("conversion_cache_lookup", workflow_hash=(workflow_hash or "")[:12], has_folder=int(bool(workflow_cache_folder)))
                     try:
-                        cache_hit = load_cached_conversion(workflow_folder, workflow_hash)
+                        cache_hit = load_cached_conversion(workflow_cache_folder, workflow_hash)
                     except Exception as exc:
                         log_debug(f'Conversion cache read failed: {exc}', 'WARNING')
                         cache_hit = None
@@ -3506,14 +3564,14 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             raise Exception('Converted workflow is invalid')
                         prompt_data = converted_prompt
 
-                        if workflow_hash and workflow_folder:
+                        if workflow_hash and workflow_cache_folder:
                             try:
-                                target_path = desired_prompt_path(workflow_folder, workflow_path or '', workflow_hash)
+                                target_path = desired_prompt_path(workflow_cache_folder, workflow_path or '', workflow_hash)
                                 target_path.parent.mkdir(parents=True, exist_ok=True)
                                 with open(target_path, 'w', encoding='utf-8') as handle:
                                     json.dump(converted_prompt, handle, indent=2)
                                 stored_path = write_conversion_cache(
-                                    workflow_folder,
+                                    workflow_cache_folder,
                                     workflow_path or '',
                                     workflow_hash,
                                     str(target_path),
@@ -3550,10 +3608,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                 model_replacements: List[Tuple[str, str]] = []
                 replacements_applied = False
-                if workflow_folder and isinstance(prompt_data, dict):
+                if workflow_repository_folder and isinstance(prompt_data, dict):
                     try:
                         replacements_applied, model_replacements = apply_validation_model_overrides(
-                            prompt_data, workflow_folder
+                            prompt_data, workflow_repository_folder
                         )
                     except Exception as exc:
                         msg = str(exc)
@@ -3672,6 +3730,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     trace_step("input_uploaded", index=idx, uploaded_name=uploaded_filename)
                     progress = 0.2 + (0.2 * (len(uploaded_assets) / len(render_jobs)))
                     update_progress(progress, f'Uploaded {len(uploaded_assets)}/{len(render_jobs)} images')
+                    trace_step("input_upload_progress_updated", index=idx, progress=round(progress, 4))
 
                 def assign_to_node(target_node_id, filename, target_socket=None):
                     node_key = str(target_node_id)
@@ -3754,6 +3813,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 download_retries = int(getattr(config, "COMFY_DOWNLOAD_RETRIES", 4))
                 download_retry_delay = float(getattr(config, "COMFY_DOWNLOAD_RETRY_DELAY_SEC", 0.75))
                 download_min_bytes = int(getattr(config, "COMFY_DOWNLOAD_MIN_BYTES", 1))
+                download_hard_timeout = float(getattr(config, "COMFY_DOWNLOAD_HARD_TIMEOUT_SEC", 90.0))
 
                 def _normalize_download_target(filename: Optional[str], subfolder: Optional[str]) -> Tuple[str, str]:
                     if not filename:
@@ -3779,6 +3839,74 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         parts.append(subfolder)
                     parts.append(filename)
                     return os.path.normpath(os.path.join(*parts))
+
+                def _find_output_by_basename(filename: str, since_time: float) -> str:
+                    if not comfy_output_root or not filename or not os.path.isdir(comfy_output_root):
+                        return ""
+                    target = os.path.basename(filename).lower()
+                    best_path = ""
+                    best_mtime = 0.0
+                    scan_limit = int(getattr(config, "COMFY_OUTPUT_BASENAME_SCAN_LIMIT", 4000))
+                    scanned = 0
+                    for root_dir, _dirs, files in os.walk(comfy_output_root):
+                        for fname in files:
+                            scanned += 1
+                            if scan_limit > 0 and scanned > scan_limit:
+                                return best_path
+                            if fname.lower() != target:
+                                continue
+                            full_path = os.path.join(root_dir, fname)
+                            try:
+                                mtime = os.path.getmtime(full_path)
+                            except Exception:
+                                mtime = 0.0
+                            if since_time and mtime < since_time:
+                                continue
+                            if mtime >= best_mtime:
+                                best_mtime = mtime
+                                best_path = full_path
+                    return best_path
+
+                def _download_with_timeout(
+                    filename: str,
+                    destination_path: str,
+                    subfolder: str,
+                    file_type: str,
+                ) -> bool:
+                    state = {"success": False, "error": ""}
+                    done = threading.Event()
+
+                    def _runner():
+                        try:
+                            state["success"] = bool(
+                                comfy_client.download_file(
+                                    filename,
+                                    destination_path,
+                                    subfolder=subfolder,
+                                    file_type=file_type,
+                                    retries=download_retries,
+                                    retry_delay=download_retry_delay,
+                                    min_bytes=download_min_bytes,
+                                )
+                            )
+                        except Exception as exc:
+                            state["success"] = False
+                            state["error"] = str(exc)
+                        finally:
+                            done.set()
+
+                    worker = threading.Thread(target=_runner, name="charon-download", daemon=True)
+                    worker.start()
+                    if done.wait(timeout=max(1.0, download_hard_timeout)):
+                        if state["error"]:
+                            log_debug(f"Comfy download raised: {state['error']}", "WARNING")
+                        return bool(state["success"])
+                    log_debug(
+                        f"Comfy download timed out after {download_hard_timeout:.1f}s for {filename}; "
+                        "falling back to local output recovery.",
+                        "WARNING",
+                    )
+                    return False
 
                 def _recover_artifacts_from_output_dir(
                     expected_prefixes: List[str],
@@ -4311,15 +4439,32 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                     success = False
                                             else:
                                                 if download_name:
-                                                    success = comfy_client.download_file(
+                                                    success = _download_with_timeout(
                                                         download_name,
                                                         allocated_output_path,
-                                                        subfolder=download_subfolder,
-                                                        file_type=artifact.get("type", "output"),
-                                                        retries=download_retries,
-                                                        retry_delay=download_retry_delay,
-                                                        min_bytes=download_min_bytes,
+                                                        download_subfolder,
+                                                        artifact.get("type", "output"),
                                                     )
+                                                if not success and download_name:
+                                                    recovered_local = _find_output_by_basename(download_name, start_time)
+                                                    if recovered_local and os.path.exists(recovered_local):
+                                                        try:
+                                                            os.makedirs(
+                                                                os.path.dirname(allocated_output_path),
+                                                                exist_ok=True,
+                                                            )
+                                                            shutil.copyfile(recovered_local, allocated_output_path)
+                                                            success = True
+                                                            log_debug(
+                                                                f"Recovered output by basename {recovered_local} -> "
+                                                                f"{allocated_output_path}"
+                                                            )
+                                                        except Exception as copy_error:
+                                                            log_debug(
+                                                                f"Failed recovered basename copy {recovered_local}: "
+                                                                f"{copy_error}",
+                                                                "WARNING",
+                                                            )
                                                 if not success and local_candidate and os.path.exists(local_candidate):
                                                     try:
                                                         os.makedirs(
@@ -4581,6 +4726,32 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             return base_timeout * max(1, batch_count) + grace
 
         def result_watcher():
+            def _execute_in_main_thread_blocking(callback, label: str, timeout_sec: float = 120.0):
+                try:
+                    execute_with_result = getattr(nuke, "executeInMainThreadWithResult", None)
+                except Exception:
+                    execute_with_result = None
+                if callable(execute_with_result):
+                    return execute_with_result(callback)
+
+                done_event = threading.Event()
+                state: Dict[str, Any] = {"error": None}
+
+                def wrapped():
+                    try:
+                        callback()
+                    except Exception as exc:
+                        state["error"] = exc
+                    finally:
+                        done_event.set()
+
+                nuke.executeInMainThread(wrapped)
+                if not done_event.wait(timeout=timeout_sec):
+                    raise TimeoutError(f"Timed out waiting for main-thread callback: {label}")
+                if state["error"] is not None:
+                    raise state["error"]
+                return None
+
             watch_start = time.time()
             watch_timeout = _resolve_result_watch_timeout()
             last_read_error = 0.0
@@ -5585,7 +5756,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     trace_step("mainthread_import_cleanup_done")
 
                                 trace_step("mainthread_import_dispatch")
-                                nuke.executeInMainThread(update_or_create_read_nodes)
+                                _execute_in_main_thread_blocking(update_or_create_read_nodes, "update_or_create_read_nodes")
                                 trace_step("mainthread_import_returned")
 
                                 def check_auto_contact_sheet():
@@ -5614,7 +5785,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         trace_step("mainthread_contact_sheet_completed")
 
                                 trace_step("mainthread_contact_sheet_dispatch")
-                                nuke.executeInMainThread(check_auto_contact_sheet)
+                                _execute_in_main_thread_blocking(check_auto_contact_sheet, "check_auto_contact_sheet")
                                 trace_step("mainthread_contact_sheet_returned")
 
                                 def handle_recursion():
@@ -5721,7 +5892,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         trace_step("mainthread_recursion_completed")
 
                                 trace_step("mainthread_recursion_dispatch")
-                                nuke.executeInMainThread(handle_recursion)
+                                _execute_in_main_thread_blocking(handle_recursion, "handle_recursion")
                                 trace_step("mainthread_recursion_returned")
                             else:
                                 log_debug('Auto import disabled; skipping Read node creation.')
@@ -5828,24 +5999,35 @@ def create_contact_sheet_from_charonop(node_override=None):
             pass
     if node is None:
         return
+    try:
+        recursive_enabled = bool(node.knob('charon_recursive_enable').value())
+    except Exception:
+        recursive_enabled = False
 
     outputs = []
+    status_payload = {}
     try:
         raw = node.metadata('charon/batch_outputs')
         if raw:
             outputs = json.loads(raw)
     except Exception:
         pass
+
+    try:
+        raw_payload = node.metadata("charon/status_payload")
+        if raw_payload:
+            payload = json.loads(raw_payload)
+            if isinstance(payload, dict):
+                status_payload = payload
+    except Exception:
+        status_payload = {}
     
     if not outputs:
         try:
-            raw_payload = node.metadata("charon/status_payload")
-            if raw_payload:
-                payload = json.loads(raw_payload)
-                runs = payload.get('runs', [])
-                if runs:
-                    last_run = runs[-1]
-                    outputs = last_run.get('batch_outputs', [])
+            runs = status_payload.get('runs', []) if isinstance(status_payload, dict) else []
+            if runs:
+                last_run = runs[-1]
+                outputs = last_run.get('batch_outputs', [])
         except Exception:
             pass
 
@@ -5856,6 +6038,87 @@ def create_contact_sheet_from_charonop(node_override=None):
                 outputs = [{'output_path': last}]
         except Exception:
             pass
+
+    if recursive_enabled:
+        try:
+            payload = status_payload if isinstance(status_payload, dict) else {}
+            if payload:
+                run_entries = payload.get("runs", [])
+                merged: List[Dict[str, Any]] = []
+                seen_paths = set()
+                if isinstance(outputs, list):
+                    for item in outputs:
+                        if isinstance(item, dict):
+                            p = (item.get("output_path") or item.get("download_path") or "").strip()
+                        elif isinstance(item, str):
+                            p = item.strip()
+                            item = {"output_path": p}
+                        else:
+                            p = ""
+                        if not p:
+                            continue
+                        key = p.replace("\\", "/").lower()
+                        if key in seen_paths:
+                            continue
+                        seen_paths.add(key)
+                        merged.append(item if isinstance(item, dict) else {"output_path": p})
+                if isinstance(run_entries, list):
+                    for run in run_entries:
+                        if not isinstance(run, dict):
+                            continue
+                        p = str(run.get("output_path") or "").strip()
+                        if not p:
+                            continue
+                        key = p.replace("\\", "/").lower()
+                        if key in seen_paths:
+                            continue
+                        seen_paths.add(key)
+                        merged.append({"output_path": p})
+                if merged:
+                    outputs = merged
+        except Exception:
+            pass
+
+    # Always merge historical run outputs so contact sheets include prior
+    # successful outputs for this node, not just the latest batch.
+    try:
+        runs = status_payload.get("runs", []) if isinstance(status_payload, dict) else []
+        if isinstance(runs, list):
+            merged: List[Dict[str, Any]] = []
+            seen_paths = set()
+
+            def _append_output(value):
+                path = ""
+                if isinstance(value, dict):
+                    path = (value.get("output_path") or value.get("download_path") or "").strip()
+                elif isinstance(value, str):
+                    path = value.strip()
+                    value = {"output_path": path}
+                if not path:
+                    return
+                key = path.replace("\\", "/").lower()
+                if key in seen_paths:
+                    return
+                seen_paths.add(key)
+                merged.append(value if isinstance(value, dict) else {"output_path": path})
+
+            if isinstance(outputs, list):
+                for item in outputs:
+                    _append_output(item)
+
+            for run in runs:
+                if not isinstance(run, dict):
+                    continue
+                batch_outputs = run.get("batch_outputs")
+                if isinstance(batch_outputs, list):
+                    for item in batch_outputs:
+                        _append_output(item)
+                _append_output(run)
+
+            if merged:
+                outputs = merged
+    except Exception:
+        pass
 
     image_paths = []
     if isinstance(outputs, list):
@@ -5875,14 +6138,17 @@ def create_contact_sheet_from_charonop(node_override=None):
     # Disabled by default to avoid heavy scans on large output folders.
     scan_contact_sheet_dir = bool(
         getattr(config, "CONTACT_SHEET_SCAN_OUTPUT_DIR", False)
-    )
+    ) or recursive_enabled or len(image_paths) <= 1
     if scan_contact_sheet_dir and len(image_paths) > 0:
         ref_path = image_paths[0]
         parent_dir = os.path.dirname(ref_path)
         
         if parent_dir and os.path.isdir(parent_dir):
             scanned = []
-            max_scan_items = int(getattr(config, "CONTACT_SHEET_MAX_SCAN_FILES", 400))
+            if recursive_enabled:
+                max_scan_items = int(getattr(config, "CONTACT_SHEET_MAX_SCAN_FILES_RECURSIVE", 2000))
+            else:
+                max_scan_items = int(getattr(config, "CONTACT_SHEET_MAX_SCAN_FILES", 400))
             try:
                 for fname in os.listdir(parent_dir):
                     if max_scan_items > 0 and len(scanned) >= max_scan_items:
@@ -5896,7 +6162,10 @@ def create_contact_sheet_from_charonop(node_override=None):
             
             # If scanning found more files, use them
             if len(scanned) > len(image_paths):
-                image_paths = sorted(scanned)
+                try:
+                    image_paths = sorted(scanned, key=lambda p: os.path.getmtime(p))
+                except Exception:
+                    image_paths = sorted(scanned)
 
     if not image_paths:
         if node_override is None:
@@ -5906,7 +6175,7 @@ def create_contact_sheet_from_charonop(node_override=None):
     max_contact_sheet_images = int(
         getattr(config, "CONTACT_SHEET_MAX_IMAGES", 48)
     )
-    if max_contact_sheet_images > 0 and len(image_paths) > max_contact_sheet_images:
+    if (not recursive_enabled) and max_contact_sheet_images > 0 and len(image_paths) > max_contact_sheet_images:
         dropped = len(image_paths) - max_contact_sheet_images
         image_paths = image_paths[-max_contact_sheet_images:]
         log_debug(
@@ -5916,10 +6185,6 @@ def create_contact_sheet_from_charonop(node_override=None):
         )
 
     columns_override = None
-    try:
-        recursive_enabled = bool(node.knob('charon_recursive_enable').value())
-    except Exception:
-        recursive_enabled = False
     if recursive_enabled:
         try:
             iterations = int(node.knob('charon_recursive_iterations').value())

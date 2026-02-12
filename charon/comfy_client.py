@@ -5,6 +5,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import socket
 
 from .paths import get_temp_file
 
@@ -20,12 +21,59 @@ class ComfyUIClient:
         self.timeout = timeout  # Total wait time for workflow completion
         self.request_timeout = request_timeout  # Socket timeout for standard API calls
         self.connect_timeout = connect_timeout  # Socket timeout for connection checks
+        self.transient_retries = 3
+        self.retry_delay = 0.35
+        self.retry_backoff = 1.8
         self.last_error = ""
+
+    def _is_transient_network_error(self, exc):
+        if isinstance(exc, (ConnectionResetError, TimeoutError, socket.timeout)):
+            return True
+        if isinstance(exc, urllib.error.URLError):
+            reason = exc.reason
+            if isinstance(reason, (ConnectionResetError, TimeoutError, socket.timeout, OSError)):
+                return True
+            reason_text = str(reason).lower()
+            return any(token in reason_text for token in ("10054", "connection reset", "timed out", "refused"))
+        if isinstance(exc, OSError):
+            if getattr(exc, "winerror", None) == 10054:
+                return True
+            text = str(exc).lower()
+            return any(token in text for token in ("10054", "connection reset", "timed out", "refused"))
+        return False
+
+    def _should_retry_http_error(self, exc):
+        return isinstance(exc, urllib.error.HTTPError) and exc.code in {408, 425, 429, 500, 502, 503, 504}
+
+    def _urlopen_with_retry(self, request, *, timeout, retries=None):
+        max_retries = self.transient_retries if retries is None else max(0, int(retries))
+        delay = max(0.0, float(self.retry_delay))
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                return urllib.request.urlopen(request, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if attempt < max_retries and self._should_retry_http_error(exc):
+                    time.sleep(delay)
+                    delay *= self.retry_backoff
+                    continue
+                raise
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_retries and self._is_transient_network_error(exc):
+                    time.sleep(delay)
+                    delay *= self.retry_backoff
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("urlopen retry loop ended unexpectedly")
 
     def test_connection(self):
         try:
             request = urllib.request.Request(f"{self.base_url}/system_stats")
-            with urllib.request.urlopen(request, timeout=self.connect_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.connect_timeout, retries=2) as response:
                 return response.getcode() == 200
         except Exception as exc:
             logger.error("Connection test failed: %s", exc)
@@ -34,7 +82,7 @@ class ComfyUIClient:
     def get_system_stats(self):
         try:
             request = urllib.request.Request(f"{self.base_url}/system_stats")
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -47,7 +95,7 @@ class ComfyUIClient:
         try:
             request = urllib.request.Request(f"{self.base_url}/object_info")
             # This can be large, maybe allow longer timeout?
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -93,7 +141,7 @@ class ComfyUIClient:
             )
 
             # Uploads might take longer than standard requests
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     reply = json.loads(response.read().decode("utf-8"))
                     return reply.get("name") or reply.get("filename")
@@ -121,7 +169,7 @@ class ComfyUIClient:
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     reply = json.loads(response.read().decode("utf-8"))
                     return reply.get("prompt_id") or reply.get("id")
@@ -140,7 +188,7 @@ class ComfyUIClient:
     def get_history(self, prompt_id):
         try:
             request = urllib.request.Request(f"{self.base_url}/history/{prompt_id}")
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -152,7 +200,7 @@ class ComfyUIClient:
         """Return the complete history map from ComfyUI."""
         try:
             request = urllib.request.Request(f"{self.base_url}/history")
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -164,7 +212,7 @@ class ComfyUIClient:
         """Get current queue status and progress info."""
         try:
             request = urllib.request.Request(f"{self.base_url}/queue")
-            with urllib.request.urlopen(request, timeout=self.connect_timeout) as response:
+            with self._urlopen_with_retry(request, timeout=self.connect_timeout, retries=2) as response:
                 if response.getcode() == 200:
                     return json.loads(response.read().decode("utf-8"))
             return None
@@ -250,7 +298,7 @@ class ComfyUIClient:
                     }
                 )
                 request = urllib.request.Request(f"{self.base_url}/view?{params}")
-                with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+                with self._urlopen_with_retry(request, timeout=self.request_timeout) as response:
                     if response.getcode() == 200:
                         with open(output_path, "wb") as handle:
                             handle.write(response.read())

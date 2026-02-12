@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,31 @@ from typing import Any, Dict, Optional, Tuple
 LOG_FILENAME = "conversion_log.md"
 CONVERTED_SUFFIX = "_converted.json"
 CACHE_FOLDER_NAME = ".charon_cache"
+MAX_PROMPT_BASENAME_LENGTH = 60
+WINDOWS_RESERVED_BASENAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    "com1",
+    "com2",
+    "com3",
+    "com4",
+    "com5",
+    "com6",
+    "com7",
+    "com8",
+    "com9",
+    "lpt1",
+    "lpt2",
+    "lpt3",
+    "lpt4",
+    "lpt5",
+    "lpt6",
+    "lpt7",
+    "lpt8",
+    "lpt9",
+}
 
 # Legacy migration support (deprecated as of 2025-12-22)
 # TODO: Remove after Q1 2026 when all users have migrated
@@ -54,8 +80,47 @@ def _log_path(folder_path: str) -> Path:
 
 
 def _default_prompt_name(workflow_path: str, hash_value: str) -> str:
-    base = Path(workflow_path).stem or "workflow"
+    base = _safe_prompt_basename(workflow_path)
     return f"{base}_{hash_value[:8]}{CONVERTED_SUFFIX}"
+
+
+def _safe_prompt_basename(workflow_path: str) -> str:
+    """
+    Build a filesystem-safe basename from the workflow path.
+
+    This guards against malformed or foreign paths stored on older nodes, and
+    keeps names short enough for Windows path limits.
+    """
+    raw_value = str(workflow_path or "").strip()
+    if raw_value:
+        leaf = raw_value.replace("\\", "/").split("/")[-1]
+    else:
+        leaf = ""
+
+    if not leaf:
+        leaf = "workflow"
+
+    if "." in leaf:
+        leaf = leaf.rsplit(".", 1)[0]
+
+    # Replace invalid Windows filename chars and control chars.
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", leaf)
+    safe = re.sub(r"\s+", "_", safe)
+    safe = re.sub(r"_+", "_", safe)
+    safe = safe.strip(" ._")
+
+    if not safe:
+        safe = "workflow"
+
+    if safe.lower() in WINDOWS_RESERVED_BASENAMES:
+        safe = f"workflow_{safe}"
+
+    if len(safe) > MAX_PROMPT_BASENAME_LENGTH:
+        safe = safe[:MAX_PROMPT_BASENAME_LENGTH].rstrip(" ._")
+        if not safe:
+            safe = "workflow"
+
+    return safe
 
 
 def compute_workflow_hash(workflow_payload: Dict[str, Any]) -> str:

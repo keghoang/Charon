@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -11,6 +12,7 @@ STATUS_PAYLOAD_META = "charon/status_payload"
 AUTO_IMPORT_META = "charon/auto_import"
 WORKFLOW_NAME_META = "charon/workflow_name"
 WORKFLOW_PATH_META = "charon/workflow_path"
+SOURCE_WORKFLOW_PATH_META = "charon/source_workflow_path"
 NODE_CLASS = "Group"
 NODE_PREFIX = "CharonOp_"
 _SCENE_NODE_SNAPSHOT_CACHE: Dict[str, tuple[str, str, float]] = {}
@@ -522,16 +524,24 @@ def _infer_state(status: str, progress: float) -> str:
 
 
 def _resolve_workflow_path(node) -> str:
-    path = _coerce_str(_read_knob_value(node, "workflow_path"), "")
-    if path:
-        return path
-    try:
-        meta = node.metadata(WORKFLOW_PATH_META)
-        if isinstance(meta, str):
-            return meta
-    except Exception:
-        pass
-    return ""
+    candidates: List[str] = []
+    for value in (
+        _coerce_str(_read_knob_value(node, "workflow_path"), ""),
+        _read_metadata_str(node, WORKFLOW_PATH_META),
+        _coerce_str(_read_knob_value(node, "charon_source_workflow_path"), ""),
+        _read_metadata_str(node, SOURCE_WORKFLOW_PATH_META),
+    ):
+        if value and value not in candidates:
+            candidates.append(value)
+
+    for candidate in candidates:
+        try:
+            if candidate and os.path.exists(candidate):
+                return candidate
+        except Exception:
+            continue
+
+    return candidates[0] if candidates else ""
 
 
 def _resolve_workflow_name(node, payload: Dict[str, Any], workflow_path: str) -> str:

@@ -1,15 +1,45 @@
 import json
+import os
 import time
 import uuid
 from typing import Any, Dict, List, Tuple
 
 from . import config
 from .paths import get_nuke_script_hash
+from .workflow_local_store import get_local_workflow_root
 from .utilities import status_to_gl_color, status_to_tile_color
 
 
 def sanitize_name(name):
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+
+
+def _infer_source_folder_from_local_path(path_value: str) -> str:
+    """
+    Map a local mirror workflow path back to the shared repository folder.
+    """
+    if not path_value:
+        return ""
+    try:
+        local_root = os.path.abspath(get_local_workflow_root(ensure=False))
+    except Exception:
+        return ""
+    if not local_root:
+        return ""
+
+    candidate = os.path.abspath(path_value)
+    candidate_folder = candidate if os.path.isdir(candidate) else os.path.dirname(candidate)
+    if not candidate_folder:
+        return ""
+
+    normalized_local = os.path.normcase(local_root)
+    normalized_candidate = os.path.normcase(candidate_folder)
+    if not normalized_candidate.startswith(normalized_local):
+        return ""
+
+    rel_folder = os.path.relpath(candidate_folder, local_root)
+    remote_root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
+    return os.path.normpath(os.path.join(remote_root, rel_folder))
 
 
 def _normalize_script_hash(value: str) -> str:
@@ -1079,6 +1109,8 @@ def reset_charon_node_state(node, node_id: str = "") -> str:
             meta_source = ""
         if meta_source:
             source_workflow_path = str(meta_source)
+    if not source_workflow_path:
+        source_workflow_path = _infer_source_folder_from_local_path(workflow_path)
     if not source_workflow_path:
         source_workflow_path = workflow_path
 
