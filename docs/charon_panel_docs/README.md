@@ -1,112 +1,41 @@
-﻿# Charon Architecture Documentation
+# Charon Documentation
 
-This directory contains comprehensive architecture and design documentation for the Charon project.
+This folder mixes current workflow-era documentation with older deep dives from
+the pre-consolidation "script manager" era.
 
-## Current Architecture 
+## Start Here
+If you need a refresher on the codebase as it exists today, read these first:
 
-**Execution Engine** - Dual-mode execution system:
-- **Main Thread Executor**: For Qt/UI scripts (`run_on_main: true`)
-- **Background Executor**: For pure computation scripts (default)
-- **No Qt Patching**: Clean architecture without monkey-patching Qt
+1. `../../PROJECT_SUMMARY.md`
+2. `01-architecture.md`
+3. `PROJECT_STRUCTURE.md`
+4. `18-testing-guide.md`
+5. `19-configuration-reference.md`
 
-**Import System** - Relative imports within Charon package:
-- Internal imports use `.` prefix (e.g., `from .ui.main_window import CharonWindow`)
-- Ensures compatibility across Windows, Maya, and Nuke (future hosts documented separately)
-- Scripts run in isolated namespaces with proper import paths
+## What Is Current
+- `01-architecture.md`
+  Current runtime flow, module map, validation pipeline, and data surfaces.
+- `18-testing-guide.md`
+  Manual QA paths and the current smoke-test commands.
+- `19-configuration-reference.md`
+  Paths, preferences, output layout, and dependency/bootstrap settings.
+- `PROJECT_STRUCTURE.md`
+  Current repository layout and where the important modules live.
 
-**Thread Safety**:
-- Qt widgets MUST run on main thread (especially critical in Maya)
-- Background threads handle pure computation efficiently
-- Thread pool limiting prevents resource exhaustion
+## What To Treat As Historical
+Most of the numbered deep dives from `02-17` still contain useful UI and
+implementation notes, but many were written before Charon became explicitly
+workflow-centric. They should not be treated as the source of truth for:
 
-## Documentation Files
+- runtime architecture
+- testing expectations
+- configuration keys
+- repository layout
 
-### Core Architecture (01-05)
-- **01-architecture.md** - System overview and component relationships
-- **02-data-patterns.md** - Data handling, threading, and background processing patterns  
-- **03-ui-patterns.md** - UI design patterns and component structure
-- **04-host-integration.md** - Maya/Nuke integration patterns and host detection
-- **05-script-engine.md** - Script execution engine architecture and threading model
+When those files disagree with the code, prefer the code and the current docs
+listed above.
 
-### Features and Extensions (06-11)
-- **06-script-executors.md** - Script type handlers (Python, MEL, extensible system)
-- **07-keybind-architecture.md** - Keybind system (local shortcuts, tiny mode context)
-- **08-qt-output-capture.md** - WARNING: Qt event handler output capture implementation
-- **09-logging-system.md** - System message logging and output separation
-- **10-window-management.md** - Window creation and docking for different hosts
-- **11-tag-system.md** - Tag-based script organization with batched updates
-
-### Recent Improvements
-- **Workflow Validation**: Script browser now exposes a stateful *Validate / Resolve / âœ“ Passed* column that blocks Grab until a workflow passes Comfy checks.
-- **Per-User Cache**: Validation results persist under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_resolve_status.json`, supporting bespoke model layouts per artist.
-- **Context Menus**: Right-click empty space for "New Script" and "Open Folder"
-- **Panel Indicators**: Collapsible panels show << >> indicators, clickable to reopen
-- **Execution Dialog**: Real-time updates, monospace font, minimal interface
-- **Tag System**: Batched updates prevent UI flicker during tag operations
-- **Hotkey Cleanup**: Automatic purge of missing scripts on startup and refresh
-- **Comfy Footer**: Connection widget presents live "Checking / Running / Launching" states, with a context menu to send a graceful shutdown to ComfyUI.
-- **Tiny Mode Polish**: Progress bars initialize at their final width with rounded cards to avoid the entry-time snap and provide clearer grouping.
-
-### Project Information
-- **PROJECT_STRUCTURE.md** - Complete project file organization
-
-### Historical Archive
-- **archive/** - Historical planning and implementation documents
-  - Phase 1-2 refactor plans
-  - Old Qt patching approach documentation
-
-## Key Architecture Decisions
-
-### Execution Model
-- Scripts declare execution preference via `.charon.json` metadata
-- `run_on_main: true` for UI/widget scripts
-- Background execution is default for better performance
-- Automatic detection of Qt usage with helpful error messages
-
-### Host Compatibility
-- **Windows/macOS/Linux**: PySide2/PySide6 auto-detection
-- **Maya 2020-2024**: PySide2 integration
-- **Maya 2025+**: PySide6 integration  
-- **Nuke 13-15**: PySide2 integration
-- **Nuke 16+**: PySide6 integration
-- **Roadmap**: Potential Houdini/Blender support (not implemented yet)
-
-### Import Architecture
-- Relative imports (`.` prefix) within Charon package
-- Absolute imports (`charon.*`) from external code/tests
-- Scripts execute in isolated namespaces
-- No sys.path pollution
-
-## Recent Changes 
-
-1. **Removed qt_patcher.py** - No more monkey-patching
-2. **Implemented dual executors** - Clean separation of concerns
-3. **Fixed relative imports** - Consistent across all hosts
-4. **Added execution history** - Track script runs with output
-5. **Improved error handling** - Clear messages for Qt threading issues
-
-## Critical Warnings
-
-WARNING: Qt Threading: Qt widgets in background threads will freeze Maya. Always use `run_on_main: true` for UI scripts.
-
-WARNING: Import Patterns: Never mix relative and absolute imports within the same module.
-
-WARNING: Host Testing: Always verify changes work in both standalone and hosted environments.
-
-WARNING: Qt Output Capture: MUST use closure-based capture for Qt event handlers. See **08-qt-output-capture.md** for details. Never reference `sys.stdout` in `captured_print` - use the capture objects directly.
-
-## Reading Order
-
-For new developers:
-1. Start with **01-architecture.md** for system overview
-2. Read **05-script-engine.md** for execution model
-3. Review **04-host-integration.md** for Maya/Nuke specifics
-4. Check **PROJECT_STRUCTURE.md** for code organization
-
-## Maintenance Notes
-
-- Update relevant architecture files when making significant changes
-- Test across Windows and Maya environments (Nuke when available)
-- Keep import patterns consistent (relative within package)
-- Document any host-specific behaviors or workarounds
-
+## Naming Note
+You will still see legacy names such as `script_panel`, `script_model`, and
+`ExecutionHistoryPanel`. Those modules now support workflow browsing and
+CharonOp orchestration, not a generic script launcher.

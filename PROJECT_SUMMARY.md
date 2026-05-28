@@ -1,67 +1,130 @@
-# Charon - ComfyUI x Nuke Integration
+# Charon Current-State Refresher
 
-## 1. High-Level Overview
-Charon is a Nuke add-on that bridges the node graph to ComfyUI's API workflows. The project now consists of a launcher script (`main.py`) and a single `charon/` package that owns every subsystem:
+## What Charon Is Now
+Charon is a Nuke panel for browsing workflow folders, validating them against a
+real ComfyUI installation, spawning CharonOp nodes into the script, and
+submitting runs to ComfyUI without leaving Nuke.
 
-- **UI (`charon/ui/`)** - PySide6 panels and widgets for workflow browsing, metadata editing, and CharonOp orchestration.
-- **Workflow runtime (`charon/workflow_runtime.py`)** - Discovers workflows, loads bundles, and spawns CharonOps.
-- **Conversion pipeline (`charon/workflow_pipeline.py`, `charon/workflow_browser_exporter.py`)** - Shells into ComfyUI's embedded Python, drives the real ComfyUI frontend via Playwright, and emits API-ready prompts.
-- **Analysis helpers (`charon/workflow_analysis.py`)** - Derives knob definitions and summaries for UI and converted graphs.
-- **Processing path (`charon/processor.py`, `charon/node_factory.py`, `charon/scene_nodes_runtime.py`)** - Builds CharonOp nodes, drives ComfyUI submissions, and manages result ingestion.
-- **Infrastructure (`charon/paths.py`, `charon/preferences.py`, `charon/config.py`, `charon/comfy_client.py`)** - Filesystem resolution, persisted settings, and REST utilities.
+The current product is workflow-first. A lot of module names still say "script"
+because they were carried forward from an older tool shape, but in practice the
+runtime revolves around workflow folders containing:
 
-Supporting material lives in `docs/charon_panel_docs/`; runtime assets stay under `charon/resources/`.
-- Tiny Mode UI now pre-sizes rounded progress bars to avoid the entry-time width snap and keep cards visually grouped.
+- `workflow.json`
+- `.charon.json`
+- optional local validation overrides and cached artifacts
 
-## 2. Typical Workflow
-1. **Launch** - In Nuke's Script Editor run:
-   ```python
-   import sys; sys.path.insert(0, r"D:\Coding\Nuke_ComfyUI")
-   exec(open(r"D:\Coding\Nuke_ComfyUI\main.py").read(), globals())
-   ```
-   `main.py` ensures the repo is on `sys.path`, configures logging, and calls `charon.main.launch()`.
-2. **Panel initialisation** - The panel:
-   - Extends `sys.path` with the configured ComfyUI directory via `paths.extend_sys_path_with_comfy`.
-   - Caches workflow folders, metadata, and raw JSON in memory.
-   - Populates the Workflows tab, Scene Nodes tab, and footer connection controls.
-   - Locates or prompts for the ComfyUI launcher, then runs `_check_connection()` with `ComfyUIClient`.
-3. **Workflow selection** - Choosing a workflow calls `workflow_runtime.load_workflow_bundle()` which:
-   - Validates the folder is inside `config.WORKFLOW_REPOSITORY_ROOT`.
-   - Reads `.charon.json` metadata plus `workflow.json` payload.
-   - Analyses inputs via `workflow_analysis.analyze_ui_workflow_inputs` to build knob descriptors.
-4. **Create CharonOp** - Pressing **Grab Workflow**:
-   - Invokes `workflow_runtime.spawn_charon_node()`.
-   - `node_factory.create_charon_group_node()` builds a Group node, adds input knobs, stores the raw UI workflow, injects process/recreate scripts, and aligns the node in the graph.
-5. **Execute** - The embedded button executes `charon.processor.process_charonop_node()`:
-   - Loads the bundle from the node's knobs.
-   - Converts to API format when needed via `workflow_runtime.convert_workflow()`.
-   - Uploads inputs through `ComfyUIClient`, submits the prompt, polls `/history`, and downloads outputs.
-   - Updates `charon_status`, writes prompt dumps, and creates Read nodes for results.
+## End-to-End Runtime Flow
+1. `main.py` adds the repo to `sys.path` and calls `charon.main.launch()`.
+2. `charon.main.launch()` runs first-time setup, checks dependencies, enforces
+   ComfyUI-Manager security settings, and creates `CharonWindow`.
+3. `CharonWindow` builds the Workflows tab, the CharonBoard tab, and the Comfy
+   footer widget.
+4. The workflow browser loads folders from
+   `config.WORKFLOW_REPOSITORY_ROOT`, reads `.charon.json`, and loads
+   `workflow.json` through `workflow_runtime.load_workflow_bundle()`.
+5. Validation runs through `comfy_validation.validate_comfy_environment()`.
+   Results are cached in the user's local mirror and surfaced in
+   `ValidationResolveDialog`.
+6. Grabbing a workflow calls `workflow_runtime.spawn_charon_node()`, which uses
+   `node_factory.create_charon_group_node()` to build a CharonOp group.
+7. Executing the node runs `processor.process_charonop_node()`, which:
+   - converts UI JSON to API JSON when needed
+   - uploads input images
+   - submits the prompt to ComfyUI
+   - watches status/history
+   - downloads outputs
+   - creates Read / ReadGeo nodes and optional contact sheets
 
-## 3. Key Paths & Directories
-- Workflows live under `\buck\globalprefs\SHARED\CODE\Charon_repo\workflows` (per `config.WORKFLOW_REPOSITORY_ROOT`).
-- Runtime artifacts are written to `D:\Nuke\charon\{temp,exports,results,status,debug}` via helpers in `charon/paths.py`.
-- Preferences persist in `%LOCALAPPDATA%\Charon\plugins\charon\preferences.json`.
+## The Modules That Matter Most
+- `charon/main.py`
+  Launcher, first-time setup, and window creation.
+- `charon/ui/main_window.py`
+  Main panel composition. The key tabs are `Workflows` and `CharonBoard`.
+- `charon/ui/script_panel.py`
+  Workflow list, validation actions, drag/drop, metadata handoff, and spawn.
+- `charon/workflow_runtime.py`
+  Headless discovery/loading/conversion/spawn helpers shared by UI and runtime.
+- `charon/workflow_pipeline.py`
+  Conversion bridge that shells into ComfyUI's embedded Python.
+- `charon/workflow_browser_exporter.py`
+  Playwright harness that loads the real ComfyUI frontend and calls
+  `graphToPrompt()`.
+- `charon/comfy_validation.py`
+  Environment, custom node, and model validation.
+- `charon/workflow_local_store.py`
+  Per-user local mirror plus validation cache and override files.
+- `charon/node_factory.py`
+  CharonOp creation, hidden knobs, status payload initialization, recursive
+  controls, and UI-facing node actions.
+- `charon/processor.py`
+  The core submission and output-ingestion path.
+- `charon/scene_nodes_runtime.py`
+  Reads CharonOp status back out of the Nuke script for the CharonBoard tab.
 
-## 4. Developing and Testing
-- Sample workflows ship in-repo; duplicate from `workflows/` if you need a clean set.
-- Reload the panel in-place by clearing cached `charon.*` modules and re-running `main.py`.
-- Run the conversion smoke test:
-  ```powershell
-  python -c "from charon.workflow_runtime import load_workflow_bundle, convert_workflow;  bundle = load_workflow_bundle(r'workflows\rgb2x_albedo_GET');  convert_workflow(bundle['workflow'], comfy_path=r'<path-to-your-ComfyUI-launcher>')"
-  ```
-- Manual QA checklist:
-  1. Launch panel from Nuke.
-  2. Grab a workflow and spawn a CharonOp.
-  3. Press **Execute**; verify status transitions, prompt dump, and Read node creation.
-  4. Inspect `D:\Nuke\charon\results` for outputs.
+## Panel Anatomy
+- `Workflows` tab
+  Folder tree, workflow table, metadata panel, validation controls, tag bar,
+  settings/actions row.
+- `CharonBoard` tab
+  Live view of CharonOp nodes already in the scene. This is implemented by
+  `SceneNodesPanel` and fed by `scene_nodes_runtime.py`.
+- Footer
+  Resource widget on the left, `ComfyConnectionWidget` on the right.
 
-## 5. Packaging Notes
-- The repository is now package-ready: importers depend only on `charon/` (no `charon_core` links remain).
-- `charon/__main__.py` supports launching via `python -m charon` for quick prototyping outside Nuke.
-- When distributing, bundle the `charon` package plus `main.py`; optional docs can ship from `docs/`.
+## Workflow State and Local Storage
+Charon keeps three storage surfaces in play:
 
-## 6. Next Steps
-- Formalise shared output management utilities and log artifact destinations.
-- Add instrumentation in the processor path (`metadata_read`, `conversion_start`, `conversion_success`, `output_written`).
-- Document failure modes (missing repository, invalid JSON, conversion errors) and surface clear UI messaging.
+1. Shared source workflows
+   `config.WORKFLOW_REPOSITORY_ROOT`
+2. User preferences and local workflow mirror
+   `GALT_PLUGIN_DIR` if set, otherwise
+   `%USERPROFILE%\AppData\Local\Galt\plugins\charon`
+3. Runtime temp/export/result/debug artifacts
+   `D:\Nuke\charon\...` by default, plus project-rooted output paths when
+   `BUCK_PROJECT_PATH` or `BUCK_WORK_ROOT` is available
+
+Important local mirror files:
+
+- `workflow_validated.json`
+  User-local validated/overridden workflow payload.
+- `.charon_cache/workflow_state.json`
+  Source hash, validated hash, sync timestamps.
+- `.charon_cache/validation/validation_result_raw.json`
+  Raw validation payload.
+- `.charon_cache/validation/validation_resolve_status.json`
+  Current resolve/install state shown in the UI.
+
+## Output Behavior
+- 2D outputs are versioned under `_CHARON/2D/<workflow>/CharonOp_<id>/...`
+- 3D outputs are versioned under `_CHARON/3D/<workflow>/CharonOp_<id>/...`
+- When `.glb` assets are returned, Charon can convert them to `.obj` through
+  ComfyUI's embedded Python with `trimesh`.
+- CharonOp nodes track status through hidden knobs and metadata such as
+  `charon_status`, `charon_status_payload`, `charon_last_output`, and
+  `charon_auto_import`.
+
+## What Still Looks Legacy In Code
+- `script_panel.py`, `script_table_model.py`, and `workflow_model.py` still use
+  "script" naming even though they are handling workflows.
+- `execution/` and `ExecutionHistoryPanel` remain from the older architecture.
+  They are still wired into `CharonWindow`, but they are no longer the center of
+  the workflow processing path.
+- Some docstrings and comments still say "script manager". The runtime behavior
+  is workflow-oriented despite the naming drift.
+
+## Practical Refresher Checklist
+If you are re-entering the codebase, read in this order:
+
+1. `PROJECT_SUMMARY.md`
+2. `docs/charon_panel_docs/01-architecture.md`
+3. `docs/charon_panel_docs/PROJECT_STRUCTURE.md`
+4. `charon/workflow_runtime.py`
+5. `charon/ui/script_panel.py`
+6. `charon/processor.py`
+
+## Current Risks / Review Notes
+- The codebase is functionally consolidated under `charon/`, but naming cleanup
+  is incomplete.
+- Validation and local workflow override behavior are now core to daily use.
+  Any workflow-loading change needs to be checked against `workflow_local_store`.
+- There is still no automated test suite in-repo. Manual QA is the real gate.

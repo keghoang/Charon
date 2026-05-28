@@ -188,7 +188,7 @@ def spawn_charon_node(
     else:
         nuke = nuke_module
 
-    auto_import = True
+    auto_import_enabled = True if auto_import is None else bool(auto_import)
 
     node, _ = create_charon_group_node(
         nuke=nuke,
@@ -206,11 +206,23 @@ def spawn_charon_node(
     )
 
     try:
-        node.knob("charon_auto_import").setValue(1)
+        from .scene_nodes_runtime import set_auto_import
+
+        set_auto_import(node, auto_import_enabled)
     except Exception:
-        pass
-
-
+        try:
+            knob = node.knob("charon_auto_import")
+        except Exception:
+            knob = None
+        if knob is not None:
+            try:
+                knob.setValue(1 if auto_import_enabled else 0)
+            except Exception:
+                pass
+        try:
+            node.setMetaData("charon/auto_import", "1" if auto_import_enabled else "0")
+        except Exception:
+            pass
 
     return node
 

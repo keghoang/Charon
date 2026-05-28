@@ -1,367 +1,257 @@
-﻿# Charon Configuration Reference
+# Charon Configuration Reference
 
-## SOFTWARE Dictionary
+This document reflects the configuration surfaces that are active in the code
+today. Older docs that mention `CHARON_*` override variables, test tiers, or a
+different preference root are stale.
 
-The unified SOFTWARE dictionary in `config.py` contains all software-specific settings:
+## Core Runtime Settings (`charon/config.py`)
 
-```python
-SOFTWARE = {
-    "windows": {
-        "compatible_versions": [None],  # None = any version
-        "logo": "resources/logos/windows.png",
-        "color": "#27ae60",  # Green
-        "pyside_version": None,  # Auto-detect
-        "hidden": False  # Show in dialogs
-    },
-    "maya": {
-        "compatible_versions": {
-            "2020": {},  # No specific PySide requirement
-            "2022": {"pyside": 2},  # Force PySide2
-            "2025": {"pyside": 6}   # Force PySide6
-        },
-        "logo": "resources/logos/maya.png", 
-        "color": "#3498db",  # Blue
-        "pyside_version": None,
-        "hidden": False
-    },
-    "nuke": {
-        "compatible_versions": {
-            "12": {"pyside": 2},
-            "13": {"pyside": 2},
-            "15": {"pyside": 6}
-        },
-        "logo": "resources/logos/nuke.png",
-        "color": "#e74c3c",  # Red
-        "pyside_version": None,
-        "hidden": False
-    },
-    "macos": {
-        "compatible_versions": [None],
-        "logo": "resources/logos/macos.png",
-        "color": "#95a5a6",  # Gray
-        "pyside_version": None,
-        "hidden": True  # Hidden from dialogs
-    },
-    "linux": {
-        "compatible_versions": [None],
-        "logo": "resources/logos/linux.png", 
-        "color": "#f39c12",  # Orange
-        "pyside_version": None,
-        "hidden": True  # Hidden from dialogs
-    }
-}
-```
+### ComfyUI / processing
+- `COMFY_URL_BASE`
+  Default API endpoint. Currently `http://127.0.0.1:8188`.
+- `COMFY_BATCH_TIMEOUT_SEC`
+- `COMFY_QUEUE_GRACE_SEC`
+- `COMFY_RESULT_WATCH_TIMEOUT_SEC`
+- `COMFY_RESULT_WATCH_GRACE_SEC`
+- `COMFY_DOWNLOAD_RETRIES`
+- `COMFY_UPLOAD_RETRIES`
+- `COMFY_OUTPUT_SCAN_LIMIT`
+- `COMFY_ENABLE_HISTORY_RECOVERY`
 
-### Configuration Fields
+These values shape how long `processor.py` waits for queue progress, result
+files, and transient upload/download failures.
 
-**compatible_versions**: 
-- `[None]` - Any version is compatible
-- `{}` - Empty dict means no specific requirements
-- `{"2022": {"pyside": 2}}` - Version-specific requirements
+### Output behavior
+- `AUTO_IMPORT_MAX_OUTPUTS`
+- `AUTO_IMPORT_MAX_PER_GROUP`
+- `AUTO_CREATE_CONTACT_SHEET`
+- `AUTO_IMPORT_ATTACH_IVT`
+- `CONTACT_SHEET_MAX_IMAGES`
+- `CONTACT_SHEET_SCAN_OUTPUT_DIR`
+- `CONTACT_SHEET_MAX_SCAN_FILES`
 
-**logo**: Path to software icon (relative to Charon root)
+These directly influence how Charon imports results back into Nuke.
 
-**color**: Hex color for UI elements (#RRGGBB format)
+### Node identity / tracing
+- `DEBUG_STEP_TRACE`
+- `CHARON_NODE_ID_LENGTH`
+- `CHARON_NODE_ID_SCRIPT_HASH_PREFIX`
 
-**pyside_version**: 
-- `None` - Auto-detect based on availability
-- `2` - Force PySide2
-- `6` - Force PySide6
+These are used in `node_factory.py`, `processor.py`, and
+`scene_nodes_runtime.py`.
 
-**hidden**: 
-- `True` - Hide from new script/edit metadata dialogs
-- `False` - Show in dialogs (default)
+## Repository Root
 
-### Legacy Support
-
-`SOFTWARE_COLORS` is maintained for backward compatibility but deprecated:
-```python
-SOFTWARE_COLORS = {
-    software: config["color"] 
-    for software, config in SOFTWARE.items()
-}
-```
-
-## Repository Paths & Validation Cache
+### Shared workflow root
+Defined in `config.py`:
 
 ```python
 WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\workflows"
 REPOSITORY_SEARCH_PATHS = [WORKFLOW_REPOSITORY_ROOT]
+GLOBAL_REPO_PATH = WORKFLOW_REPOSITORY_ROOT
 ```
 
-- **Global Repository**: All workflow browsing starts at the shared `Charon_repo\workflows` hierarchy. Folder loaders enforce the boundary so the UI cannot traverse outside the approved tree.
-- **Artist Cache**: Workflow validation payloads persist per user under `%LOCALAPPDATA%\Charon\plugins\charon\Charon_repo_local\workflow\<workflow>\.charon_cache\validation\\validation_resolve_status.json`, allowing personal model layouts without polluting source control.
-- **Overrides**: Runtime arguments or environment overrides can still redirect discovery, but defaults now assume the shared `Charon_repo`.
+Behavior:
 
-## Qt Compatibility Settings
+- `workflow_runtime.load_workflow_bundle()` rejects folders outside this root.
+- `workflow_local_store.py` mirrors workflow folders relative to this root.
+- `FolderPanel` and folder loaders should never traverse above this root.
 
-### PySide Version Detection
+## Preference Storage
 
-The `qt_compat.py` module uses SOFTWARE configuration to determine Qt bindings:
+### JSON preferences
+`charon/preferences.py` stores `preferences.json` in:
 
-1. **Host Detection**: Identify current software (Maya, Nuke, etc.)
-2. **Version Check**: Look up version-specific requirements
-3. **Fallback**: Try both PySide2 and PySide6 by availability
+1. `GALT_PLUGIN_DIR` if the environment variable is set
+2. otherwise `%USERPROFILE%\AppData\Local\Galt\plugins\charon`
 
-### Manual Override
+Important keys currently used by the runtime:
 
-Force specific PySide version for testing:
-```python
-# In config.py
-QT_BINDING_OVERRIDE = "PySide2"  # or "PySide6"
+- `comfyui_launch_path`
+- `first_time_setup_complete`
+- `force_first_time_setup`
+- `dependencies_verified`
+
+### SQLite-backed user settings
+`charon/settings/user_settings_db.py` stores per-host UI settings and bookmarks.
+These are initialized from the active repository path during launch.
+
+Important app settings defined in `config.APP_SETTING_DEFINITIONS`:
+
+- `run_at_startup`
+- `startup_mode`
+- `always_on_top`
+- `advanced_user_mode`
+- `debug_logging`
+- `tiny_offset_x`
+- `tiny_offset_y`
+
+## Output Roots (`charon/paths.py`)
+
+### Runtime artifact root
+Default root:
+
+```text
+D:\Nuke\charon
 ```
 
-## Cache Configuration
+`get_charon_temp_dir()` ensures these subfolders exist:
 
-### Memory Settings
+- `temp`
+- `exports`
+- `results`
+- `debug`
 
-```python
-# Maximum cache memory in megabytes
-CACHE_MAX_MEMORY_MB = 500
+### Final output root selection
+`allocate_charon_output_path()` resolves outputs in this order:
 
-# Number of background prefetch threads
-CACHE_PREFETCH_THREADS = 2
+1. `BUCK_PROJECT_PATH\Production\Work\<user>\_CHARON\...`
+2. `BUCK_WORK_ROOT\Work\<user>\_CHARON\...`
+3. fallback `D:\Nuke\charon\results\...`
 
-# Prefetch all folders alphabetically on startup
-CACHE_PREFETCH_ALL_FOLDERS = True
+Versioned filenames are emitted as:
+
+```text
+CharonOutput_v001.ext
+CharonOutput_v002.ext
+...
 ```
 
-### Cache Types and TTL
+### Output directory structure
+The directory template is:
 
-```python
-# General cache TTL (Time To Live) in seconds
-CACHE_GENERAL_TTL = 600  # 10 minutes
-
-# Validation cache TTL
-CACHE_VALIDATION_TTL = 600  # 10 minutes
-
-# Hot folders count (hardcoded in implementation)
-# MAX_HOT_FOLDERS = 20  # Not configurable
+```text
+<root>\<user>\_CHARON\<category>\<workflow>\CharonOp_<node_id>\
 ```
 
-## Application Settings (UI)
+Where:
 
-Global UI toggles live in `APP_SETTING_DEFINITIONS` (`config.py`). Each key is scoped per host (Maya, Nuke, Standalone, etc.) and persisted in the user settings database.
+- `<category>` is typically `2D` or `3D`
+- `<workflow>` comes from the workflow folder name
+- `<node_id>` comes from the CharonOp hidden id
 
-- `debug_logging`: Toggle verbose logging per host.
+## Local Workflow Mirror (`charon/workflow_local_store.py`)
 
-The settings dialog reads and writes these keys through `KeybindManager.get_all_app_settings()` so any new definition appears automatically without additional wiring.
+The local mirror lives beneath the preferences root:
 
-## Icon System Configuration
-
-### Icon Loading Settings
-
-```python
-# Software icon size in pixels
-SOFTWARE_ICON_SIZE = 20
-
-# Icon file search order
-ICON_EXTENSIONS = [".png", ".jpg", ".jpeg", ".svg"]
-
-# Custom script icon names
-CUSTOM_ICON_NAMES = ["icon.png", "icon.jpg"]
+```text
+Charon_repo_local\workflow\<relative workflow path>\
 ```
 
-## Keybind Configuration
+Important files:
 
-### Default Local Keybinds
+- `workflow_validated.json`
+- `.charon_cache\workflow_state.json`
+- `.charon_cache\validation\validation_result_raw.json`
+- `.charon_cache\validation\validation_resolve_status.json`
+- `.charon_cache\validation\validation_resolve_log.json`
 
-```python
-DEFAULT_LOCAL_KEYBINDS = {
-    "run_script": "Ctrl+Return",
-    "quick_search": "F4", 
-    "tiny_mode": "F3",
-    "refresh": "F5",
-    "close_dialogs": "Escape"
+Behavior:
+
+- Source workflow hash changes invalidate the validated override and validation
+  cache.
+- A validated local payload can replace the shared `workflow.json` for runtime
+  loading.
+
+## ComfyUI Environment Resolution
+`paths.resolve_comfy_environment()` derives:
+
+- `base_dir`
+- `comfy_dir`
+- `python_exe`
+- `embedded_root`
+
+It expects the configured launch path to resolve back to a portable ComfyUI
+layout containing `python_embeded` and `ComfyUI\main.py` or equivalent.
+
+`paths.extend_sys_path_with_comfy()` also adds the relevant ComfyUI and embedded
+Python directories to `sys.path` for hosted runtime use.
+
+## Dependency Bootstrap
+
+### First-time setup
+`first_time_setup.ensure_requirements_with_log()`:
+
+- checks whether setup has already completed
+- uses `SetupManager` to probe required dependencies
+- forces setup if `charon_log.json` is missing or dependencies are absent
+- rewrites `charon_log.json` after the probe/setup pass
+
+### Required dependencies currently checked
+`SetupManager.check_dependencies()` probes:
+
+- Python packages:
+  - `playwright`
+  - `trimesh`
+  - `hf_xet`
+  - `psutil`
+  - `pynvml`
+- custom nodes:
+  - `ComfyUI-Manager`
+  - `ComfyUI-KJNodes`
+  - `ComfyUI-Charon`
+
+### Manager security
+`dependency_check.ensure_manager_security_level()` forces
+`security_level=weak` in the detected ComfyUI-Manager config.
+
+## UI Settings
+
+### Window sizing
+- `WINDOW_WIDTH`
+- `WINDOW_HEIGHT`
+- `TINY_MODE_WIDTH`
+- `TINY_MODE_HEIGHT`
+- `TINY_MODE_MIN_WIDTH`
+- `TINY_MODE_MIN_HEIGHT`
+
+### Layout ratios
+- `UI_FOLDER_PANEL_RATIO`
+- `UI_CENTER_PANEL_RATIO`
+- `UI_HISTORY_PANEL_RATIO`
+
+These are validated to sum to `1.0`.
+
+### Header and button sizing
+- `UI_PANEL_HEADER_HEIGHT`
+- `UI_BUTTON_WIDTH`
+- `UI_SMALL_BUTTON_WIDTH`
+
+### Keybind defaults
+`config.DEFAULT_LOCAL_KEYBINDS` currently defines:
+
+- `F4` quick search
+- `Ctrl+Return` run/grab action
+- `Ctrl+R` refresh
+- `Ctrl+O` open folder
+- `Ctrl+,` settings
+- `F3` tiny mode
+
+## Metadata Schema
+`.charon.json` is normalized by `charon_metadata.py`. Current supported fields:
+
+```json
+{
+  "workflow_file": "workflow.json",
+  "description": "Short summary shown in the metadata pane.",
+  "min_vram_gb": "24",
+  "dependencies": [],
+  "last_changed": "2025-10-18T16:32:00Z",
+  "tags": [],
+  "parameters": [],
+  "is_3d_texturing": false
 }
 ```
 
-### Keybind Context Settings
+Legacy execution fields such as `entry`, `script_type`, `mirror_prints`, and
+`run_on_main` are stripped or ignored for persisted Charon metadata.
 
-```python
-# Local keybinds use WindowShortcut context
-LOCAL_KEYBIND_CONTEXT = Qt.WindowShortcut
+## Environment Variables That Matter
+- `GALT_PLUGIN_DIR`
+  Overrides the preference and local-mirror root.
+- `BUCK_PROJECT_PATH`
+  Preferred project-rooted output location.
+- `BUCK_WORK_ROOT`
+  Secondary project-rooted output location.
 
-# Global keybinds use ApplicationShortcut context  
-GLOBAL_KEYBIND_CONTEXT = Qt.ApplicationShortcut
-```
-
-## Path Configuration
-
-### Repository Paths
-
-```python
-# Default paths for different hosts
-DEFAULT_PATHS = {
-    "maya": "/network/scripts/maya",
-    "nuke": "/network/scripts/nuke", 
-    "windows": "/network/scripts/general"
-}
-
-# Special folder names
-BOOKMARKS_FOLDER = "_bookmarks"
-HOTKEYS_FOLDER = "_hotkeys"
-```
-
-## Database Configuration
-
-### User Settings Database
-
-```python
-# Database location
-USER_SETTINGS_DB = "~/.charon/user_settings.db"
-
-# Table versions for migration
-DB_SCHEMA_VERSION = 3
-
-# Batch operation sizes
-DB_BATCH_SIZE = 100
-```
-
-## Logging Configuration
-
-### Debug Settings
-
-```python
-# Enable debug output
-DEBUG_MODE = False
-
-# Log levels
-LOG_LEVELS = {
-    "DEBUG": 10,
-    "INFO": 20,
-    "WARNING": 30,
-    "ERROR": 40
-}
-
-# Output destinations
-LOG_TO_CONSOLE = True
-LOG_TO_FILE = False
-LOG_FILE_PATH = "~/.charon/charon.log"
-```
-
-## Performance Tuning
-
-### UI Responsiveness
-
-```python
-# Delay before showing loading indicators (ms)
-LOADING_DELAY = 100
-
-# Update frequency for progress bars (ms)
-PROGRESS_UPDATE_INTERVAL = 50
-
-# Maximum items to load before yielding to UI
-BATCH_LOAD_SIZE = 50
-```
-
-### Background Processing
-
-```python
-# Thread pool sizes
-LOADER_THREAD_COUNT = 4
-VALIDATION_THREAD_COUNT = 2
-
-# Queue sizes
-MAX_QUEUE_SIZE = 1000
-```
-
-## Script Execution Configuration
-
-### Execution Modes
-
-```python
-# Default execution mode for scripts
-DEFAULT_EXECUTION_MODE = "auto"  # "main", "background", "auto"
-
-# Timeout for script execution (ms)
-SCRIPT_EXECUTION_TIMEOUT = 30000  # 30 seconds
-
-# Output buffer size
-MAX_OUTPUT_SIZE = 1048576  # 1MB
-```
-
-### Mirror Prints Setting
-
-```python
-# Default mirror_prints for new scripts
-DEFAULT_MIRROR_PRINTS = False
-
-# Force mirror for specific script types
-FORCE_MIRROR_TYPES = ["mel"]  # MEL always mirrors
-```
-
-## UI Configuration
-
-### Window Settings
-
-```python
-# Default window size
-DEFAULT_WINDOW_WIDTH = 800
-DEFAULT_WINDOW_HEIGHT = 600
-
-# Remember window position
-REMEMBER_WINDOW_POSITION = True
-
-# Always on top for specific hosts
-ALWAYS_ON_TOP_HOSTS = ["maya", "nuke"]
-```
-
-### Table View Settings
-
-```python
-# Column widths
-FOLDER_COLUMN_WIDTH = 200
-SCRIPT_COLUMN_WIDTH = 300
-
-# Row heights
-DEFAULT_ROW_HEIGHT = 24
-COMPACT_ROW_HEIGHT = 20
-```
-
-## Environment Variables
-
-Charon checks these environment variables:
-
-```bash
-# Override global repository path
-CHARON_GLOBAL_PATH=/custom/path
-
-# Override host detection
-CHARON_HOST=maya
-
-# Enable debug mode
-CHARON_DEBUG=1
-
-# Custom config file
-CHARON_CONFIG=/path/to/config.py
-```
-
-## Extending Configuration
-
-### Adding New Software
-
-```python
-SOFTWARE["your_software"] = {
-    "compatible_versions": {
-        "1.0": {"pyside": 2}
-    },
-    "logo": "resources/logos/your_software.png",
-    "color": "#ff6600",
-    "pyside_version": None,
-    "hidden": False
-}
-```
-
-### Custom Validators
-
-```python
-# Add to SCRIPT_VALIDATORS list
-def validate_custom_script(script_path, metadata):
-    """Example validation hook for extra host checks"""
-    # Implement host-specific requirements here
-    return True
-
-SCRIPT_VALIDATORS.append(validate_custom_script)
-```
-
+Those are the environment variables with active meaning in the current runtime.
