@@ -16,6 +16,7 @@ from .node_introspection import (
 )
 from .api_introspection import collect_workflow_widget_bindings_from_api
 from .comfy_client import ComfyUIClient
+from .comfy_environment import resolve_comfy_runtime
 from .charon_logger import system_debug, system_error
 
 _OBJECT_INFO_CACHE_FILE = "object_info_cache.json"
@@ -143,7 +144,13 @@ def _get_cache_path() -> Path:
 def _fetch_object_info_with_cache() -> Optional[Dict[str, Any]]:
     """Try to fetch object info from API, update cache. On failure, read from cache."""
     cache_path = _get_cache_path()
-    client = ComfyUIClient(timeout=2, request_timeout=2, connect_timeout=1)
+    runtime = resolve_comfy_runtime()
+    client = ComfyUIClient(
+        runtime.base_url,
+        timeout=2,
+        request_timeout=2,
+        connect_timeout=1,
+    )
     client.transient_retries = 0
     
     # Try live fetch first (non-blocking check ideally, but short timeout helps)

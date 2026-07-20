@@ -38,6 +38,15 @@ module for workflow, validation, execution, UI, and storage changes.
 - Consolidate caches and background-job ownership.
 - Keep Nuke and Qt mutations behind explicit adapters.
 
+Current progress (2026-07-20): 3D Nuke operations, callback scripts, and camera
+rig resources are outside `CharonWindow`. Processor recovery, prompt conversion,
+status/cache persistence, output manifests, tracing, worker launch, main-thread
+dispatch, and initial node-link rules have named modules and headless tests.
+Duplicate-node identity policy is now behind fake-Nuke contract tests. Output
+lookup and status propagation are also behind a linked-output repository and
+fake-Nuke tests. Output ingestion and the worker/watcher phases remain the
+largest Nuke-bound coordinator sections.
+
 ## Phase 5: Operational hardening
 
 - Add structured execution and validation diagnostics.

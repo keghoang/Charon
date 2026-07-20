@@ -2,9 +2,72 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 from .conversion_cache import desired_prompt_path, write_conversion_cache
+from .processor_prompt_cache import prompt_path_matches_hash
+
+
+@dataclass(frozen=True)
+class CachedPromptResolution:
+    payload: Optional[Dict[str, Any]]
+    path: str
+    workflow_hash: str
+
+
+def resolve_cached_prompt(
+    workflow_data: Dict[str, Any],
+    *,
+    workflow_hash: Optional[str],
+    cached_path: str,
+    cached_hash: str,
+    is_api_prompt,
+    store_cache,
+    log_debug,
+) -> CachedPromptResolution:
+    """Resolve a valid node prompt cache or fall back to an API workflow payload."""
+    normalized_path = cached_path.strip() if isinstance(cached_path, str) else ""
+    normalized_hash = cached_hash.strip() if isinstance(cached_hash, str) else ""
+    current_hash = str(workflow_hash or "")
+
+    if (
+        current_hash
+        and normalized_path
+        and not normalized_hash
+        and prompt_path_matches_hash(normalized_path, current_hash)
+    ):
+        normalized_hash = current_hash
+        store_cache(normalized_path, normalized_hash)
+
+    if normalized_path and normalized_hash and current_hash and normalized_hash != current_hash:
+        log_debug("Cached prompt hash differs from workflow hash; clearing stored prompt")
+        store_cache("", "")
+        normalized_path = ""
+        normalized_hash = ""
+
+    payload = None
+    if current_hash and normalized_path and normalized_hash == current_hash:
+        if os.path.exists(normalized_path):
+            try:
+                with open(normalized_path, "r", encoding="utf-8") as cached_handle:
+                    candidate = json.load(cached_handle)
+                if is_api_prompt(candidate):
+                    payload = candidate
+                    log_debug(f"Loaded cached API prompt from {normalized_path}")
+                else:
+                    log_debug("Cached prompt is not API formatted; ignoring stored prompt", "WARNING")
+            except Exception as exc:
+                log_debug(f"Failed to read cached prompt: {exc}", "WARNING")
+        else:
+            log_debug(f"Cached prompt path missing: {normalized_path}", "WARNING")
+            store_cache("", "")
+            normalized_path = ""
+            normalized_hash = ""
+
+    if is_api_prompt(workflow_data) and payload is None:
+        payload = workflow_data
+    return CachedPromptResolution(payload, normalized_path, normalized_hash)
 
 
 def load_cached_prompt_payload(cache_hit: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:

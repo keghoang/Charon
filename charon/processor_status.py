@@ -1,7 +1,102 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Callable, Dict, List, Optional
+
+
+class StatusPayloadRepository:
+    """Persist structured processor status through a Nuke node and fallback knob."""
+
+    def __init__(
+        self,
+        node,
+        status_knob,
+        *,
+        write_metadata: Callable[[str, str], bool],
+        log_warning: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        self._node = node
+        self._status_knob = status_knob
+        self._write_metadata = write_metadata
+        self._log_warning = log_warning
+
+    def load(self) -> Dict[str, Any]:
+        raw = None
+        try:
+            raw = self._node.metadata("charon/status_payload")
+        except Exception:
+            pass
+        if not raw and self._status_knob is not None:
+            try:
+                raw = self._status_knob.value()
+            except Exception:
+                raw = None
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def save(self, payload: Dict[str, Any]) -> None:
+        serialized = json.dumps(payload)
+        self._write_metadata("charon/status_payload", serialized)
+        if self._status_knob is None:
+            return
+        try:
+            self._status_knob.setValue(serialized)
+        except Exception as exc:
+            if self._log_warning:
+                self._log_warning(f"Failed to store status payload knob: {exc}")
+
+    @staticmethod
+    def ensure_history(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        runs = payload.get("runs")
+        if not isinstance(runs, list):
+            runs = []
+        payload["runs"] = runs
+        return runs
+
+
+def initialize_status_payload(
+    payload: Dict[str, Any],
+    *,
+    message: str,
+    run_id: str,
+    run_started_at: float,
+    auto_import: bool,
+) -> Dict[str, Any]:
+    """Initialize a processor run while retaining valid prior run history."""
+    initialized = dict(payload or {})
+    runs = initialized.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    current_run = {
+        "id": run_id,
+        "status": "Processing",
+        "message": message,
+        "progress": 0.0,
+        "started_at": run_started_at,
+        "updated_at": run_started_at,
+        "auto_import": auto_import,
+    }
+    initialized.update(
+        {
+            "status": message,
+            "state": "Processing",
+            "message": message,
+            "progress": 0.0,
+            "run_id": run_id,
+            "started_at": run_started_at,
+            "updated_at": run_started_at,
+            "auto_import": auto_import,
+            "current_run": current_run,
+            "runs": runs,
+        }
+    )
+    return initialized
 
 
 def lifecycle_from_progress(progress: float, status: str) -> str:

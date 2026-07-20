@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from . import config
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
+from .comfy_environment import resolve_comfy_runtime
 from .path_safety import ensure_path_inside
 from .paths import resolve_comfy_environment
 
@@ -267,7 +268,8 @@ def resolve_missing_custom_nodes(
     result = ResolutionResult()
 
     try:
-        env_info = resolve_comfy_environment(comfy_path)
+        runtime = resolve_comfy_runtime(comfy_path)
+        env_info = runtime.as_path_info()
     except Exception as exc:  # pragma: no cover - defensive guard
         result.failed.append(f"Failed to resolve Comfy environment: {exc}")
         return result
@@ -365,7 +367,8 @@ def install_custom_nodes_via_playwright(
         return result
 
     try:
-        env_info = resolve_comfy_environment(comfy_path)
+        runtime = resolve_comfy_runtime(comfy_path)
+        env_info = runtime.as_path_info()
     except Exception as exc:  # pragma: no cover - defensive guard
         result.failed.append(f"Failed to resolve Comfy environment: {exc}")
         return result
@@ -378,9 +381,9 @@ def install_custom_nodes_via_playwright(
     if not comfy_dir or not os.path.isdir(comfy_dir):
         result.failed.append("ComfyUI directory missing; cannot run Playwright install.")
         return result
-    if not ComfyUIClient(connect_timeout=3).test_connection():
+    if not ComfyUIClient(runtime.base_url, connect_timeout=3).test_connection():
         result.failed.append(
-            "No valid ComfyUI server is responding on 127.0.0.1:8188. "
+            f"No valid ComfyUI server is responding at {runtime.base_url}. "
             "Start ComfyUI and wait for it to finish loading before installing custom nodes."
         )
         return result
@@ -406,6 +409,7 @@ import json
 import sys
 
 REPOS = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
+COMFY_URL = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:8188"
 
 async def main():
     result = {"installed": [], "skipped": [], "failed": [], "error": ""}
@@ -420,11 +424,11 @@ async def main():
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         try:
-            await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
+            await page.goto(COMFY_URL, wait_until="load", timeout=120000)
         except Exception as exc:
             result["error"] = (
                 "Please start ComfyUI server first. "
-                f"(Cannot reach ComfyUI at 127.0.0.1:8188: {exc})"
+                f"(Cannot reach ComfyUI at {COMFY_URL}: {exc})"
             )
             print(json.dumps(result))
             await browser.close()
@@ -466,7 +470,7 @@ asyncio.run(main())
         with open(script_path, "w", encoding="utf-8") as handle:
             handle.write(install_script)
 
-        command = [python_exe, script_path, payload]
+        command = [python_exe, script_path, payload, runtime.base_url]
         env = os.environ.copy()
         env.setdefault("COMFYUI_PATH", comfy_dir)
         env.setdefault("COMFYUI_FOLDERS_BASE_PATH", comfy_dir)

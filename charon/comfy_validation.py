@@ -12,16 +12,17 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from . import preferences
+from . import config, preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
+from .comfy_environment import resolve_comfy_runtime
 from .model_paths import derive_workflow_value_from_path
 from .paths import get_charon_temp_dir, resolve_comfy_environment
 from .validation_resolver import locate_manager_cli
 from .workflow_graph import iter_workflow_node_dicts
 
 
-DEFAULT_PING_URL = "http://127.0.0.1:8188"
+DEFAULT_PING_URL = config.COMFY_URL_BASE
 CACHE_KEY = "comfy_validation_cache"
 BANNER_PREF_KEY = "comfy_validator_banner_dismissed"
 CACHE_TTL_SECONDS = 900  # 15 minutes
@@ -670,11 +671,23 @@ def validate_comfy_environment(
         _write_validation_debug_payload(result)
         return result
 
-    env_info = resolve_comfy_environment(comfy_path)
+    runtime = resolve_comfy_runtime(
+        comfy_path,
+        ping_url,
+        use_preferences=False,
+    )
+    env_info = runtime.as_path_info()
+    ping_url = runtime.base_url
     if include_environment:
         result_comfy_path = env_info.get("comfy_dir") or result_comfy_path
     if include_environment:
-        issues.append(_validate_environment(comfy_path, env_info))
+        issues.append(
+            _validate_environment(
+                comfy_path,
+                env_info,
+                base_url=runtime.base_url,
+            )
+        )
     custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(
         env_info,
         workflow_bundle,
@@ -739,7 +752,12 @@ def set_banner_dismissed(flag: bool) -> None:
     preferences.save_preferences(prefs)
 
 
-def _validate_environment(comfy_path: str, env_info: Dict[str, Any]) -> ValidationIssue:
+def _validate_environment(
+    comfy_path: str,
+    env_info: Dict[str, Any],
+    *,
+    base_url: str = DEFAULT_PING_URL,
+) -> ValidationIssue:
     base_exists = os.path.exists(comfy_path)
     comfy_dir = env_info.get("comfy_dir")
     python_exe = env_info.get("python_exe")
@@ -762,8 +780,10 @@ def _validate_environment(comfy_path: str, env_info: Dict[str, Any]) -> Validati
 
     data = {
         "base_exists": base_exists,
+        "base_url": base_url,
         "comfy_dir": comfy_dir,
         "comfy_dir_ok": comfy_dir_ok,
+        "models_dir": env_info.get("models_dir"),
         "python_exe": python_exe,
         "python_ok": python_ok,
     }
@@ -822,7 +842,7 @@ def _validate_custom_nodes_browser(
     workflow_bundle: Optional[Dict[str, Any]],
     *,
     mode: str = "cache",
-    ping_url: str = DEFAULT_PING_URL,
+    ping_url: Optional[str] = None,
 ) -> Tuple[ValidationIssue, Optional[Dict[str, Any]]]:
     python_exe = env_info.get("python_exe")
     comfy_dir = env_info.get("comfy_dir")

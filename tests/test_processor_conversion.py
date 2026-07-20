@@ -3,10 +3,71 @@ import os
 import tempfile
 import unittest
 
-from charon.processor_conversion import load_cached_prompt_payload, write_converted_prompt_payload
+from charon.processor_conversion import (
+    load_cached_prompt_payload,
+    resolve_cached_prompt,
+    write_converted_prompt_payload,
+)
 
 
 class ProcessorConversionTests(unittest.TestCase):
+    @staticmethod
+    def _is_api_prompt(payload):
+        return isinstance(payload, dict) and bool(payload) and all(
+            isinstance(value, dict) and "class_type" in value for value in payload.values()
+        )
+
+    def test_resolve_cached_prompt_invalidates_stale_hash(self):
+        stores = []
+        resolution = resolve_cached_prompt(
+            {"1": {"class_type": "Current"}},
+            workflow_hash="current-hash",
+            cached_path="missing.json",
+            cached_hash="stale-hash",
+            is_api_prompt=self._is_api_prompt,
+            store_cache=lambda path, value: stores.append((path, value)),
+            log_debug=lambda *_args: None,
+        )
+
+        self.assertEqual(stores, [("", "")])
+        self.assertEqual(resolution.path, "")
+        self.assertEqual(resolution.payload, {"1": {"class_type": "Current"}})
+
+    def test_resolve_cached_prompt_loads_matching_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_path = os.path.join(tmp, "prompt.json")
+            payload = {"1": {"class_type": "Cached"}}
+            with open(prompt_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            resolution = resolve_cached_prompt(
+                {"ui": {}},
+                workflow_hash="workflow-hash",
+                cached_path=prompt_path,
+                cached_hash="workflow-hash",
+                is_api_prompt=self._is_api_prompt,
+                store_cache=lambda *_args: None,
+                log_debug=lambda *_args: None,
+            )
+
+        self.assertEqual(resolution.payload, payload)
+
+    def test_resolve_cached_prompt_clears_missing_file(self):
+        stores = []
+        resolution = resolve_cached_prompt(
+            {"ui": {}},
+            workflow_hash="workflow-hash",
+            cached_path="Z:/missing/prompt.json",
+            cached_hash="workflow-hash",
+            is_api_prompt=self._is_api_prompt,
+            store_cache=lambda path, value: stores.append((path, value)),
+            log_debug=lambda *_args: None,
+        )
+
+        self.assertIsNone(resolution.payload)
+        self.assertEqual((resolution.path, resolution.workflow_hash), ("", ""))
+        self.assertEqual(stores, [("", "")])
+
     def test_load_cached_prompt_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             prompt_path = os.path.join(tmp, "prompt.json")

@@ -14,7 +14,7 @@ from .charon_logger import system_debug, system_warning
 from .conversion_cache import clear_conversion_cache, compute_workflow_hash
 from .json_io import atomic_write_json
 from .path_safety import is_path_inside, relative_path_from_root
-from .paths import resolve_comfy_environment
+from .comfy_environment import resolve_comfy_runtime
 
 LOCAL_REPO_DIR = "Charon_repo_local"
 LOCAL_WORKFLOW_DIR = "workflow"
@@ -381,13 +381,15 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
 def compute_validation_signature(remote_folder: str) -> str:
     """Fingerprint inputs that can make a previously validated override stale."""
     comfy_path = str(preferences.get_preference("comfyui_launch_path", "") or "").strip()
-    env_info = resolve_comfy_environment(comfy_path)
-    comfy_dir = str(env_info.get("comfy_dir") or "")
-    models_dir = str(env_info.get("models_dir") or os.path.join(comfy_dir, "models"))
+    runtime = resolve_comfy_runtime(comfy_path)
+    comfy_dir = runtime.comfy_dir
+    models_dir = runtime.models_dir or os.path.join(comfy_dir, "models")
     payload = {
         "comfy_path": _normalize_signature_path(comfy_path),
+        "comfy_url": runtime.base_url,
+        "server_address": runtime.server_address,
         "comfy_dir": _normalize_signature_path(comfy_dir),
-        "python_exe": _normalize_signature_path(str(env_info.get("python_exe") or "")),
+        "python_exe": _normalize_signature_path(str(runtime.python_exe or "")),
         "metadata_hash": _metadata_hash(remote_folder),
         "custom_nodes": _directory_inventory(os.path.join(comfy_dir, "custom_nodes")),
         "model_roots": _directory_inventory(models_dir),

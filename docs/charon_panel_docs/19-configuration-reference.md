@@ -73,6 +73,7 @@ Behavior:
 Important keys currently used by the runtime:
 
 - `comfyui_launch_path`
+- `comfyui_url_base` (optional; defaults to `COMFY_URL_BASE`)
 - `first_time_setup_complete`
 - `force_first_time_setup`
 - `dependencies_verified`
@@ -162,18 +163,33 @@ Behavior:
   loading.
 
 ## ComfyUI Environment Resolution
-`paths.resolve_comfy_environment()` derives:
+`comfy_environment.resolve_comfy_runtime()` is the application-level identity
+for the configured installation and server. Resolution order for the endpoint is:
 
+1. an explicitly supplied URL
+2. `CHARON_COMFY_URL`
+3. the `comfyui_url_base` preference
+4. `config.COMFY_URL_BASE`
+
+The resulting `ComfyEnvironment` binds `base_url` and `server_address` to these
+filesystem fields:
+
+- `configured_path`
 - `base_dir`
 - `comfy_dir`
+- `models_dir`
 - `python_exe`
 - `embedded_root`
 
-It expects the configured launch path to resolve back to a portable ComfyUI
-layout containing `python_embeded` and `ComfyUI\main.py` or equivalent.
+`paths.resolve_comfy_environment()` remains the lower-level filesystem resolver.
+It accepts a launcher, portable root, ComfyUI root, models root, or embedded
+Python executable.
 
 `paths.extend_sys_path_with_comfy()` also adds the relevant ComfyUI and embedded
 Python directories to `sys.path` for hosted runtime use.
+
+The workflow conversion exporter intentionally remains a local conversion
+harness on port 8188 because it may launch and own a temporary ComfyUI process.
 
 ## Dependency Bootstrap
 

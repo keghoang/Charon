@@ -69,11 +69,19 @@ events rather than reaching through widget attributes.
 - `paths.resolve_comfy_environment()` is the canonical filesystem environment
   resolver for launchers, portable roots, ComfyUI roots, model roots, and the
   embedded Python executable.
+- `comfy_environment.py` binds the filesystem projection to the configured HTTP
+  endpoint. Runtime consumers should resolve this identity instead of reading
+  preferences and constants independently.
+- `validation_repository.py` owns signature-aware validation state reads and
+  transient caching; presentation code only projects its results.
 - `node_factory.py` and `scene_nodes_runtime.py` are Nuke infrastructure.
 - `processor.py` currently combines application coordination and Nuke
-  infrastructure; it should be split by execution phase.
-- `ui/main_window.py` currently combines presentation, application
-  coordination, and Nuke-specific 3D tools.
+  infrastructure. Recovery, input normalization, prompt-cache persistence,
+  status persistence, submission, and bounded background-job policy have moved
+  behind named helpers; remaining Nuke mutations should be split by phase.
+- `nuke_3d_tools.py`, `nuke_3d_scripts.py`, and packaged `.nk` resources own
+  Nuke-specific 3D behavior. `ui/main_window.py` now retains only command
+  dispatch and error presentation for those tools.
 
 ## Change Rules
 

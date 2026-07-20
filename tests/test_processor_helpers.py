@@ -11,10 +11,82 @@ from charon.processor_output import (
     progress_for_batch,
     resolve_local_output_candidate,
 )
-from charon.processor_status import lifecycle_from_progress, update_status_payload
+from charon.processor_status import (
+    StatusPayloadRepository,
+    initialize_status_payload,
+    lifecycle_from_progress,
+    update_status_payload,
+)
+
+
+class _ValueKnob:
+    def __init__(self, value=""):
+        self._value = value
+
+    def value(self):
+        return self._value
+
+    def setValue(self, value):
+        self._value = value
+
+
+class _StatusNode:
+    def __init__(self, metadata_value=None):
+        self.metadata_value = metadata_value
+
+    def metadata(self, key):
+        if key == "charon/status_payload":
+            return self.metadata_value
+        return None
 
 
 class ProcessorHelperTests(unittest.TestCase):
+    def test_initialize_status_payload_retains_history(self):
+        payload = initialize_status_payload(
+            {"runs": [{"id": "prior"}]},
+            message="Preparing node",
+            run_id="run-2",
+            run_started_at=10.0,
+            auto_import=False,
+        )
+
+        self.assertEqual(payload["runs"], [{"id": "prior"}])
+        self.assertEqual(payload["current_run"]["id"], "run-2")
+        self.assertEqual(payload["state"], "Processing")
+        self.assertFalse(payload["auto_import"])
+
+    def test_status_repository_loads_metadata_before_knob(self):
+        knob = _ValueKnob('{"source": "knob"}')
+        repository = StatusPayloadRepository(
+            _StatusNode('{"source": "metadata"}'),
+            knob,
+            write_metadata=lambda _key, _value: True,
+        )
+
+        self.assertEqual(repository.load(), {"source": "metadata"})
+
+    def test_status_repository_saves_metadata_and_knob(self):
+        writes = []
+        knob = _ValueKnob()
+        repository = StatusPayloadRepository(
+            _StatusNode(),
+            knob,
+            write_metadata=lambda key, value: writes.append((key, value)) or True,
+        )
+
+        repository.save({"state": "Processing"})
+
+        self.assertEqual(writes[0][0], "charon/status_payload")
+        self.assertEqual(knob.value(), writes[0][1])
+
+    def test_status_repository_normalizes_history(self):
+        payload = {"runs": "invalid"}
+
+        history = StatusPayloadRepository.ensure_history(payload)
+
+        self.assertEqual(history, [])
+        self.assertIs(payload["runs"], history)
+
     def test_lifecycle_from_progress(self):
         self.assertEqual(lifecycle_from_progress(-1, "Error"), "Error")
         self.assertEqual(lifecycle_from_progress(1.0, "Completed"), "Completed")

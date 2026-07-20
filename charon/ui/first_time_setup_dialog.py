@@ -8,6 +8,7 @@ from ..qt_compat import QtWidgets, QtGui, QtCore
 from ..charon_logger import system_error, system_info
 from .. import preferences
 from ..comfy_client import ComfyUIClient
+from ..comfy_environment import resolve_comfy_runtime
 from ..comfy_restart import send_shutdown_signal
 from ..dependency_check import PREF_DEPENDENCIES_VERIFIED, ensure_manager_security_level
 from pathlib import Path
@@ -619,13 +620,15 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
 
     def _is_comfy_running(self) -> bool:
         try:
-            client = ComfyUIClient()
+            runtime = resolve_comfy_runtime(self.comfy_path)
+            client = ComfyUIClient(runtime.base_url)
             return bool(client.test_connection())
         except Exception:
             return False
 
     def _send_shutdown_signal(self) -> bool:
-        return send_shutdown_signal("http://127.0.0.1:8188")
+        runtime = resolve_comfy_runtime(self.comfy_path)
+        return send_shutdown_signal(runtime.base_url)
 
     def _trigger_restart_request(self) -> None:
         try:

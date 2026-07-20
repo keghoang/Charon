@@ -1,7 +1,42 @@
 from __future__ import annotations
 
+import json
 import os
+import time
+import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+
+def allocate_result_manifest_path(
+    runtime_root: str,
+    *,
+    timestamp: Optional[int] = None,
+    manifest_id: Optional[str] = None,
+) -> str:
+    """Allocate a unique processor result manifest under the runtime results root."""
+    results_dir = os.path.join(runtime_root, "results")
+    os.makedirs(results_dir, exist_ok=True)
+    created_at = int(time.time()) if timestamp is None else int(timestamp)
+    unique_id = (manifest_id or str(uuid.uuid4()))[:8]
+    return os.path.join(results_dir, f"charon_result_{created_at}_{unique_id}.json")
+
+
+def write_result_manifest(path: str, payload: Dict[str, Any]) -> None:
+    """Atomically publish a result manifest so watchers never read partial JSON."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    temp_path = f"{path}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
 
 
 def is_ignored_output_path(path: Optional[str], ignore_prefix: str) -> bool:

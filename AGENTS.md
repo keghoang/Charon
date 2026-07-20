@@ -86,10 +86,14 @@ The legacy `charon_core` package has been retired. All runtime code now lives in
    - Node factory reuses the unified helpers; Grab defaults auto-import to enabled.
 6. Processor Flow Port - complete
    - `charon.processor` owns ComfyUI submission. Workflows convert only when still in UI format, then submit via shared helpers. `spawn_charon_node` injects this processor.
-7. Shared Output Management - not started
-   - Next step: codify output layout helpers, log artifact destinations, and align with project storage conventions.
-8. Instrumentation & Manual QA - not started
-   - Pending: add structured logs (`metadata_read`, `conversion_start`, etc.), exercise the full Grab/Process loop, and document failure handling (missing repo, invalid JSON, conversion errors).
+7. Shared Output Management - in progress
+   - `paths.py` owns output allocation; `processor_output.py` owns result-manifest
+     allocation, atomic publication, artifact classification, and local-path
+     normalization. Project-storage alignment still requires production review.
+8. Instrumentation & Manual QA - in progress
+   - `processor_trace.py` owns ordered step logs and trace-file placement. The LTX
+     validation flow is production-confirmed; the full Grab/Process loop and
+     failure cases still require live Nuke verification.
 
 ### Guardrails & Notes
 - Never touch directories above `\buck\globalprefs\SHARED\CODE\Charon_repo\workflows`.

@@ -14,12 +14,12 @@ from .conversion_cache import (
     compute_workflow_hash,
     load_cached_conversion,
 )
+from .background_jobs import start_daemon_job
 from .paths import (
     allocate_charon_output_path,
     allocate_custom_output_path,
     get_default_comfy_launch_path,
     get_charon_temp_dir,
-    get_nuke_script_hash,
     get_placeholder_image_path,
     _normalize_charon_root,
     resolve_comfy_environment,
@@ -28,11 +28,39 @@ from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from .workflow_overrides import apply_validation_model_overrides
 from .workflow_local_store import get_local_workflow_folder
 from .path_safety import is_path_inside
-from .nuke_threading import is_main_thread, run_on_main_thread, run_on_main_thread_async
+from .nuke_threading import (
+    is_main_thread,
+    run_on_main_thread,
+    run_on_main_thread_async,
+    run_on_nuke_main_thread_blocking,
+)
 from .process_runner import ProcessExecutionError, run_subprocess
-from .processor_context import capture_processor_run_context
-from .processor_conversion import load_cached_prompt_payload, write_converted_prompt_payload
+from .processor_context import (
+    capture_processor_run_context,
+    resolve_batch_count,
+    resolve_node_auto_import,
+    resolve_nuke_script_name,
+    resolve_workflow_display_name,
+)
+from .processor_inputs import resolve_crop_settings
+from .processor_node_state import (
+    LinkedOutputRepository,
+    NodeMetadataWriter,
+    apply_status_to_outputs,
+    ensure_link_anchor_value,
+    ensure_charon_node_identity,
+    normalize_node_id as _normalize_node_id,
+    refresh_linked_output_info,
+    safe_knob_value as _safe_knob_value,
+    update_last_output_state,
+)
+from .processor_conversion import (
+    load_cached_prompt_payload,
+    resolve_cached_prompt,
+    write_converted_prompt_payload,
+)
 from .processor_output import (
+    allocate_result_manifest_path,
     collect_output_artifacts,
     is_camera_output_entry,
     is_ignored_output_path,
@@ -42,12 +70,29 @@ from .processor_output import (
     output_entry_label,
     progress_for_batch,
     resolve_local_output_candidate,
+    write_result_manifest,
 )
-from .processor_status import lifecycle_from_progress, update_status_payload
+from .processor_recovery import (
+    download_with_timeout,
+    find_output_by_basename,
+    recover_artifacts_from_output_dir,
+    recover_matching_history_artifacts,
+    recover_prefixed_history_artifacts,
+    resolve_batch_timeout,
+    resolve_result_watch_timeout,
+)
+from .processor_prompt_cache import PromptCacheRepository
+from .processor_trace import create_execution_trace
+from .processor_status import (
+    StatusPayloadRepository,
+    initialize_status_payload,
+    lifecycle_from_progress,
+    update_status_payload,
+)
 from .processor_submission import build_batch_prompt, submit_prompt_or_raise
 from .comfy_client import ComfyUIClient
+from .comfy_environment import resolve_comfy_runtime
 from . import config, preferences
-from .node_factory import generate_charon_node_id, reset_charon_node_state, update_charon_node_identity
 from .utilities import (
     get_current_user_slug,
     status_to_gl_color,
@@ -120,41 +165,6 @@ Group {
  }
 end_group
 """
-
-
-def _allocate_output_path(
-    node_id: Optional[str],
-    script_name: Optional[str],
-    extension: str,
-    user_slug: Optional[str],
-    workflow_name: Optional[str],
-    category: str,
-    output_name: Optional[str] = None,
-    output_subfolder: Optional[str] = None,
-) -> str:
-    """
-    Wrap allocate_charon_output_path to remain compatible with older signatures.
-    """
-    try:
-        return allocate_charon_output_path(
-            node_id,
-            script_name,
-            extension,
-            user_slug=user_slug,
-            workflow_name=workflow_name,
-            category=category,
-            output_name=output_name,
-            output_subfolder=output_subfolder,
-        )
-    except TypeError:
-        return allocate_charon_output_path(
-            node_id,
-            script_name,
-            extension,
-            user_slug=user_slug,
-            workflow_name=workflow_name,
-            category=category,
-        )
 
 
 def _load_parameter_specs(node) -> List[Dict[str, Any]]:
@@ -722,7 +732,8 @@ def _resolve_comfy_environment() -> Tuple[Optional[object], Optional[object], Op
 
     if client is None:
         try:
-            tentative_client = ComfyUIClient()
+            runtime = resolve_comfy_runtime(comfy_path)
+            tentative_client = ComfyUIClient(runtime.base_url)
             if tentative_client.test_connection():
                 client = tentative_client
         except Exception:
@@ -1404,7 +1415,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 rec_current_captured = int(node.knob('charon_recursive_current').value())
             rec_loop_start_captured = node.knob('charon_recursive_loop_start').value()
         except: pass
-        
+
         if rec_enabled_captured and not is_recursive_call:
             try:
                 attr = node.knob('charon_recursive_attribute').value()
@@ -1460,105 +1471,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 )
                 custom_output_root = ""
 
-        if hasattr(node, 'setMetaData'):
-            metadata_writer = node.setMetaData
-        elif hasattr(node, 'setMetadata'):
-            metadata_writer = node.setMetadata
-        else:
-            metadata_writer = None
+        write_metadata = NodeMetadataWriter(
+            node,
+            log_warning=lambda message: log_debug(message, "WARNING"),
+        )
+        prompt_cache = PromptCacheRepository(
+            node,
+            nuke,
+            write_metadata=write_metadata,
+            run_on_main_thread=run_on_main_thread,
+            log_debug=log_debug,
+        )
+        read_cached_prompt = prompt_cache.load
+        store_cached_prompt = prompt_cache.store
 
-        metadata_warning_emitted = False
-
-        def write_metadata(key, value):
-            nonlocal metadata_warning_emitted
-            if not metadata_writer:
-                metadata_warning_emitted = True
-                return False
-            try:
-                metadata_writer(key, value)
-                return True
-            except Exception as exc:
-                if not metadata_warning_emitted:
-                    log_debug(f"Failed to persist metadata '{key}': {exc}", 'WARNING')
-                    metadata_warning_emitted = True
-                return False
-        def _read_prompt_hash_knob():
-            try:
-                knob = node.knob('charon_prompt_hash')
-                if knob is not None:
-                    return str(knob.value()).strip()
-            except Exception:
-                return ""
-            return ""
-
-        def _ensure_prompt_hash_knob():
-            try:
-                knob = node.knob('charon_prompt_hash')
-            except Exception:
-                knob = None
-            if knob is not None:
-                return knob
-            try:
-                knob = nuke.String_Knob('charon_prompt_hash', 'Prompt Hash', '')
-                knob.setFlag(nuke.NO_ANIMATION | nuke.INVISIBLE)
-                node.addKnob(knob)
-            except Exception:
-                return None
-            return knob
-
-        def _prompt_path_matches_hash(path_value, hash_value):
-            if not path_value or not hash_value:
-                return False
-            try:
-                basename = os.path.basename(str(path_value)).lower()
-            except Exception:
-                return False
-            prefix = str(hash_value)[:8].lower()
-            return bool(prefix) and prefix in basename
-
-        def read_cached_prompt():
-            path_value = ""
-            try:
-                knob = node.knob('charon_prompt_path')
-                if knob is not None:
-                    path_value = str(knob.value()).strip()
-            except Exception:
-                path_value = ""
-            hash_value = _read_prompt_hash_knob()
-            try:
-                meta_val = node.metadata('charon/prompt_hash')
-                if meta_val is not None:
-                    meta_hash = str(meta_val).strip()
-                    if meta_hash and not hash_value:
-                        hash_value = meta_hash
-            except Exception:
-                hash_value = ""
-            return path_value, hash_value
-
-        def store_cached_prompt(path_value, hash_value):
-            def _store():
-                normalized_path = path_value.replace('\\', '/') if isinstance(path_value, str) else ''
-                try:
-                    knob = node.knob('charon_prompt_path')
-                    if knob is not None:
-                        knob.setValue(normalized_path)
-                except Exception:
-                    pass
-                normalized_hash = str(hash_value or '')
-                hash_knob = _ensure_prompt_hash_knob()
-                if hash_knob is not None:
-                    try:
-                        hash_knob.setValue(normalized_hash)
-                    except Exception:
-                        pass
-                write_metadata('charon/prompt_hash', normalized_hash)
-                if hash_value:
-                    log_debug(f'Stored prompt cache hash {hash_value}')
-                if normalized_path:
-                    log_debug(f'Stored prompt cache path {normalized_path}')
-
-            run_on_main_thread(_store)
-        
         # Set initial status
         try:
             node.knob('charon_status').setValue('Preparing node')
@@ -1571,955 +1497,71 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         except Exception:
             status_payload_knob = None
 
-        def resolve_auto_import():
-            if not is_main_thread():
-                return run_on_main_thread(resolve_auto_import)
-            try:
-                knob = node.knob('charon_auto_import')
-                if knob is not None:
-                    try:
-                        return bool(int(knob.value()))
-                    except Exception:
-                        return bool(knob.value())
-            except Exception:
-                pass
-            try:
-                meta = node.metadata('charon/auto_import')
-                if isinstance(meta, str):
-                    lowered = meta.strip().lower()
-                    if lowered in {'0', 'false', 'off', 'no'}:
-                        return False
-                    if lowered in {'1', 'true', 'on', 'yes'}:
-                        return True
-                elif meta is not None:
-                    return bool(meta)
-            except Exception:
-                pass
-            return True
+        resolve_auto_import = lambda: resolve_node_auto_import(node)
 
         current_run_id = str(uuid.uuid4())
         run_started_at = time.time()
 
-        def load_status_payload():
-            raw = None
-            try:
-                raw = node.metadata("charon/status_payload")
-            except Exception:
-                pass
-            if not raw and status_payload_knob:
-                try:
-                    raw = status_payload_knob.value()
-                except Exception:
-                    raw = None
-            if not raw:
-                return {}
-            try:
-                return json.loads(raw)
-            except Exception:
-                return {}
+        status_repository = StatusPayloadRepository(
+            node,
+            status_payload_knob,
+            write_metadata=write_metadata,
+            log_warning=lambda message: log_debug(message, "WARNING"),
+        )
+        load_status_payload = status_repository.load
+        save_status_payload = status_repository.save
+        ensure_history = status_repository.ensure_history
 
-        def save_status_payload(payload):
-            serialized = json.dumps(payload)
-            write_metadata("charon/status_payload", serialized)
-            if status_payload_knob:
-                try:
-                    status_payload_knob.setValue(serialized)
-                except Exception as payload_error:
-                    log_debug(f'Failed to store status payload knob: {payload_error}', 'WARNING')
+        update_last_output = lambda path_value: update_last_output_state(
+            node,
+            path_value,
+            write_metadata=write_metadata,
+        )
 
-        def ensure_history(payload):
-            runs = payload.get('runs')
-            if not isinstance(runs, list):
-                runs = []
-            payload['runs'] = runs
-            return runs
 
-        def update_last_output(path_value):
-            try:
-                knob = node.knob('charon_last_output')
-                if knob is not None:
-                    knob.setValue(path_value or "")
-            except Exception:
-                pass
-            write_metadata('charon/last_output', path_value or "")
-            try:
-                recreate_knob = node.knob('charon_recreate_read')
-            except Exception:
-                recreate_knob = None
-            if recreate_knob is not None:
-                try:
-                    linked = find_linked_read_node()
-                except Exception:
-                    linked = None
-                has_output = bool(path_value)
-                try:
-                    recreate_knob.setEnabled(has_output)
-                except Exception:
-                    pass
-
-        def _normalize_node_id(value: Optional[str]) -> str:
-            if not value:
-                return ""
-            text = str(value).strip().lower()
-            if not text:
-                return ""
-            max_len = max(4, int(getattr(config, "CHARON_NODE_ID_LENGTH", 12)))
-            return text[:max_len]
-
-        def _normalize_script_hash(value: Optional[str]) -> str:
-            if not value:
-                return ""
-            text = str(value).strip().lower()
-            return text
-
-        def _safe_knob_value(owner, knob_name: str) -> Optional[str]:
-            try:
-                knob = owner.knob(knob_name)
-            except Exception:
-                return None
-            if knob is None:
-                return None
-            try:
-                return knob.value()
-            except Exception:
-                return None
-
-        def _read_script_hash(owner) -> str:
-            stored = _normalize_script_hash(_safe_knob_value(owner, "charon_script_hash"))
-            if stored:
-                return stored
-            try:
-                return _normalize_script_hash(owner.metadata("charon/script_hash"))
-            except Exception:
-                return ""
-
-        def _update_read_parent_ids(old_id: str, new_id: str) -> None:
-            normalized_old = _normalize_node_id(old_id)
-            normalized_new = _normalize_node_id(new_id)
-            if not normalized_old or not normalized_new or normalized_old == normalized_new:
-                return
-            for class_name in ("Read", "ReadGeo2"):
-                try:
-                    candidates = list(nuke.allNodes(class_name))
-                except Exception:
-                    continue
-                for candidate in candidates:
-                    parent_val = ""
-                    try:
-                        parent_val = _normalize_node_id(candidate.metadata("charon/parent_id"))
-                    except Exception:
-                        parent_val = ""
-                    if parent_val != normalized_old:
-                        parent_val = _normalize_node_id(_safe_knob_value(candidate, "charon_parent_id"))
-                    if parent_val != normalized_old:
-                        continue
-                    try:
-                        candidate.setMetaData("charon/parent_id", normalized_new)
-                    except Exception:
-                        pass
-                    try:
-                        parent_knob = candidate.knob("charon_parent_id")
-                    except Exception:
-                        parent_knob = None
-                    if parent_knob is not None:
-                        try:
-                            parent_knob.setValue(normalized_new)
-                        except Exception:
-                            pass
-            try:
-                group_candidates = list(nuke.allNodes("Group"))
-            except Exception:
-                group_candidates = []
-            for candidate in group_candidates:
-                parent_val = ""
-                try:
-                    parent_val = _normalize_node_id(candidate.metadata("charon/parent_id"))
-                except Exception:
-                    parent_val = ""
-                if parent_val != normalized_old:
-                    parent_val = _normalize_node_id(_safe_knob_value(candidate, "charon_parent_id"))
-                if parent_val != normalized_old:
-                    continue
-                try:
-                    candidate.setMetaData("charon/parent_id", normalized_new)
-                except Exception:
-                    pass
-                try:
-                    parent_knob = candidate.knob("charon_parent_id")
-                except Exception:
-                    parent_knob = None
-                if parent_knob is not None:
-                    try:
-                        parent_knob.setValue(normalized_new)
-                    except Exception:
-                        pass
-
-        def _sync_anchored_output_nodes(node_id: str) -> None:
-            if not node_id:
-                return
-            try:
-                node_full = node.fullName()
-            except Exception:
-                node_full = ""
-            try:
-                node_name = node.name()
-            except Exception:
-                node_name = ""
-            if not node_full and not node_name:
-                return
-
-            def _anchor_matches(candidate) -> bool:
-                try:
-                    anchor_knob = candidate.knob("charon_link_anchor")
-                except Exception:
-                    anchor_knob = None
-                if anchor_knob is None:
-                    return False
-                expr = ""
-                try:
-                    expr = anchor_knob.expression()
-                except Exception:
-                    expr = ""
-                if not expr:
-                    return False
-                if node_full and node_full in expr:
-                    return True
-                if node_name and node_name in expr:
-                    return True
-                return False
-
-            def _update_parent(candidate) -> None:
-                try:
-                    candidate.setMetaData("charon/parent_id", node_id)
-                except Exception:
-                    pass
-                try:
-                    parent_knob = candidate.knob("charon_parent_id")
-                except Exception:
-                    parent_knob = None
-                if parent_knob is not None:
-                    try:
-                        parent_knob.setValue(node_id)
-                    except Exception:
-                        pass
-
-            def _matches_parent(candidate) -> bool:
-                parent_val = ""
-                try:
-                    parent_val = _normalize_node_id(candidate.metadata("charon/parent_id"))
-                except Exception:
-                    parent_val = ""
-                if not parent_val:
-                    parent_val = _normalize_node_id(_safe_knob_value(candidate, "charon_parent_id"))
-                return parent_val == _normalize_node_id(node_id)
-
-            def _set_contact_sheet_knob(candidate_name: str) -> None:
-                try:
-                    knob = node.knob("charon_contact_sheet")
-                except Exception:
-                    knob = None
-                if knob is None:
-                    return
-                current_name = ""
-                try:
-                    current_name = str(knob.value() or "").strip()
-                except Exception:
-                    current_name = ""
-                if current_name:
-                    try:
-                        current = nuke.toNode(current_name)
-                    except Exception:
-                        current = None
-                    if current is not None and _matches_parent(current):
-                        return
-                try:
-                    knob.setValue(candidate_name)
-                except Exception:
-                    pass
-
-            try:
-                candidates = list(nuke.allNodes())
-            except Exception:
-                candidates = []
-            for candidate in candidates:
-                if candidate is None or candidate is node:
-                    continue
-                if not _anchor_matches(candidate):
-                    continue
-                _update_parent(candidate)
-                try:
-                    if candidate.Class() == "Group":
-                        try:
-                            read_id_knob = candidate.knob("charon_read_id")
-                        except Exception:
-                            read_id_knob = None
-                        if read_id_knob is not None:
-                            _set_contact_sheet_knob(candidate.name())
-                except Exception:
-                    pass
-
-        def _deduplicate_node_id(candidate: str) -> str:
-            normalized = _normalize_node_id(candidate)
-            if not normalized:
-                return ""
-            try:
-                nodes_with_id: List[Any] = []
-                for other in nuke.allNodes("Group"):
-                    other_id = _normalize_node_id(_safe_knob_value(other, "charon_node_id"))
-                    if not other_id:
-                        try:
-                            meta_val = other.metadata("charon/node_id")
-                        except Exception:
-                            meta_val = ""
-                        other_id = _normalize_node_id(meta_val)
-                    if other_id == normalized:
-                        nodes_with_id.append(other)
-            except Exception:
-                return normalized
-
-            if len(nodes_with_id) <= 1:
-                return normalized
-
-            def _node_sort_key(target) -> str:
-                try:
-                    return str(target.name() or "").lower()
-                except Exception:
-                    return ""
-
-            def _has_value(value: Optional[str]) -> bool:
-                if value is None:
-                    return False
-                try:
-                    return bool(str(value).strip())
-                except Exception:
-                    return False
-
-            def _node_has_outputs(target) -> bool:
-                if _has_value(_safe_knob_value(target, "charon_last_output")):
-                    return True
-                try:
-                    if _has_value(target.metadata("charon/last_output")):
-                        return True
-                except Exception:
-                    pass
-                for knob_name in ("charon_read_node", "charon_contact_sheet"):
-                    if _has_value(_safe_knob_value(target, knob_name)):
-                        return True
-                for meta_key in ("charon/read_node", "charon/contact_sheet"):
-                    try:
-                        if _has_value(target.metadata(meta_key)):
-                            return True
-                    except Exception:
-                        pass
-                return False
-
-            nodes_with_outputs = [item for item in nodes_with_id if _node_has_outputs(item)]
-            if nodes_with_outputs:
-                nodes_with_outputs.sort(key=_node_sort_key)
-                if node in nodes_with_outputs and len(nodes_with_outputs) == 1:
-                    keeper = node
-                else:
-                    keeper = nodes_with_outputs[0]
-            else:
-                if node in nodes_with_id:
-                    keeper = node
-                else:
-                    nodes_with_id.sort(key=_node_sort_key)
-                    keeper = nodes_with_id[0]
-
-            def _node_pos(target) -> Optional[Tuple[float, float]]:
-                if target is None:
-                    return None
-                try:
-                    return (float(target.xpos()), float(target.ypos()))
-                except Exception:
-                    return None
-
-            def _distance_sq(a: Optional[Tuple[float, float]], b: Optional[Tuple[float, float]]) -> Optional[float]:
-                if a is None or b is None:
-                    return None
-                dx = a[0] - b[0]
-                dy = a[1] - b[1]
-                return dx * dx + dy * dy
-
-            def _match_parent(candidate_node, parent_id: str) -> bool:
-                if not parent_id:
-                    return False
-                normalized_parent = _normalize_node_id(parent_id)
-                if not normalized_parent:
-                    return False
-                try:
-                    meta_val = _normalize_node_id(candidate_node.metadata("charon/parent_id"))
-                except Exception:
-                    meta_val = ""
-                if meta_val == normalized_parent:
-                    return True
-                knob_val = _normalize_node_id(_safe_knob_value(candidate_node, "charon_parent_id"))
-                return knob_val == normalized_parent
-
-            def _looks_like_contact_sheet_group(candidate_node) -> bool:
-                try:
-                    if candidate_node.Class() != "Group":
-                        return False
-                except Exception:
-                    return False
-                try:
-                    if candidate_node.knob("charon_read_id") is not None:
-                        return True
-                except Exception:
-                    pass
-                try:
-                    meta_val = candidate_node.metadata("charon/read_id")
-                    if meta_val:
-                        return True
-                except Exception:
-                    pass
-                try:
-                    return "ContactSheet" in (candidate_node.name() or "")
-                except Exception:
-                    return False
-
-            def _reassign_outputs_for_duplicate(duplicate_node, keeper_node, old_id: str, new_id: str) -> None:
-                if not old_id or not new_id:
-                    return
-                dup_pos = _node_pos(duplicate_node)
-                keep_pos = _node_pos(keeper_node)
-                try:
-                    candidates = list(nuke.allNodes("Read")) + list(nuke.allNodes("ReadGeo2")) + list(nuke.allNodes("Group"))
-                except Exception:
-                    candidates = []
-                for candidate_node in candidates:
-                    if candidate_node is None or candidate_node is duplicate_node or candidate_node is keeper_node:
-                        continue
-                    try:
-                        cls_name = candidate_node.Class()
-                    except Exception:
-                        cls_name = ""
-                    if cls_name == "Group" and not _looks_like_contact_sheet_group(candidate_node):
-                        continue
-                    if not _match_parent(candidate_node, old_id):
-                        continue
-                    cand_pos = _node_pos(candidate_node)
-                    if keep_pos is not None and dup_pos is not None:
-                        dist_dup = _distance_sq(cand_pos, dup_pos)
-                        dist_keep = _distance_sq(cand_pos, keep_pos)
-                        if dist_dup is None or dist_keep is None:
-                            continue
-                        if dist_dup > dist_keep:
-                            continue
-                    try:
-                        candidate_node.setMetaData("charon/parent_id", new_id)
-                    except Exception:
-                        pass
-                    try:
-                        parent_knob = candidate_node.knob("charon_parent_id")
-                    except Exception:
-                        parent_knob = None
-                    if parent_knob is not None:
-                        try:
-                            parent_knob.setValue(new_id)
-                        except Exception:
-                            pass
-                    if cls_name == "Group" and _looks_like_contact_sheet_group(candidate_node):
-                        try:
-                            sheet_knob = duplicate_node.knob("charon_contact_sheet")
-                        except Exception:
-                            sheet_knob = None
-                        if sheet_knob is not None:
-                            try:
-                                sheet_knob.setValue(candidate_node.name())
-                            except Exception:
-                                pass
-
-            for duplicate in nodes_with_id:
-                if duplicate is keeper:
-                    continue
-                try:
-                    new_identifier = reset_charon_node_state(duplicate) or ""
-                except Exception:
-                    new_identifier = ""
-                if new_identifier:
-                    try:
-                        _reassign_outputs_for_duplicate(duplicate, keeper, normalized, new_identifier)
-                    except Exception:
-                        pass
-                if duplicate is node:
-                    normalized = _normalize_node_id(new_identifier)
-
-            if keeper is node:
-                refreshed = _normalize_node_id(_safe_knob_value(node, "charon_node_id"))
-                return refreshed or normalized
-
-            if node in nodes_with_id and node is not keeper:
-                refreshed = _normalize_node_id(_safe_knob_value(node, "charon_node_id"))
-                if refreshed:
-                    return refreshed
-                try:
-                    regenerated = reset_charon_node_state(node) or ""
-                except Exception:
-                    regenerated = ""
-                return _normalize_node_id(regenerated)
-
-            return normalized
-
-        def ensure_charon_node_id():
-            node_id = _normalize_node_id(_safe_knob_value(node, 'charon_node_id'))
-            if not node_id:
-                try:
-                    meta_val = node.metadata('charon/node_id')
-                    node_id = _normalize_node_id(meta_val)
-                except Exception:
-                    node_id = ""
-                if node_id:
-                    try:
-                        knob = node.knob('charon_node_id')
-                        if knob is not None:
-                            knob.setValue(node_id)
-                    except Exception:
-                        pass
-            current_script_hash = _normalize_script_hash(get_nuke_script_hash(nuke))
-            stored_script_hash = _read_script_hash(node)
-            if current_script_hash and stored_script_hash and stored_script_hash != current_script_hash:
-                previous_id = node_id
-                node_id = generate_charon_node_id(current_script_hash)
-                update_charon_node_identity(node, node_id, current_script_hash)
-                _update_read_parent_ids(previous_id, node_id)
-            elif current_script_hash and not stored_script_hash:
-                update_charon_node_identity(node, "", current_script_hash)
-            node_id = _deduplicate_node_id(node_id)
-            if not node_id:
-                node_id = generate_charon_node_id(current_script_hash)
-            update_charon_node_identity(node, node_id, current_script_hash)
-            write_metadata('charon/node_id', node_id or "")
-            _sync_anchored_output_nodes(node_id)
-            return node_id
-
-        def _collect_linked_read_ids(parent_id: str) -> List[str]:
-            normalized_parent = _normalize_node_id(parent_id)
-            if not normalized_parent:
-                return []
-            try:
-                candidates = list(nuke.allNodes())
-            except Exception:
-                return []
-            ids: List[str] = []
-            for candidate in candidates:
-                parent_match = ""
-                try:
-                    parent_match = _normalize_node_id(candidate.metadata('charon/parent_id'))
-                except Exception:
-                    parent_match = ""
-                if parent_match != normalized_parent:
-                    try:
-                        parent_match = _normalize_node_id(_safe_knob_value(candidate, 'charon_parent_id'))
-                    except Exception:
-                        parent_match = ""
-                if parent_match != normalized_parent:
-                    continue
-                read_identifier = ""
-                for getter in (
-                    lambda: candidate.metadata('charon/read_id'),
-                    lambda: candidate.metadata('charon/read_node_id'),
-                    lambda: _safe_knob_value(candidate, 'charon_read_id'),
-                    lambda: _safe_knob_value(candidate, 'charon_read_node_id'),
-                    lambda: candidate.name(),
-                ):
-                    try:
-                        candidate_val = getter()
-                    except Exception:
-                        candidate_val = ""
-                    read_identifier = _normalize_node_id(candidate_val)
-                    if read_identifier:
-                        break
-                if read_identifier and read_identifier not in ids:
-                    ids.append(read_identifier)
-            return ids
-
-        def _refresh_linked_read_info():
-            try:
-                info_knob = node.knob('charon_read_id_info')
-            except Exception:
-                info_knob = None
-            if info_knob is None:
-                return
-            linked_ids = _collect_linked_read_ids(charon_node_id)
-            display = "\n".join(linked_ids) if linked_ids else "Not linked"
-            try:
-                info_knob.setValue(display)
-            except Exception:
-                try:
-                    info_knob.setText(display)  # type: ignore
-                except Exception:
-                    pass
-
-        charon_node_id = ensure_charon_node_id()
-        _refresh_linked_read_info()
+        charon_node_id = ensure_charon_node_identity(
+            nuke,
+            node,
+            write_metadata=write_metadata,
+        )
+        refresh_linked_output_info(nuke, node, charon_node_id)
         user_slug = get_current_user_slug()
-        def resolve_batch_count() -> int:
-            try:
-                knob = node.knob('charon_batch_count')
-                if knob is not None:
-                    return max(1, int(knob.value()))
-            except Exception:
-                pass
-            return 1
-
-        batch_count = resolve_batch_count()
-        _cached_script_name: Optional[str] = None
-
-        def _resolve_nuke_script_name() -> str:
-            nonlocal _cached_script_name
-            if _cached_script_name is not None:
-                return _cached_script_name
-            if not is_main_thread():
-                return run_on_main_thread(_resolve_nuke_script_name)
-            script_reference = ""
-            try:
-                root = nuke.root()
-            except Exception:
-                root = None
-            if root is not None:
-                try:
-                    script_reference = root.name()
-                except Exception:
-                    script_reference = ""
-                if not script_reference:
-                    try:
-                        name_knob = root.knob("name")
-                        if name_knob is not None:
-                            script_reference = str(name_knob.value() or "")
-                    except Exception:
-                        script_reference = ""
-            if script_reference:
-                base = os.path.splitext(os.path.basename(script_reference))[0]
-                _cached_script_name = base or "untitled"
-            else:
-                _cached_script_name = "untitled"
-            return _cached_script_name
-
-        def ensure_link_anchor_value():
-            try:
-                anchor_knob = node.knob('charon_link_anchor')
-            except Exception:
-                anchor_knob = None
-            anchor_value = None
-            if anchor_knob is not None:
-                try:
-                    anchor_value = float(anchor_knob.value())
-                except Exception:
-                    anchor_value = None
-            if not anchor_value:
-                try:
-                    anchor_value = int(charon_node_id, 16) / float(16 ** len(charon_node_id))
-                except Exception:
-                    anchor_value = (time.time() % 1.0) or 0.5
-                if anchor_knob is not None:
-                    try:
-                        anchor_knob.setValue(anchor_value)
-                    except Exception:
-                        pass
-            write_metadata('charon/link_anchor', anchor_value or "")
-            return anchor_value or 0.0
-
-        def _coerce_crop_box(raw) -> Optional[Tuple[float, float, float, float]]:
-            if raw is None:
-                return None
-
-            coords: List[Optional[float]] = []
-            if isinstance(raw, (list, tuple)):
-                coords.extend(raw[:4])
-            else:
-                for attr in ('x', 'y', 'r', 't'):
-                    try:
-                        candidate = getattr(raw, attr)
-                        candidate = candidate() if callable(candidate) else candidate
-                    except Exception:
-                        candidate = None
-                    coords.append(candidate)
-
-            if len(coords) < 4:
-                return None
-
-            numeric: List[float] = []
-            for coord in coords[:4]:
-                if coord is None:
-                    return None
-                try:
-                    numeric.append(float(coord))
-                except Exception:
-                    return None
-
-            return tuple(numeric)
-
-        def resolve_crop_settings() -> Optional[Tuple[float, float, float, float]]:
-            enabled = False
-            try:
-                knob = node.knob('charon_use_crop')
-                if knob is not None:
-                    try:
-                        enabled = bool(int(knob.value()))
-                    except Exception:
-                        enabled = bool(knob.value())
-            except Exception:
-                enabled = False
-
-            if not enabled:
-                return None
-
-            try:
-                bbox_knob = node.knob('charon_crop_bbox')
-            except Exception:
-                bbox_knob = None
-            if bbox_knob is None:
-                return None
-
-            try:
-                raw_box = bbox_knob.value()
-            except Exception:
-                try:
-                    raw_box = bbox_knob.getValue()  # type: ignore[attr-defined]
-                except Exception:
-                    raw_box = None
-
-            crop_box = _coerce_crop_box(raw_box)
-            if not crop_box:
-                log_debug('Use Crop enabled but crop box is invalid; skipping crop', 'WARNING')
-                return None
-
-            x, y, r, t = crop_box
-            if r <= x or t <= y:
-                log_debug('Use Crop enabled but crop box is empty; skipping crop', 'WARNING')
-                return None
-
-            log_debug(f'Using crop box {crop_box} for CharonOp inputs')
-            return crop_box
-
-        link_anchor_value = ensure_link_anchor_value()
+        batch_count = resolve_batch_count(node)
+        nuke_script_name = resolve_nuke_script_name(nuke)
+        link_anchor_value = ensure_link_anchor_value(
+            node,
+            charon_node_id,
+            write_metadata=write_metadata,
+        )
         current_node_state = 'Ready'
         last_status_color_state = current_node_state
         last_status_color_time = 0.0
 
-        def iter_candidate_read_nodes():
-            candidates: List[Any] = []
-            try:
-                candidates.extend(list(nuke.allNodes('Read')))
-            except Exception:
-                pass
-            try:
-                candidates.extend(list(nuke.allNodes('ReadGeo2')))
-            except Exception:
-                pass
-            return candidates
-
-        def read_node_parent_id(candidate):
-            try:
-                meta_val = candidate.metadata('charon/parent_id')
-            except Exception:
-                meta_val = None
-            if isinstance(meta_val, str):
-                value = _normalize_node_id(meta_val)
-            elif meta_val is not None:
-                try:
-                    value = _normalize_node_id(str(meta_val))
-                except Exception:
-                    value = ""
-            else:
-                value = ""
-            if value:
-                return value
-            parent_knob_value = _safe_knob_value(candidate, 'charon_parent_id')
-            return _normalize_node_id(parent_knob_value)
-
-        def read_node_unique_id(candidate):
-            try:
-                meta_val = candidate.metadata('charon/read_id')
-            except Exception:
-                meta_val = None
-            read_id = _normalize_node_id(meta_val)
-            if not read_id:
-                knob_value = _safe_knob_value(candidate, 'charon_read_id')
-                read_id = _normalize_node_id(knob_value)
-            return read_id
-
-        def find_read_node_by_id(read_id: str):
-            if not read_id:
-                return None
-            for candidate in iter_candidate_read_nodes():
-                if read_node_unique_id(candidate) == read_id:
-                    return candidate
-            return None
-
-        def _stored_read_node_id():
-            value = _normalize_node_id(_safe_knob_value(node, 'charon_read_node_id'))
-            if value:
-                return value
-            try:
-                meta_val = node.metadata('charon/read_node_id')
-                return _normalize_node_id(meta_val)
-            except Exception:
-                return ""
-
-        def find_read_node_for_parent():
-            if not charon_node_id:
-                return None
-            stored = _stored_read_node_id()
-            candidate = find_read_node_by_id(stored)
-            if candidate is not None:
-                return candidate
-            for option in iter_candidate_read_nodes():
-                if read_node_parent_id(option) == charon_node_id:
-                    return option
-            fallback_name = _safe_knob_value(node, 'charon_read_node')
-            if fallback_name:
-                try:
-                    fallback = nuke.toNode(str(fallback_name))
-                except Exception:
-                    fallback = None
-                if fallback is not None and getattr(fallback, "Class", lambda: "")() in {"Read", "ReadGeo2"}:
-                    return fallback
-            return None
-
-        def find_linked_read_node():
-            stored = _stored_read_node_id()
-            candidate = find_read_node_by_id(stored)
-            if candidate is not None:
-                return candidate
-            return find_read_node_for_parent()
-
-        def _collect_target_reads():
-            targets = []
-            try:
-                norm_parent = _normalize_node_id(charon_node_id)
-                if not norm_parent:
-                    return targets
-                for candidate in iter_candidate_read_nodes():
-                    try:
-                        parent_val = _normalize_node_id(read_node_parent_id(candidate))
-                    except Exception:
-                        parent_val = ""
-                    raw_parent = ""
-                    try:
-                        raw_parent = _normalize_node_id(candidate.metadata('charon/parent_id'))
-                    except Exception:
-                        raw_parent = ""
-                    try:
-                        knob_parent = _normalize_node_id(candidate.knob('charon_parent_id').value())
-                    except Exception:
-                        knob_parent = ""
-                    if parent_val == norm_parent or raw_parent == norm_parent or knob_parent == norm_parent:
-                        targets.append(candidate)
-            except Exception:
-                pass
-            return targets
+        linked_outputs = LinkedOutputRepository(nuke, node, charon_node_id)
+        iter_candidate_read_nodes = linked_outputs.iter_candidates
+        read_node_parent_id = linked_outputs.parent_id
+        read_node_unique_id = linked_outputs.read_id
+        find_read_node_by_id = linked_outputs.find_by_id
+        find_read_node_for_parent = linked_outputs.find_for_parent
+        find_linked_read_node = linked_outputs.find_linked
+        _collect_target_reads = linked_outputs.collect_targets
 
         def apply_status_color(state: str, read_node_override=None):
-            tile_color = status_to_tile_color(state)
-            gl_color = status_to_gl_color(state)
-
-            def _is_read_node(target) -> bool:
-                try:
-                    return target.Class() in {"Read", "ReadGeo2"}
-                except Exception:
-                    return False
-
-            def _apply_to_target(target):
-                if target is None:
-                    return
-                try:
-                    target.setMetaData('charon/status', state or "")
-                except Exception:
-                    pass
-                try:
-                    color_knob = target["tile_color"]
-                except Exception:
-                    color_knob = None
-                if color_knob is not None:
-                    try:
-                        try:
-                            color_knob.clearAnimated()
-                        except Exception:
-                            pass
-                        color_knob.setValue(tile_color)
-                    except Exception:
-                        pass
-                if gl_color is not None:
-                    try:
-                        gl_knob = target["gl_color"]
-                    except Exception:
-                        gl_knob = None
-                    if gl_knob is not None:
-                        try:
-                            try:
-                                gl_knob.clearAnimated()
-                            except Exception:
-                                pass
-                            gl_knob.setValue(list(gl_color))
-                        except Exception:
-                            pass
-                if _is_read_node(target):
-                    try:
-                        ensure_read_node_info(target, read_node_unique_id(target), state)
-                    except Exception:
-                        pass
-
-            def _apply_all():
-                _apply_to_target(node)
-
             try:
-                nuke.executeInMainThread(_apply_all)
-            except Exception:
-                _apply_all()
-
-            targets = []
-            if read_node_override is not None:
-                targets.append(read_node_override)
-            else:
-                candidate = find_linked_read_node()
-                if candidate is not None:
-                    targets.append(candidate)
-            for candidate in _collect_target_reads():
-                if candidate not in targets:
-                    targets.append(candidate)
-
-            try:
-                target_names = []
-                for t in targets:
-                    try:
-                        target_names.append(f"{t.name()}[{read_node_parent_id(t)}]")
-                    except Exception:
-                        target_names.append("unknown")
-                log_debug(f"Apply status {state} to reads: {', '.join(target_names) or 'none'}")
-            except Exception:
-                pass
-
-            try:
-                recreate_knob = node.knob('charon_recreate_read')
-            except Exception:
-                recreate_knob = None
-            if recreate_knob is not None:
-                linked_node = targets[0] if targets else find_linked_read_node()
-                has_read = linked_node is not None
-                last_output_value = _safe_knob_value(node, 'charon_last_output')
-                if not last_output_value:
-                    try:
-                        last_output_value = node.metadata('charon/last_output')
-                    except Exception:
-                        last_output_value = ""
-                has_output = bool(str(last_output_value or "").strip())
-                try:
-                    recreate_knob.setEnabled(has_output)
-                except Exception:
-                    pass
-
-            def _apply_all_targets():
-                _apply_to_target(node)
-                for target in targets:
-                    _apply_to_target(target)
-
-            try:
-                nuke.executeInMainThread(_apply_all_targets)
-            except Exception:
-                _apply_all_targets()
+                info_callback = ensure_read_node_info
+            except NameError:
+                info_callback = None
+            apply_status_to_outputs(
+                nuke,
+                node,
+                state,
+                linked_outputs,
+                tile_color=status_to_tile_color(state),
+                gl_color=status_to_gl_color(state),
+                log_debug=log_debug,
+                ensure_read_info=info_callback,
+                read_node_override=read_node_override,
+            )
 
         try:
             initial_payload = load_status_payload()
@@ -2845,22 +1887,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             sanitized = sanitized.strip("_") or default
             return sanitized[:64]
 
-        def _resolve_workflow_display_name() -> str:
-            candidate = _safe_knob_value(node, 'charon_workflow_name')
-            if candidate:
-                return str(candidate).strip()
-            try:
-                meta_val = node.metadata('charon/workflow_name')
-                if isinstance(meta_val, str) and meta_val.strip():
-                    return meta_val.strip()
-            except Exception:
-                pass
-            path_candidate = _safe_knob_value(node, 'workflow_path')
-            if path_candidate:
-                basename = os.path.basename(str(path_candidate).strip())
-                if basename:
-                    return basename.rsplit(".", 1)[0]
-            return "Workflow"
+        workflow_display_name = resolve_workflow_display_name(node)
 
         def ensure_placeholder_read_node():
             placeholder_path = get_placeholder_image_path()
@@ -2897,7 +1924,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 except Exception:
                     pass
 
-            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+            read_base = _sanitize_name(workflow_display_name, "Workflow")
             target_read_name = f"CR2D_{read_base}"
             try:
                 read_node.setName(target_read_name)
@@ -2925,44 +1952,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             mark_read_node(read_node)
             log_debug('Created placeholder Read node.')
 
-        def initialize_status(message='Initializing'):
-            payload = load_status_payload()
-            runs = ensure_history(payload)
-            now = run_started_at
-            auto_flag = resolve_auto_import()
-            payload['current_run'] = {
-                'id': current_run_id,
-                'status': 'Processing',
-                'message': message,
-                'progress': 0.0,
-                'started_at': now,
-                'updated_at': now,
-                'auto_import': auto_flag,
-            }
-            payload.update({
-                'status': message,
-                'state': 'Processing',
-                'message': message,
-                'progress': 0.0,
-                'run_id': current_run_id,
-                'started_at': now,
-                'updated_at': now,
-                'auto_import': auto_flag,
-            })
-            payload['runs'] = runs
-            save_status_payload(payload)
+        save_status_payload(
+            initialize_status_payload(
+                load_status_payload(),
+                message="Preparing node",
+                run_id=current_run_id,
+                run_started_at=run_started_at,
+                auto_import=resolve_auto_import(),
+            )
+        )
 
-        initialize_status('Preparing node')
-
-        def _get_val(k):
-            try:
-                return node.knob(k).value()
-            except:
-                return None
-
-        workflow_data_str = _get_val('workflow_data')
-        input_mapping_str = _get_val('input_mapping')
-        temp_root = _get_val('charon_temp_dir')
+        workflow_data_str = _safe_knob_value(node, "workflow_data")
+        input_mapping_str = _safe_knob_value(node, "input_mapping")
+        temp_root = _safe_knob_value(node, "charon_temp_dir")
         
         if not temp_root:
              # Try default or fail gracefully
@@ -2976,56 +1978,18 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             except Exception:
                 pass
 
-        trace_log_path = ""
-        trace_step_counter = 0
         trace_enabled = bool(getattr(config, "DEBUG_STEP_TRACE", False))
-
-        def trace_step(message: str, **fields) -> None:
-            if not trace_enabled:
-                return
-            nonlocal trace_step_counter
-            trace_step_counter += 1
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            line = f"[{timestamp}] step={trace_step_counter:04d} {message}"
-            if fields:
-                serialized = ", ".join(f"{key}={fields[key]}" for key in sorted(fields))
-                if serialized:
-                    line = f"{line} | {serialized}"
-            try:
-                log_debug(f"[STEP] {line}")
-            except Exception:
-                pass
-            if not trace_log_path:
-                return
-            try:
-                with open(trace_log_path, "a", encoding="utf-8") as handle:
-                    handle.write(line + "\n")
-            except Exception:
-                pass
-
+        execution_trace = create_execution_trace(
+            temp_root,
+            charon_node_id,
+            enabled=trace_enabled,
+            log_debug=log_debug,
+        )
+        trace_step = execution_trace.emit
         if trace_enabled:
-            try:
-                debug_root = get_charon_temp_dir(temp_root)
-            except Exception:
-                debug_root = _normalize_charon_root(temp_root)
-                try:
-                    os.makedirs(debug_root, exist_ok=True)
-                    for _subdir in ("temp", "exports", "results", "debug"):
-                        os.makedirs(os.path.join(debug_root, _subdir), exist_ok=True)
-                except Exception:
-                    pass
-            debug_dir = os.path.join(debug_root, "debug")
-            try:
-                os.makedirs(debug_dir, exist_ok=True)
-            except Exception:
-                pass
-            trace_log_path = os.path.join(
-                debug_dir,
-                f"charon_step_trace_{int(time.time())}_{(charon_node_id or 'unknown')}_{str(uuid.uuid4())[:8]}.log",
-            ).replace("\\", "/")
             trace_step(
                 "trace_started",
-                trace_log=trace_log_path,
+                trace_log=execution_trace.log_path,
                 node_name=getattr(node, "name", lambda: "unknown")(),
                 node_id=charon_node_id or "",
                 recursive=int(bool(is_recursive_call)),
@@ -3035,7 +1999,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         except Exception:
             workflow_path = ''
 
-        workflow_display_name = _resolve_workflow_display_name()
         trace_step("workflow_context_loaded", workflow_path=workflow_path or "", workflow_name=workflow_display_name)
 
         if not workflow_data_str or not input_mapping_str:
@@ -3060,7 +2023,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             input_mapping_type=type(input_mapping).__name__,
         )
         parameter_specs = _load_parameter_specs(node)
-        workflow_is_api = is_api_prompt(workflow_data)
         try:
             workflow_hash = compute_workflow_hash(workflow_data)
         except Exception as exc:
@@ -3068,50 +2030,18 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             log_debug(f"Failed to compute workflow hash: {exc}", "WARNING")
 
         cached_prompt_path, cached_prompt_hash = read_cached_prompt()
-        cached_prompt_path = cached_prompt_path.strip() if isinstance(cached_prompt_path, str) else ""
-        cached_prompt_hash = cached_prompt_hash.strip() if isinstance(cached_prompt_hash, str) else ""
-        if (
-            workflow_hash
-            and cached_prompt_path
-            and not cached_prompt_hash
-            and _prompt_path_matches_hash(cached_prompt_path, workflow_hash)
-        ):
-            cached_prompt_hash = workflow_hash
-            store_cached_prompt(cached_prompt_path, cached_prompt_hash)
-        if (
-            cached_prompt_path
-            and cached_prompt_hash
-            and workflow_hash
-            and cached_prompt_hash != workflow_hash
-        ):
-            log_debug('Cached prompt hash differs from workflow hash; clearing stored prompt')
-            store_cached_prompt('', '')
-            cached_prompt_path = ''
-            cached_prompt_hash = ''
-        cached_prompt_data = None
-        if (
-            workflow_hash
-            and cached_prompt_path
-            and cached_prompt_hash
-            and cached_prompt_hash == workflow_hash
-        ):
-            if os.path.exists(cached_prompt_path):
-                try:
-                    with open(cached_prompt_path, 'r', encoding='utf-8') as cached_handle:
-                        candidate = json.load(cached_handle)
-                    if is_api_prompt(candidate):
-                        cached_prompt_data = candidate
-                        log_debug(f'Loaded cached API prompt from {cached_prompt_path}')
-                    else:
-                        log_debug('Cached prompt is not API formatted; ignoring stored prompt', 'WARNING')
-                except Exception as exc:
-                    log_debug(f'Failed to read cached prompt: {exc}', 'WARNING')
-            else:
-                log_debug(f'Cached prompt path missing: {cached_prompt_path}', 'WARNING')
-                store_cached_prompt('', '')
-
-        if workflow_is_api and cached_prompt_data is None:
-            cached_prompt_data = workflow_data
+        cached_prompt = resolve_cached_prompt(
+            workflow_data,
+            workflow_hash=workflow_hash,
+            cached_path=cached_prompt_path,
+            cached_hash=cached_prompt_hash,
+            is_api_prompt=is_api_prompt,
+            store_cache=store_cached_prompt,
+            log_debug=log_debug,
+        )
+        cached_prompt_data = cached_prompt.payload
+        cached_prompt_path = cached_prompt.path
+        cached_prompt_hash = cached_prompt.workflow_hash
 
         needs_conversion = cached_prompt_data is None
         ui_workflow_source = workflow_data if isinstance(workflow_data, dict) else {}
@@ -3202,7 +2132,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             else:
                 log_debug(f"Input {index} is disconnected")
 
-        crop_box = resolve_crop_settings()
+        crop_box = resolve_crop_settings(node, log_debug=log_debug)
         render_jobs = []
         ensure_placeholder_read_node()
         if isinstance(input_mapping, list):
@@ -3383,9 +2313,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             if os.path.isdir(candidate_root):
                 comfy_output_root = candidate_root
 
-        results_dir = os.path.join(temp_root, 'results')
-        os.makedirs(results_dir, exist_ok=True)
-        result_file = os.path.join(results_dir, f"charon_result_{int(time.time())}_{str(uuid.uuid4())[:8]}.json")
+        result_file = allocate_result_manifest_path(temp_root)
 
         def update_progress(progress, status='Processing', error=None, extra=None):
             nonlocal current_node_state, last_status_color_state, last_status_color_time
@@ -3471,18 +2399,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         def background_process():
             nonlocal batch_count
-            def _write_result_file(payload: Dict[str, Any]) -> None:
-                temp_path = f"{result_file}.tmp"
-                try:
-                    with open(temp_path, "w") as fp:
-                        json.dump(payload, fp)
-                    os.replace(temp_path, result_file)
-                finally:
-                    try:
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                    except Exception:
-                        pass
             try:
                 trace_step("background_process_started", batch_count=batch_count)
                 update_progress(0.05, 'Starting processing')
@@ -3776,286 +2692,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 batch_outputs: List[Dict[str, Any]] = []
                 per_batch_progress = 0.5 / max(1, batch_count)
 
-                def _resolve_batch_timeout() -> float:
-                    base_timeout = getattr(config, "COMFY_BATCH_TIMEOUT_SEC", 300)
-                    grace_per_job = getattr(config, "COMFY_QUEUE_GRACE_SEC", 15)
-                    extra = 0.0
-                    try:
-                        queue_data = comfy_client.get_queue_status()
-                    except Exception:
-                        queue_data = None
-                    if isinstance(queue_data, dict):
-                        pending = len(queue_data.get("queue_pending", []) or [])
-                        running = len(queue_data.get("queue_running", []) or [])
-                        extra = float((pending + running) * grace_per_job)
-                    return float(base_timeout) + extra
-
                 download_retries = int(getattr(config, "COMFY_DOWNLOAD_RETRIES", 4))
                 download_retry_delay = float(getattr(config, "COMFY_DOWNLOAD_RETRY_DELAY_SEC", 0.75))
                 download_min_bytes = int(getattr(config, "COMFY_DOWNLOAD_MIN_BYTES", 1))
                 download_hard_timeout = float(getattr(config, "COMFY_DOWNLOAD_HARD_TIMEOUT_SEC", 90.0))
 
-                def _normalize_download_target(filename: Optional[str], subfolder: Optional[str]) -> Tuple[str, str]:
-                    return normalize_download_target(filename, subfolder)
-
-                def _resolve_local_output_candidate(filename: str, subfolder: str) -> str:
-                    return resolve_local_output_candidate(comfy_output_root, filename, subfolder)
-
-                def _find_output_by_basename(filename: str, since_time: float) -> str:
-                    if not comfy_output_root or not filename or not os.path.isdir(comfy_output_root):
-                        return ""
-                    target = os.path.basename(filename).lower()
-                    best_path = ""
-                    best_mtime = 0.0
-                    scan_limit = int(getattr(config, "COMFY_OUTPUT_BASENAME_SCAN_LIMIT", 4000))
-                    scanned = 0
-                    for root_dir, _dirs, files in os.walk(comfy_output_root):
-                        for fname in files:
-                            scanned += 1
-                            if scan_limit > 0 and scanned > scan_limit:
-                                return best_path
-                            if fname.lower() != target:
-                                continue
-                            full_path = os.path.join(root_dir, fname)
-                            try:
-                                mtime = os.path.getmtime(full_path)
-                            except Exception:
-                                mtime = 0.0
-                            if since_time and mtime < since_time:
-                                continue
-                            if mtime >= best_mtime:
-                                best_mtime = mtime
-                                best_path = full_path
-                    return best_path
-
-                def _download_with_timeout(
-                    filename: str,
-                    destination_path: str,
-                    subfolder: str,
-                    file_type: str,
-                ) -> bool:
-                    state = {"success": False, "error": ""}
-                    done = threading.Event()
-
-                    def _runner():
-                        try:
-                            state["success"] = bool(
-                                comfy_client.download_file(
-                                    filename,
-                                    destination_path,
-                                    subfolder=subfolder,
-                                    file_type=file_type,
-                                    retries=download_retries,
-                                    retry_delay=download_retry_delay,
-                                    min_bytes=download_min_bytes,
-                                )
-                            )
-                        except Exception as exc:
-                            state["success"] = False
-                            state["error"] = str(exc)
-                        finally:
-                            done.set()
-
-                    worker = threading.Thread(target=_runner, name="charon-download", daemon=True)
-                    worker.start()
-                    if done.wait(timeout=max(1.0, download_hard_timeout)):
-                        if state["error"]:
-                            log_debug(f"Comfy download raised: {state['error']}", "WARNING")
-                        return bool(state["success"])
-                    log_debug(
-                        f"Comfy download timed out after {download_hard_timeout:.1f}s for {filename}; "
-                        "falling back to local output recovery.",
-                        "WARNING",
-                    )
-                    return False
-
-                def _recover_artifacts_from_output_dir(
-                    expected_prefixes: List[str],
-                    output_root: str,
-                    since_time: float,
-                ) -> List[Dict[str, Any]]:
-                    if not output_root or not os.path.isdir(output_root):
-                        return []
-                    prefixes = [p.lower() for p in expected_prefixes if p]
-                    if not prefixes:
-                        return []
-                    limit = int(getattr(config, "COMFY_OUTPUT_SCAN_LIMIT", 4000))
-                    found: List[Dict[str, Any]] = []
-                    scanned = 0
-                    for root_dir, _dirs, files in os.walk(output_root):
-                        for fname in files:
-                            scanned += 1
-                            if scanned > limit:
-                                return found
-                            if not fname or fname.startswith("."):
-                                continue
-                            lower = fname.lower()
-                            if not any(lower.startswith(prefix) for prefix in prefixes):
-                                continue
-                            full_path = os.path.join(root_dir, fname)
-                            try:
-                                if since_time and os.path.getmtime(full_path) < since_time:
-                                    continue
-                            except Exception:
-                                pass
-                            ext = os.path.splitext(fname)[1].lower()
-                            kind = "files"
-                            if ext in IMAGE_OUTPUT_EXTENSIONS:
-                                kind = "images"
-                            elif ext in CAMERA_OUTPUT_EXTENSIONS:
-                                kind = "camera"
-                            elif ext in MODEL_OUTPUT_EXTENSIONS:
-                                kind = "meshes"
-                            found.append(
-                                {
-                                    "filename": full_path,
-                                    "subfolder": "",
-                                    "type": "output",
-                                    "extension": ext,
-                                    "node_id": None,
-                                    "class_type": "",
-                                    "kind": kind,
-                                }
-                            )
-                    return found
-
                 def _progress_for(batch_index: int, local: float) -> float:
                     return progress_for_batch(batch_index, local, per_batch_progress)
-
-                def _collect_output_artifacts(outputs_map, prompt_lookup):
-                    return collect_output_artifacts(
-                        outputs_map,
-                        prompt_lookup,
-                        ignored_output=_is_ignored_output,
-                        camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
-                        model_extensions=MODEL_OUTPUT_EXTENSIONS,
-                    )
-
-                def _recover_cached_artifacts(prompt_payload: Dict[str, Any], current_prompt_id: Optional[str]) -> List[Dict[str, Any]]:
-                    """
-                    When ComfyUI serves a fully cached execution without outputs, try to reuse
-                    outputs from the most recent matching prompt in history.
-                    """
-                    try:
-                        prompt_hash = compute_workflow_hash(prompt_payload)
-                    except Exception as exc:
-                        log_debug(f"Could not hash prompt for cache lookup: {exc}", "WARNING")
-                        return []
-
-                    try:
-                        history_map = comfy_client.get_full_history()
-                    except Exception as exc:
-                        log_debug(f"Failed to read ComfyUI history for cache reuse: {exc}", "WARNING")
-                        return []
-
-                    if not isinstance(history_map, dict):
-                        return []
-
-                    def _completion_timestamp(entry: Dict[str, Any]) -> int:
-                        messages = entry.get("status", {}).get("messages") or []
-                        for name, payload in reversed(messages):
-                            if isinstance(payload, dict) and "timestamp" in payload:
-                                try:
-                                    return int(payload["timestamp"])
-                                except Exception:
-                                    continue
-                        return 0
-
-                    sorted_history = sorted(
-                        history_map.items(),
-                        key=lambda item: _completion_timestamp(item[1]) if isinstance(item[1], dict) else 0,
-                        reverse=True,
-                    )
-
-                    for candidate_id, entry in sorted_history:
-                        if candidate_id == current_prompt_id or not isinstance(entry, dict):
-                            continue
-
-                        prompt_field = entry.get("prompt")
-                        candidate_prompt = None
-                        if isinstance(prompt_field, list) and len(prompt_field) >= 3:
-                            candidate_prompt = prompt_field[2]
-                        elif isinstance(prompt_field, dict):
-                            candidate_prompt = prompt_field
-
-                        if not isinstance(candidate_prompt, dict):
-                            continue
-
-                        try:
-                            candidate_hash = compute_workflow_hash(candidate_prompt)
-                        except Exception:
-                            continue
-
-                        if candidate_hash != prompt_hash:
-                            continue
-
-                        candidate_outputs = entry.get("outputs") or {}
-                        recovered = _collect_output_artifacts(candidate_outputs, candidate_prompt)
-                        if recovered:
-                            log_debug(f"Reused cached ComfyUI outputs from prompt {candidate_id}")
-                            return recovered
-
-                    return []
-
-                def _recover_artifacts_by_prefix(expected_prefixes: List[str]) -> List[Dict[str, Any]]:
-                    """
-                    Secondary recovery path: reuse any recent outputs whose filenames match
-                    the expected SaveImage filename prefixes.
-                    """
-                    if not expected_prefixes:
-                        return []
-                    try:
-                        history_map = comfy_client.get_full_history()
-                    except Exception as exc:
-                        log_debug(f"Failed to read ComfyUI history for prefix-based reuse: {exc}", "WARNING")
-                        return []
-                    if not isinstance(history_map, dict):
-                        return []
-
-                    def _completion_timestamp(entry: Dict[str, Any]) -> int:
-                        messages = entry.get("status", {}).get("messages") or []
-                        for name, payload in reversed(messages):
-                            if isinstance(payload, dict) and "timestamp" in payload:
-                                try:
-                                    return int(payload["timestamp"])
-                                except Exception:
-                                    continue
-                        return 0
-
-                    sorted_history = sorted(
-                        history_map.items(),
-                        key=lambda item: _completion_timestamp(item[1]) if isinstance(item[1], dict) else 0,
-                        reverse=True,
-                    )
-                    lowered_prefixes = [p.lower() for p in expected_prefixes if p]
-
-                    for candidate_id, entry in sorted_history:
-                        if not isinstance(entry, dict):
-                            continue
-                        prompt_field = entry.get("prompt")
-                        if isinstance(prompt_field, list) and len(prompt_field) >= 3:
-                            candidate_prompt = prompt_field[2]
-                        elif isinstance(prompt_field, dict):
-                            candidate_prompt = prompt_field
-                        else:
-                            candidate_prompt = {}
-
-                        candidate_outputs = entry.get("outputs") or {}
-                        recovered = _collect_output_artifacts(candidate_outputs, candidate_prompt)
-                        if not recovered:
-                            continue
-
-                        for artifact in recovered:
-                            filename = str(artifact.get("filename") or "").lower()
-                            for prefix in lowered_prefixes:
-                                if prefix and filename.startswith(prefix):
-                                    log_debug(
-                                        f"Reused cached ComfyUI outputs with prefix match from prompt {candidate_id}"
-                                    )
-                                    return recovered
-
-                    return []
-
 
                 for batch_index in range(batch_count):
                     trace_step("batch_started", batch=batch_index + 1, total=batch_count)
@@ -4111,7 +2754,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         pass
 
                     start_time = time.time()
-                    timeout = _resolve_batch_timeout()
+                    timeout = resolve_batch_timeout(
+                        comfy_client,
+                        base_timeout=getattr(config, "COMFY_BATCH_TIMEOUT_SEC", 300),
+                        grace_per_job=getattr(config, "COMFY_QUEUE_GRACE_SEC", 15),
+                    )
                     poll_iteration = 0
                     next_poll_trace_at = start_time
                     update_progress(
@@ -4179,7 +2826,17 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 if status_str == 'success':
                                     trace_step("batch_history_success", batch=batch_index + 1, prompt_id=prompt_id)
                                     outputs = history_data.get('outputs', {})
-                                    artifacts = _collect_output_artifacts(outputs, base_prompt) if outputs else []
+                                    artifacts = (
+                                        collect_output_artifacts(
+                                            outputs,
+                                            base_prompt,
+                                            ignored_output=_is_ignored_output,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                        )
+                                        if outputs
+                                        else []
+                                    )
                                     if not artifacts:
                                         prefixes = []
                                         for node_entry in prompt_payload.values():
@@ -4195,7 +2852,22 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         )
                                         if history_recovery_enabled:
                                             trace_step("history_recovery_start", batch=batch_index + 1)
-                                            artifacts = _recover_cached_artifacts(prompt_payload, prompt_id)
+                                            recovery = recover_matching_history_artifacts(
+                                                comfy_client,
+                                                prompt_payload,
+                                                prompt_id,
+                                                ignored_output=_is_ignored_output,
+                                                camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                                model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                            )
+                                            artifacts = recovery.artifacts
+                                            if recovery.error:
+                                                log_debug(recovery.error, "WARNING")
+                                            elif recovery.prompt_id:
+                                                log_debug(
+                                                    "Reused cached ComfyUI outputs from prompt "
+                                                    f"{recovery.prompt_id}"
+                                                )
                                             trace_step(
                                                 "history_recovery_done",
                                                 batch=batch_index + 1,
@@ -4212,8 +2884,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 prefixes=len(prefixes),
                                                 scan_since=f"{scan_since:.2f}",
                                             )
-                                            artifacts = _recover_artifacts_from_output_dir(
-                                                prefixes, comfy_output_root, scan_since
+                                            artifacts = recover_artifacts_from_output_dir(
+                                                prefixes,
+                                                comfy_output_root,
+                                                scan_since,
+                                                scan_limit=int(
+                                                    getattr(config, "COMFY_OUTPUT_SCAN_LIMIT", 4000)
+                                                ),
+                                                image_extensions=IMAGE_OUTPUT_EXTENSIONS,
+                                                camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                                model_extensions=MODEL_OUTPUT_EXTENSIONS,
                                             )
                                             trace_step(
                                                 "output_dir_recovery_done",
@@ -4226,7 +2906,22 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 )
                                         if not artifacts and prefixes and history_recovery_enabled:
                                             trace_step("prefix_history_recovery_start", batch=batch_index + 1)
-                                            artifacts = _recover_artifacts_by_prefix(prefixes)
+                                            recovery = recover_prefixed_history_artifacts(
+                                                comfy_client,
+                                                prefixes,
+                                                ignored_output=_is_ignored_output,
+                                                camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                                model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                            )
+                                            artifacts = recovery.artifacts
+                                            if recovery.error:
+                                                log_debug(recovery.error, "WARNING")
+                                            elif recovery.prompt_id:
+                                                log_debug(
+                                                    "Reused cached ComfyUI outputs with prefix "
+                                                    "match from prompt "
+                                                    f"{recovery.prompt_id}"
+                                                )
                                             trace_step(
                                                 "prefix_history_recovery_done",
                                                 batch=batch_index + 1,
@@ -4281,9 +2976,9 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 output_subfolder=recursive_output_subfolder,
                                             )
                                         else:
-                                            allocated_output_path = _allocate_output_path(
+                                            allocated_output_path = allocate_charon_output_path(
                                                 charon_node_id,
-                                                _resolve_nuke_script_name(),
+                                                nuke_script_name,
                                                 raw_extension_lower,
                                                 user_slug,
                                                 workflow_display_name,
@@ -4295,7 +2990,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         source_filename = artifact.get("filename")
                                         source_is_abs = isinstance(source_filename, str) and os.path.isabs(source_filename)
                                         source_exists = source_is_abs and os.path.exists(source_filename)
-                                        download_name, download_subfolder = _normalize_download_target(
+                                        download_name, download_subfolder = normalize_download_target(
                                             source_filename, artifact.get("subfolder", "")
                                         )
                                         if source_is_abs and download_name:
@@ -4314,8 +3009,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 )
                                                 success = False
                                         else:
-                                            local_candidate = _resolve_local_output_candidate(
-                                                download_name, download_subfolder
+                                            local_candidate = resolve_local_output_candidate(
+                                                comfy_output_root,
+                                                download_name,
+                                                download_subfolder,
                                             )
                                             if local_candidate and os.path.exists(local_candidate):
                                                 try:
@@ -4333,14 +3030,45 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                     success = False
                                             else:
                                                 if download_name:
-                                                    success = _download_with_timeout(
-                                                        download_name,
-                                                        allocated_output_path,
-                                                        download_subfolder,
-                                                        artifact.get("type", "output"),
+                                                    download_result = download_with_timeout(
+                                                        comfy_client,
+                                                        filename=download_name,
+                                                        destination_path=allocated_output_path,
+                                                        subfolder=download_subfolder,
+                                                        file_type=artifact.get("type", "output"),
+                                                        retries=download_retries,
+                                                        retry_delay=download_retry_delay,
+                                                        min_bytes=download_min_bytes,
+                                                        hard_timeout=download_hard_timeout,
                                                     )
+                                                    success = download_result.success
+                                                    if download_result.error:
+                                                        log_debug(
+                                                            "Comfy download raised: "
+                                                            f"{download_result.error}",
+                                                            "WARNING",
+                                                        )
+                                                    if download_result.timed_out:
+                                                        log_debug(
+                                                            "Comfy download timed out after "
+                                                            f"{download_hard_timeout:.1f}s for "
+                                                            f"{download_name}; falling back to "
+                                                            "local output recovery.",
+                                                            "WARNING",
+                                                        )
                                                 if not success and download_name:
-                                                    recovered_local = _find_output_by_basename(download_name, start_time)
+                                                    recovered_local = find_output_by_basename(
+                                                        comfy_output_root,
+                                                        download_name,
+                                                        start_time,
+                                                        scan_limit=int(
+                                                            getattr(
+                                                                config,
+                                                                "COMFY_OUTPUT_BASENAME_SCAN_LIMIT",
+                                                                4000,
+                                                            )
+                                                        ),
+                                                    )
                                                     if recovered_local and os.path.exists(recovered_local):
                                                         try:
                                                             os.makedirs(
@@ -4408,7 +3136,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 'charon_node_id': charon_node_id,
                                                 'prompt_id': prompt_id,
                                                 'run_id': current_run_id,
-                                                'script_name': _resolve_nuke_script_name(),
+                                                'script_name': nuke_script_name,
                                                 'user': user_slug,
                                                 'workflow_path': workflow_path or '',
                                                 'timestamp': time.time(),
@@ -4492,7 +3220,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     'elapsed_time': last_time,
                     'output_kind': last_kind,
                 }
-                _write_result_file(result_data)
+                write_result_manifest(result_file, result_data)
                 trace_step("result_file_written_success", result_file=result_file.replace("\\", "/"), outputs=len(batch_outputs))
                 return
 
@@ -4507,7 +3235,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     'node_x': node_x,
                     'node_y': node_y,
                 }
-                _write_result_file(result_data)
+                write_result_manifest(result_file, result_data)
                 trace_step("result_file_written_error", result_file=result_file.replace("\\", "/"))
 
         # Early Spawn for Recursive Mode (Iteration 0) - Executed in Main Thread (After Input Resolution)
@@ -4544,7 +3272,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         break
                                 
                                 if not has_inverse:
-                                    from .paths import get_charon_temp_dir
                                     ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_rec_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
                                     try:
                                         with open(ivt_temp, "w") as f:
@@ -4609,45 +3336,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             except Exception as e:
                 log_debug(f"Failed to pre-spawn recursive nodes: {e}", "WARNING")
 
-        bg_thread = threading.Thread(target=background_process)
-        bg_thread.daemon = True
-        bg_thread.start()
+        start_daemon_job(
+            background_process,
+            thread_name=f"charon-process-{current_run_id[:8]}",
+        )
         trace_step("background_thread_started")
 
-        def _resolve_result_watch_timeout() -> float:
-            base_timeout = float(getattr(config, "COMFY_RESULT_WATCH_TIMEOUT_SEC", 300))
-            grace = float(getattr(config, "COMFY_RESULT_WATCH_GRACE_SEC", 60))
-            return base_timeout * max(1, batch_count) + grace
-
         def result_watcher():
-            def _execute_in_main_thread_blocking(callback, label: str, timeout_sec: float = 120.0):
-                try:
-                    execute_with_result = getattr(nuke, "executeInMainThreadWithResult", None)
-                except Exception:
-                    execute_with_result = None
-                if callable(execute_with_result):
-                    return execute_with_result(callback)
-
-                done_event = threading.Event()
-                state: Dict[str, Any] = {"error": None}
-
-                def wrapped():
-                    try:
-                        callback()
-                    except Exception as exc:
-                        state["error"] = exc
-                    finally:
-                        done_event.set()
-
-                nuke.executeInMainThread(wrapped)
-                if not done_event.wait(timeout=timeout_sec):
-                    raise TimeoutError(f"Timed out waiting for main-thread callback: {label}")
-                if state["error"] is not None:
-                    raise state["error"]
-                return None
-
             watch_start = time.time()
-            watch_timeout = _resolve_result_watch_timeout()
+            watch_timeout = resolve_result_watch_timeout(
+                batch_count,
+                base_timeout=getattr(config, "COMFY_RESULT_WATCH_TIMEOUT_SEC", 300),
+                grace=getattr(config, "COMFY_RESULT_WATCH_GRACE_SEC", 60),
+            )
             last_read_error = 0.0
             trace_step("result_watcher_started", timeout_sec=watch_timeout)
             while time.time() - watch_start < watch_timeout:
@@ -5164,7 +3865,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             except Exception as create_error:
                                                 log_debug(f'Failed to create CharonRead2D node: {create_error}', 'ERROR')
                                                 continue
-                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            read_base = _sanitize_name(workflow_display_name, "Workflow")
                                             label_base = _sanitize_name(label, "Output2D")
                                             try:
                                                 read_node.setName(f"CR2D_{read_base}_{label_base}")
@@ -5307,7 +4008,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             except Exception:
                                                 pass
                                         try:
-                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            read_base = _sanitize_name(workflow_display_name, "Workflow")
                                             label_base = _sanitize_name(label, "Output3D")
                                             read_node.setName(f"CR3D_{read_base}_{label_base}")
                                         except Exception:
@@ -5400,7 +4101,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             pass
 
                                         try:
-                                            read_base = _sanitize_name(_resolve_workflow_display_name(), "Workflow")
+                                            read_base = _sanitize_name(workflow_display_name, "Workflow")
                                             label_base = _sanitize_name(label, "Output3D")
                                             read_node.setName(f"CR3D_{read_base}_{label_base}")
                                         except Exception:
@@ -5624,7 +4325,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     trace_step("mainthread_import_cleanup_done")
 
                                 trace_step("mainthread_import_dispatch")
-                                _execute_in_main_thread_blocking(update_or_create_read_nodes, "update_or_create_read_nodes")
+                                run_on_nuke_main_thread_blocking(
+                                    update_or_create_read_nodes,
+                                    nuke_module=nuke,
+                                    label="update_or_create_read_nodes",
+                                )
                                 trace_step("mainthread_import_returned")
 
                                 def check_auto_contact_sheet():
@@ -5653,7 +4358,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         trace_step("mainthread_contact_sheet_completed")
 
                                 trace_step("mainthread_contact_sheet_dispatch")
-                                _execute_in_main_thread_blocking(check_auto_contact_sheet, "check_auto_contact_sheet")
+                                run_on_nuke_main_thread_blocking(
+                                    check_auto_contact_sheet,
+                                    nuke_module=nuke,
+                                    label="check_auto_contact_sheet",
+                                )
                                 trace_step("mainthread_contact_sheet_returned")
 
                                 def handle_recursion():
@@ -5669,7 +4378,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             _handle_recursive_updates(node, last_output)
                                             
                                             # Short wait to allow Nuke to refresh the graph
-                                            import time
                                             time.sleep(2.0)
                                             
                                             # Trigger next iteration
@@ -5760,7 +4468,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         trace_step("mainthread_recursion_completed")
 
                                 trace_step("mainthread_recursion_dispatch")
-                                _execute_in_main_thread_blocking(handle_recursion, "handle_recursion")
+                                run_on_nuke_main_thread_blocking(
+                                    handle_recursion,
+                                    nuke_module=nuke,
+                                    label="handle_recursion",
+                                )
                                 trace_step("mainthread_recursion_returned")
                             else:
                                 log_debug('Auto import disabled; skipping Read node creation.')
@@ -5806,9 +4518,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     error='Timed out waiting for result file.',
                 )
 
-        watcher_thread = threading.Thread(target=result_watcher)
-        watcher_thread.daemon = True
-        watcher_thread.start()
+        start_daemon_job(
+            result_watcher,
+            thread_name=f"charon-result-watcher-{current_run_id[:8]}",
+        )
         trace_step("result_watcher_thread_started")
 
         log_debug('Processing started in background')
@@ -5860,7 +4573,6 @@ def create_contact_sheet_from_charonop(node_override=None):
     """Create a Contact Sheet group from all outputs of the current CharonOp."""
     try:
         import nuke
-        import json
     except ImportError:
         return
 
@@ -6070,7 +4782,6 @@ def create_contact_sheet_from_charonop(node_override=None):
 
 def _create_generic_result_group(charon_node, image_paths, columns_override=None):
     import nuke
-    import uuid
     
     node_id = ""
     try:
@@ -6232,7 +4943,6 @@ def _create_generic_result_group(charon_node, image_paths, columns_override=None
     from .color_management import is_aces_enabled
     aces_enabled = is_aces_enabled()
     if aces_enabled:
-        from .paths import get_charon_temp_dir
         ivt_temp = os.path.join(get_charon_temp_dir(), f"ivt_cs_{str(uuid.uuid4())[:8]}.nk").replace("\\", "/")
         try:
             with open(ivt_temp, "w") as f:

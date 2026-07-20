@@ -37,6 +37,33 @@ class WorkflowLocalStoreTests(unittest.TestCase):
 
                     self.assertFalse(load_workflow_state(remote_folder).get("validated"))
 
+    def test_changed_comfy_endpoint_invalidates_validated_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = os.path.join(tmp, "workflows")
+            remote_folder = os.path.join(repo_root, "artist", "workflow")
+            prefs_root = os.path.join(tmp, "prefs")
+            os.makedirs(remote_folder)
+            metadata_path = os.path.join(remote_folder, ".charon.json")
+            with open(metadata_path, "w", encoding="utf-8") as handle:
+                json.dump({"workflow_file": "workflow.json", "dependencies": []}, handle)
+            payload = {"1": {"class_type": "LoadImage", "inputs": {}}}
+
+            with mock.patch(
+                "charon.workflow_local_store.config.WORKFLOW_REPOSITORY_ROOT",
+                repo_root,
+            ):
+                with mock.patch.dict(os.environ, {"GALT_PLUGIN_DIR": prefs_root}):
+                    preferences.set_preference("comfyui_launch_path", os.path.join(tmp, "comfy"))
+                    preferences.set_preference("comfyui_url_base", "first-host:8188")
+                    synchronize_remote_payload(remote_folder, payload)
+                    mark_validated_workflow(remote_folder, payload)
+                    self.assertTrue(load_workflow_state(remote_folder).get("validated"))
+
+                    preferences.set_preference("comfyui_url_base", "second-host:8188")
+                    synchronize_remote_payload(remote_folder, payload)
+
+                    self.assertFalse(load_workflow_state(remote_folder).get("validated"))
+
     def test_changed_comfy_path_invalidates_resolve_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = os.path.join(tmp, "workflows")

@@ -44,6 +44,10 @@ dispatch resolve/install/restart commands to services.
 ### `validation_resolver.py`
 Headless candidate search, copying, and node-install support.
 
+### `validation_repository.py`
+Owns validation-state derivation, signature-aware transient caching, and durable
+status reads for presentation consumers.
+
 ## Execution and scene
 
 ### `node_factory.py`
@@ -53,6 +57,38 @@ runtime schema and require compatibility tests.
 ### `processor.py`
 Current execution coordinator. Target phases: prepare, convert, materialize,
 submit, monitor, retrieve, import, and finalize.
+
+### Processor phase helpers
+
+- `processor_context.py`: immutable run-context capture
+- `processor_node_state.py`: host metadata writes; node identity initialization,
+  deduplication, and migration; linked-output lookup, anchor repair, and status
+  color propagation
+- `processor_conversion.py`: typed cache resolution and converted-prompt file
+  serialization
+- `processor_prompt_cache.py`: node-backed converted-prompt path/hash persistence
+- `processor_submission.py`: per-batch prompt construction and submission
+- `processor_status.py`: lifecycle transitions and node-backed status repository
+- `processor_output.py`: result-manifest allocation/atomic publication plus
+  output collection and classification
+- `processor_recovery.py`: queue-aware timeouts, bounded downloads, history
+  reuse, and local output recovery
+- `processor_inputs.py`: crop and input-value normalization
+- `processor_trace.py`: ordered execution diagnostics and trace-file placement
+- `background_jobs.py`: named daemon launches and explicit completed/error/timeout
+  outcomes for bounded blocking operations
+- `nuke_threading.py`: direct, asynchronous, and timeout-bounded Nuke main-thread
+  dispatch
+
+New headless execution policy belongs in these modules. `processor.py` retains
+Nuke mutations and orchestration until each remaining phase has characterization
+coverage and an explicit adapter boundary.
+
+### `nuke_3d_tools.py`
+Owns coverage-camera group creation, final-prep generation, texture-bake
+generation, template parsing, and DAG placement. `nuke_3d_scripts.py` owns the
+knob callback source, and `resources/nuke_template/charon_camera_rig.nk` owns
+the camera rig payload. `CharonWindow` retains thin command wrappers only.
 
 ### `SceneNodesPanel` and `TinyModeWidget`
 Read-only projections of CharonOp scene state plus explicit scene commands.
@@ -66,5 +102,6 @@ Read-only projections of CharonOp scene state plus explicit scene commands.
 - `ModelTransferManager`: long-running model copies/downloads
 
 The filesystem portion of the environment is now normalized by the
-`ComfyEnvironment` mapping in `paths.py`. The next boundary is a runtime service
-that binds that mapping to the configured HTTP endpoint and active server.
+mapping in `paths.py`. `comfy_environment.py` binds that mapping to the endpoint
+used by validation, processor fallback connections, setup, installation, and
+connection monitoring. Process ownership remains a later extraction.

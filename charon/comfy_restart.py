@@ -3,11 +3,12 @@ import urllib.request
 import urllib.error
 from typing import Iterable, Optional, Sequence
 
+from . import config
 from .charon_logger import system_warning
 from .path_safety import is_path_inside
 from .paths import resolve_comfy_environment
 
-DEFAULT_URL = "http://127.0.0.1:8188"
+DEFAULT_URL = config.COMFY_URL_BASE
 RESTART_SIGNAL_REBOOT = "reboot"
 RESTART_SIGNAL_SHUTDOWN = "shutdown"
 

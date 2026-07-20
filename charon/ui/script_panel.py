@@ -24,12 +24,14 @@ from ..path_safety import is_path_inside
 from .validation_dialog import ValidationResolveDialog
 from ..dependency_check import ensure_manager_security_level
 from .model_upload_dialog import ModelUploadDialog
+from ..validation_repository import (
+    WorkflowValidationRepository,
+    derive_validation_state,
+)
 from ..workflow_local_store import (
     clear_validation_artifacts,
-    compute_validation_signature,
     write_validation_raw,
     write_validation_resolve_status,
-    load_validation_resolve_status,
 )
 import os
 import shutil
@@ -124,7 +126,7 @@ class ScriptPanel(QtWidgets.QWidget):
         self._validation_timer = QtCore.QTimer(self)
         self._validation_timer.setInterval(300)
         self._validation_timer.timeout.connect(self._on_validation_timer_tick)
-        self._validation_cache = {}
+        self._validation_repository = WorkflowValidationRepository()
         self._comfy_connected = False
         self._closing = False
         self._load_sequence = 0
@@ -248,7 +250,6 @@ class ScriptPanel(QtWidgets.QWidget):
         self.script_view.setModel(self.script_model)
         
         # Create the metadata panel - will be added to layout later
-        from .metadata_panel import MetadataPanel
         self.metadata_panel = MetadataPanel(host=None)
         self.metadata_panel.setVisible(False)  # Hidden by default
         
@@ -355,67 +356,17 @@ class ScriptPanel(QtWidgets.QWidget):
         except Exception:
             pass
     
-    def _normalize_script_path(self, script_path: str) -> str:
-        return os.path.normpath(script_path or "").lower()
-
     def _derive_state_from_payload(self, payload: dict, fallback: str = "idle") -> str:
-        """
-        Infer a validation state from a cached payload.
-        """
-        auto_state = payload.get("auto_resolve_state") if isinstance(payload, dict) else None
-        if isinstance(auto_state, dict) and auto_state.get("running"):
-            return "installing"
-        state_flag = str(payload.get("state") or "").strip().lower() if isinstance(payload, dict) else ""
-        if state_flag == "installing":
-            return "installing"
-        state_value = str(payload.get("state") or "").strip().lower()
-        if state_value in {"validated", "needs_resolve", "validating", "idle"}:
-            inferred = state_value
-        else:
-            inferred = "validated"
-            for issue in payload.get("issues") or []:
-                if not isinstance(issue, dict):
-                    continue
-                if not issue.get("ok", False):
-                    inferred = "needs_resolve"
-                    break
-        restart_required = bool(payload.get("restart_required") or payload.get("requires_restart"))
-        if restart_required and inferred == "validated":
-            inferred = "needs_resolve"
-        return inferred or fallback
+        return derive_validation_state(payload, fallback)
 
     def _read_validation_cache(self, script_path: str):
-        normalized = self._normalize_script_path(script_path)
-        signature = compute_validation_signature(script_path)
-        if normalized in self._validation_cache:
-            entry = self._validation_cache[normalized]
-            if isinstance(entry, dict) and entry.get("validation_signature") == signature:
-                return entry
-            self._validation_cache.pop(normalized, None)
-
-        resolved_payload = load_validation_resolve_status(script_path or "")
-        if isinstance(resolved_payload, dict):
-            state = self._derive_state_from_payload(resolved_payload, fallback="needs_resolve")
-            entry = {
-                "state": state,
-                "payload": resolved_payload,
-                "validation_signature": signature,
-            }
-            self._validation_cache[normalized] = entry
-            return entry
-        return None
+        return self._validation_repository.read(script_path)
 
     def _write_validation_cache(self, script_path: str, state: str, payload) -> None:
-        normalized = self._normalize_script_path(script_path)
-        self._validation_cache[normalized] = {
-            "state": state,
-            "payload": payload,
-            "validation_signature": compute_validation_signature(script_path),
-        }
+        self._validation_repository.write(script_path, state, payload)
 
     def _clear_validation_cache(self, script_path: str) -> None:
-        normalized = self._normalize_script_path(script_path)
-        self._validation_cache.pop(normalized, None)
+        self._validation_repository.clear(script_path)
 
     def update_comfy_connection_status(self, connected: bool) -> None:
         """Receive connection state updates from the ComfyUI footer widget."""
@@ -1100,7 +1051,7 @@ class ScriptPanel(QtWidgets.QWidget):
             self._validation_timer.stop()
 
     def _show_validation_payload(self, script_path: str) -> bool:
-        resolved_payload = load_validation_resolve_status(script_path or "")
+        resolved_payload = self._validation_repository.load_persisted(script_path)
         payload = resolved_payload if isinstance(resolved_payload, dict) else None
         if payload is None:
             payload = self.script_model.get_validation_payload(script_path)

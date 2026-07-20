@@ -43,6 +43,7 @@ charon/
 |-- workflow_analysis.py
 |-- workflow_local_store.py
 |-- workflow_overrides.py
+|-- comfy_environment.py
 |-- comfy_validation.py
 |-- comfy_client.py
 |-- setup_manager.py
@@ -50,6 +51,19 @@ charon/
 |-- dependency_check.py
 |-- node_factory.py
 |-- processor.py
+|-- processor_context.py
+|-- processor_inputs.py
+|-- processor_node_state.py
+|-- processor_output.py
+|-- processor_prompt_cache.py
+|-- processor_recovery.py
+|-- processor_status.py
+|-- processor_submission.py
+|-- processor_trace.py
+|-- background_jobs.py
+|-- validation_repository.py
+|-- nuke_3d_tools.py
+|-- nuke_3d_scripts.py
 |-- scene_nodes_runtime.py
 |-- conversion_cache.py
 |-- resource_monitor.py
@@ -98,12 +112,36 @@ Notes:
   Applies resolved model-path replacements from validation cache.
 - `comfy_validation.py`
   Environment, custom node, and model validation.
+- `comfy_environment.py`
+  Canonical filesystem and HTTP identity for a ComfyUI runtime.
+- `validation_repository.py`
+  Signature-aware transient and durable validation-state access.
 
 ## Node / Execution Files
 - `node_factory.py`
   Builds CharonOp groups and their knob layout.
 - `processor.py`
-  Executes workflows and imports outputs back into Nuke.
+  Transitional run coordinator; Nuke mutations remain here while headless
+  phases move into `processor_*` modules.
+- `processor_recovery.py`
+  Queue-aware timeouts, bounded downloads, history reuse, and local recovery.
+- `processor_output.py`
+  Result-manifest allocation and atomic publication, output classification, and
+  local-path resolution.
+- `processor_trace.py`
+  Ordered processor diagnostics and trace-file placement.
+- `processor_node_state.py`
+  Node identity access plus linked-output discovery, migration, and anchor repair.
+- `processor_prompt_cache.py`
+  Node-backed converted-prompt path and workflow-hash persistence.
+- `background_jobs.py`
+  Named daemon launches and explicit outcomes for bounded blocking work.
+- `nuke_3d_tools.py`
+  Nuke infrastructure for coverage, final-prep, and texture-bake tools.
+- `nuke_3d_scripts.py`
+  Embedded Python callback source installed on Nuke 3D helper groups.
+- `resources/nuke_template/charon_camera_rig.nk`
+  Packaged camera-rig graph pasted by the 3D camera command.
 - `scene_nodes_runtime.py`
   Reads CharonOp state from the scene for CharonBoard.
 - `conversion_cache.py`

@@ -5,6 +5,7 @@ from unittest import mock
 
 from charon import paths
 from charon.paths import (
+    allocate_charon_output_path,
     allocate_custom_output_path,
     get_charon_temp_dir,
     resolve_comfy_environment,
@@ -12,6 +13,32 @@ from charon.paths import (
 
 
 class OutputAllocationTests(unittest.TestCase):
+    def test_charon_output_allocation_uses_named_subfolders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "CHARON_RUNTIME_ROOT": tmp,
+                    "BUCK_PROJECT_PATH": "",
+                    "BUCK_WORK_ROOT": "",
+                },
+            ):
+                path = allocate_charon_output_path(
+                    "abc123",
+                    "unused_script_name",
+                    ".png",
+                    user_slug="artist",
+                    workflow_name="LTX Workflow",
+                    category="2D",
+                    output_name="Preview Output",
+                    output_subfolder="Iteration 001",
+                )
+
+            normalized = path.replace("\\", "/")
+            self.assertIn("/_CHARON/2D/LTX_Workflow/CharonOp_abc123/", normalized)
+            self.assertIn("/Iteration_001/Preview_Output/", normalized)
+            self.assertTrue(path.endswith("CharonOutput_v001.png"))
+
     def test_custom_output_allocation_reserves_unique_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = allocate_custom_output_path(tmp, extension=".png")

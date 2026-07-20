@@ -9,6 +9,7 @@ from ..qt_compat import QtWidgets, QtCore, QtGui
 from ..charon_logger import system_info, system_warning, system_error, system_debug
 from .. import preferences
 from ..comfy_client import ComfyUIClient
+from ..comfy_environment import resolve_comfy_runtime
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
 import urllib.request
 import urllib.error
@@ -37,7 +38,6 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
     _connection_check_finished = QtCore.Signal(bool, object, bool)
 
     _PATH_SETTING_KEY = "comfyui_launch_path"
-    _DEFAULT_URL = "http://127.0.0.1:8188"
     _RESTART_TIMEOUT_SECONDS = 120
 
     def __init__(self, parent=None):
@@ -46,6 +46,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._client: Optional[ComfyUIClient] = None
         self._settings = self._load_settings()
         self._comfy_path = self._settings.get(self._PATH_SETTING_KEY, "").strip()
+        self._base_url = resolve_comfy_runtime(self._comfy_path).base_url
         self._check_in_progress = False
         self._connected = False
         self._popover: Optional["ConnectionSettingsPopover"] = None
@@ -226,7 +227,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             connected = False
             client = None
             try:
-                client = ComfyUIClient(self._DEFAULT_URL)
+                client = ComfyUIClient(self._base_url)
                 connected = bool(client.test_connection())
                 if not connected:
                     client = None
@@ -804,10 +805,10 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._set_status("checking", False)
 
     def _send_shutdown_signal(self, *, allow_manager_reboot: bool = True) -> bool:
-        return send_shutdown_signal(self._DEFAULT_URL, allow_manager_reboot=allow_manager_reboot)
+        return send_shutdown_signal(self._base_url, allow_manager_reboot=allow_manager_reboot)
 
     def _request_restart_signal(self) -> Optional[str]:
-        return request_restart_signal(self._DEFAULT_URL)
+        return request_restart_signal(self._base_url)
 
     def _force_kill_comfy_processes(self) -> bool:
         comfy_env = resolve_comfy_environment(self._comfy_path)

@@ -60,3 +60,37 @@ def run_on_main_thread_async(func: Callable[..., Any], *args: Any, **kwargs: Any
         nuke.executeInMainThread(lambda: func(*args, **kwargs))
     else:
         func(*args, **kwargs)
+
+
+def run_on_nuke_main_thread_blocking(
+    callback: Callable[[], T],
+    *,
+    nuke_module,
+    label: str,
+    timeout: float = 120.0,
+) -> T:
+    """Dispatch through Nuke and wait for completion with an explicit timeout."""
+    try:
+        execute_with_result = getattr(nuke_module, "executeInMainThreadWithResult", None)
+    except Exception:
+        execute_with_result = None
+    if callable(execute_with_result):
+        return execute_with_result(callback)
+
+    completed = threading.Event()
+    state = {"value": None, "error": None}
+
+    def wrapped() -> None:
+        try:
+            state["value"] = callback()
+        except Exception as exc:
+            state["error"] = exc
+        finally:
+            completed.set()
+
+    nuke_module.executeInMainThread(wrapped)
+    if not completed.wait(timeout=max(0.0, float(timeout))):
+        raise TimeoutError(f"Timed out waiting for main-thread callback: {label}")
+    if state["error"] is not None:
+        raise state["error"]
+    return state["value"]  # type: ignore[return-value]

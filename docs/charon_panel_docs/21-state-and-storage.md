@@ -59,6 +59,9 @@ root, `ComfyUI` directory, `ComfyUI/models` directory, and embedded `python.exe`
    authoritative reload path.
 5. A configured ComfyUI launcher, derived paths, and active HTTP server must be
    represented and validated as one environment identity.
+6. Presentation code accesses validation state through
+   `WorkflowValidationRepository`; it does not own signature or durable-load
+   policy.
 
 ## Invalidation Events
 

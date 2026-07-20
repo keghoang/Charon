@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 import socket
 
+from . import config
 from .paths import get_temp_file
 
 
@@ -16,7 +17,13 @@ logger = logging.getLogger(__name__)
 class ComfyUIClient:
     """Client for interacting with ComfyUI API."""
 
-    def __init__(self, base_url="http://127.0.0.1:8188", timeout=300, request_timeout=30, connect_timeout=5):
+    def __init__(
+        self,
+        base_url=config.COMFY_URL_BASE,
+        timeout=300,
+        request_timeout=30,
+        connect_timeout=5,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout  # Total wait time for workflow completion
         self.request_timeout = request_timeout  # Socket timeout for standard API calls
