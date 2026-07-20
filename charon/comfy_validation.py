@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from . import preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
+from .model_paths import derive_workflow_value_from_path
 from .paths import get_charon_temp_dir, resolve_comfy_environment
 from .validation_resolver import locate_manager_cli
 from .workflow_graph import iter_workflow_node_dicts
@@ -25,31 +26,6 @@ CACHE_KEY = "comfy_validation_cache"
 BANNER_PREF_KEY = "comfy_validator_banner_dismissed"
 CACHE_TTL_SECONDS = 900  # 15 minutes
 MODEL_EXTENSIONS = (".ckpt", ".safetensors", ".pth", ".pt", ".bin", ".onnx", ".yaml")
-MODEL_CATEGORY_PREFIXES = {
-    "diffusion_models",
-    "checkpoints",
-    "unet",
-    "unets",
-    "text_encoders",
-    "text-encoders",
-    "clip",
-    "clip_vision",
-    "clip-vision",
-    "loras",
-    "vae",
-    "vae_approx",
-    "vae-approx",
-    "embeddings",
-    "controlnet",
-    "hypernetworks",
-    "upscale_models",
-    "upscale",
-    "motion_models",
-    "motion_loras",
-    "styles",
-    "style_models",
-    "ipadapter",
-}
 IGNORED_NODE_TYPES = {
     "",
     "note",
@@ -288,6 +264,7 @@ import sys
 
 WORKFLOW_PATH = sys.argv[1]
 MODE = sys.argv[2] if len(sys.argv) > 2 else "cache"
+COMFY_URL = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8188"
 
 async def main():
     try:
@@ -316,7 +293,7 @@ async def main():
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         try:
-            await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
+            await page.goto(COMFY_URL, wait_until="load", timeout=120000)
             await page.wait_for_function(
                 "window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app && window.comfyAPI.app.app.graph",
                 timeout=120000,
@@ -612,6 +589,8 @@ class ValidationResult:
         return {
             "comfy_path": self.comfy_path,
             "issues": [issue.to_dict() for issue in self.issues],
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
             "cache_key": self.cache_key,
             "workflow": {
                 "folder": self.workflow_folder,
@@ -629,8 +608,8 @@ class ValidationResult:
         return cls(
             comfy_path=str(payload.get("comfy_path") or ""),
             issues=issues,
-            started_at=0.0,
-            finished_at=0.0,
+            started_at=float(payload.get("started_at") or 0.0),
+            finished_at=float(payload.get("finished_at") or 0.0),
             cache_key=str(payload.get("cache_key") or ""),
             workflow_folder=workflow.get("folder"),
             workflow_name=workflow.get("name"),
@@ -682,8 +661,8 @@ def validate_comfy_environment(
         result = ValidationResult(
             comfy_path=result_comfy_path,
             issues=issues,
-            started_at=0.0,
-            finished_at=0.0,
+            started_at=started,
+            finished_at=time.time(),
             cache_key=cache_key,
             workflow_folder=workflow_info.get("folder"),
             workflow_name=workflow_info.get("name"),
@@ -696,15 +675,19 @@ def validate_comfy_environment(
         result_comfy_path = env_info.get("comfy_dir") or result_comfy_path
     if include_environment:
         issues.append(_validate_environment(comfy_path, env_info))
-    custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(env_info, workflow_bundle)
+    custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(
+        env_info,
+        workflow_bundle,
+        ping_url=ping_url,
+    )
     issues.append(custom_nodes_issue)
     issues.append(_validate_models_browser(env_info, workflow_bundle, browser_payload))
 
     result = ValidationResult(
         comfy_path=result_comfy_path,
         issues=issues,
-        started_at=0.0,
-        finished_at=0.0,
+        started_at=started,
+        finished_at=time.time(),
         cache_key=cache_key,
         workflow_folder=workflow_info.get("folder"),
         workflow_name=workflow_info.get("name"),
@@ -839,6 +822,7 @@ def _validate_custom_nodes_browser(
     workflow_bundle: Optional[Dict[str, Any]],
     *,
     mode: str = "cache",
+    ping_url: str = DEFAULT_PING_URL,
 ) -> Tuple[ValidationIssue, Optional[Dict[str, Any]]]:
     python_exe = env_info.get("python_exe")
     comfy_dir = env_info.get("comfy_dir")
@@ -860,15 +844,15 @@ def _validate_custom_nodes_browser(
             details=["Fix the ComfyUI path first."],
         ), payload
 
-    if not ComfyUIClient(DEFAULT_PING_URL, connect_timeout=3).test_connection():
+    if not ComfyUIClient(ping_url, connect_timeout=3).test_connection():
         return ValidationIssue(
             key="custom_nodes",
             label="ComfyUI server reachable",
             ok=False,
-            summary="No valid ComfyUI server is responding on 127.0.0.1:8188.",
+            summary=f"No valid ComfyUI server is responding at {ping_url}.",
             details=[
-                "Start ComfyUI and wait for it to finish loading. "
-                "If another service uses port 8188, stop that service before retrying."
+                "Start ComfyUI and wait for it to finish loading. Confirm the "
+                "configured host and port before retrying."
             ],
         ), payload
 
@@ -892,7 +876,7 @@ def _validate_custom_nodes_browser(
         with open(script_path, "w", encoding="utf-8") as handle:
             handle.write(BROWSER_VALIDATOR_SCRIPT)
 
-        command = [python_exe, script_path, workflow_path, mode]
+        command = [python_exe, script_path, workflow_path, mode, ping_url]
         system_debug(f"Running browser validator: {command}")
         try:
             completed = subprocess.run(
@@ -908,7 +892,7 @@ def _validate_custom_nodes_browser(
                 label="Custom nodes loaded",
                 ok=False,
                 summary="Playwright validation timed out.",
-                details=["Ensure ComfyUI is running and reachable on 127.0.0.1:8188."],
+                details=[f"Ensure ComfyUI is running and reachable at {ping_url}."],
             ), payload
 
         stdout = completed.stdout.strip()
@@ -1139,7 +1123,9 @@ def _validate_models_browser(
 
     comfy_dir = env_info.get("comfy_dir")
     python_exe = env_info.get("python_exe")
-    models_root = os.path.join(comfy_dir, "models") if comfy_dir else ""
+    models_root = env_info.get("models_dir") or (
+        os.path.join(comfy_dir, "models") if comfy_dir else ""
+    )
     data: Dict[str, Any] = {
         "models_root": models_root,
         "found": [],
@@ -1379,7 +1365,7 @@ def _validate_models(
         )
 
     references = _collect_model_references(workflow_bundle)
-    models_root = os.path.join(comfy_dir, "models")
+    models_root = env_info.get("models_dir") or os.path.join(comfy_dir, "models")
     data: Dict[str, Any] = {"models_root": models_root}
 
     if not references:
@@ -1516,7 +1502,7 @@ def _validate_models(
                 signature_tuple = tuple(signature)  # type: ignore[arg-type]
             else:
                 signature_tuple = None
-            effective_value = workflow_value if isinstance(workflow_value, str) and workflow_value else _derive_workflow_value_from_path(path_value, signature_tuple, models_root, comfy_dir)
+            effective_value = workflow_value if isinstance(workflow_value, str) and workflow_value else derive_workflow_value_from_path(path_value, signature_tuple, models_root, comfy_dir)
             if not effective_value:
                 continue
             if signature_tuple:
@@ -2613,87 +2599,6 @@ def _lookup_model_in_index(
     return False, None
 
 
-
-def _normalize_workflow_entry(value: str) -> str:
-    normalized = (value or "").replace("\\", "/")
-    if os.sep == "\\":
-        return normalized.replace("/", "\\")
-    return normalized
-
-
-def _value_has_path_component(value: Optional[str]) -> bool:
-    if not value:
-        return False
-    return "/" in str(value).replace("\\", "/")
-
-
-def _strip_category_prefix(value: str) -> str:
-    normalized = (value or "").replace("\\", "/").lstrip("/")
-    if not normalized:
-        return normalized
-    lowered = normalized.lower()
-    if lowered.startswith("models/"):
-        parts = normalized.split("/", 1)
-        normalized = parts[1] if len(parts) > 1 else ""
-    segments = [segment for segment in normalized.split("/") if segment]
-    if len(segments) <= 1:
-        return normalized
-    first_lower = segments[0].lower()
-    if first_lower in MODEL_CATEGORY_PREFIXES:
-        trimmed = "/".join(segments[1:])
-        if trimmed:
-            return trimmed
-    return normalized
-
-def _derive_workflow_value_from_path(
-    path_value: Optional[str],
-    signature: Optional[Tuple[Optional[str], Optional[str], Optional[str]]],
-    models_root: str,
-    comfy_dir: Optional[str],
-) -> Optional[str]:
-    if not path_value:
-        return None
-    abs_path = os.path.abspath(path_value)
-    original_name = None
-    category = None
-    if signature and len(signature) >= 2:
-        original_name = signature[0]
-        category = signature[1]
-    prefer_simple_name = bool(original_name) and not _value_has_path_component(original_name)
-    simple_value = _normalize_workflow_entry(os.path.basename(abs_path))
-
-    def _finalize(candidate: str) -> str:
-        stripped = _strip_category_prefix(candidate)
-        normalized_candidate = _normalize_workflow_entry(stripped)
-        if prefer_simple_name and simple_value:
-            if _value_has_path_component(stripped) or _value_has_path_component(normalized_candidate):
-                return simple_value
-        return normalized_candidate
-
-    if category:
-        category_root = os.path.join(models_root, category)
-        if os.path.isdir(category_root):
-            try:
-                rel = os.path.relpath(abs_path, category_root)
-                if not rel.startswith('..'):
-                    return _finalize(rel)
-            except ValueError:
-                pass
-    if models_root and os.path.isdir(models_root):
-        try:
-            rel = os.path.relpath(abs_path, models_root)
-            if not rel.startswith('..'):
-                return _finalize(rel)
-        except ValueError:
-            pass
-    if comfy_dir:
-        try:
-            rel = os.path.relpath(abs_path, comfy_dir)
-            if not rel.startswith('..'):
-                return _finalize(rel)
-        except ValueError:
-            pass
-    return _finalize(abs_path)
 
 def _filter_missing_with_resolved_cache(
     missing: Iterable[Dict[str, Any]],

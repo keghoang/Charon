@@ -383,13 +383,14 @@ def compute_validation_signature(remote_folder: str) -> str:
     comfy_path = str(preferences.get_preference("comfyui_launch_path", "") or "").strip()
     env_info = resolve_comfy_environment(comfy_path)
     comfy_dir = str(env_info.get("comfy_dir") or "")
+    models_dir = str(env_info.get("models_dir") or os.path.join(comfy_dir, "models"))
     payload = {
         "comfy_path": _normalize_signature_path(comfy_path),
         "comfy_dir": _normalize_signature_path(comfy_dir),
         "python_exe": _normalize_signature_path(str(env_info.get("python_exe") or "")),
         "metadata_hash": _metadata_hash(remote_folder),
         "custom_nodes": _directory_inventory(os.path.join(comfy_dir, "custom_nodes")),
-        "model_roots": _directory_inventory(os.path.join(comfy_dir, "models")),
+        "model_roots": _directory_inventory(models_dir),
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

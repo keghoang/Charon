@@ -10,13 +10,13 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from ..qt_compat import QtCore, QtGui, QtWidgets
 from ..charon_logger import system_debug, system_warning
 from ..model_transfer_manager import TransferState, manager as transfer_manager
+from ..model_paths import derive_workflow_value_from_path
 from ..paths import resolve_comfy_environment
 from ..validation_resolver import (
     ResolutionResult,
     determine_expected_model_path,
     find_local_model_matches,
     find_shared_model_matches,
-    format_model_reference_for_workflow,
     install_custom_nodes_via_playwright,
     resolve_missing_custom_nodes,
     resolve_missing_models,
@@ -33,33 +33,6 @@ from ..workflow_local_store import write_validation_resolve_status
 SUCCESS_COLOR = "#228B22"
 VALIDATION_COLUMN_WIDTHS = (260, 100)
 ACTION_BUTTON_WIDTH = 90
-MODEL_CATEGORY_PREFIXES = {
-    "diffusion_models",
-    "checkpoints",
-    "unet",
-    "unets",
-    "text_encoders",
-    "text-encoders",
-    "clip",
-    "clip_vision",
-    "clip-vision",
-    "loras",
-    "vae",
-    "vae_approx",
-    "vae-approx",
-    "embeddings",
-    "controlnet",
-    "hypernetworks",
-    "upscale_models",
-    "upscale",
-    "motion_models",
-    "motion_loras",
-    "styles",
-    "style_models",
-    "ipadapter",
-}
-
-
 COLORS = {
     "bg_main": "#212529",
     "bg_card": "#17191d",
@@ -2320,68 +2293,18 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         models_root: str,
         comfy_dir: Optional[str],
     ) -> str:
-        abs_path = os.path.abspath(abs_path)
-        original_name = str(reference.get("name") or "")
-        normalized_original = original_name.replace("\\", "/").strip()
-        prefer_simple_name = bool(normalized_original) and "/" not in normalized_original
-        simple_value = self._normalize_workflow_value(os.path.basename(abs_path))
-
-        def _finalize(candidate: str) -> str:
-            stripped = self._strip_category_prefix(candidate)
-            normalized_candidate = self._normalize_workflow_value(stripped)
-            if prefer_simple_name and simple_value:
-                if "/" in stripped or "\\" in stripped:
-                    return simple_value
-                if "/" in normalized_candidate or "\\" in normalized_candidate:
-                    return simple_value
-            return normalized_candidate
-
-        category = reference.get("category")
-        if isinstance(category, str) and category:
-            category_root = os.path.join(models_root, category)
-            if os.path.isdir(category_root):
-                try:
-                    rel = os.path.relpath(abs_path, category_root)
-                    if not rel.startswith(".."):
-                        return _finalize(rel)
-                except ValueError:
-                    pass
-        if models_root and os.path.isdir(models_root):
-            try:
-                rel = os.path.relpath(abs_path, models_root)
-                if not rel.startswith(".."):
-                    return _finalize(rel)
-            except ValueError:
-                pass
-        fallback = format_model_reference_for_workflow(abs_path, comfy_dir)
-        return _finalize(fallback)
-
-    def _normalize_workflow_value(self, value: str) -> str:
-        normalized = (value or "").strip()
-        if not normalized:
-            return normalized
-        normalized = normalized.replace("\\", "/")
-        if os.sep == "\\":
-            normalized = normalized.replace("/", "\\")
-        return normalized
-
-    def _strip_category_prefix(self, value: str) -> str:
-        normalized = (value or "").replace("\\", "/").lstrip("/")
-        if not normalized:
-            return normalized
-        lowered = normalized.lower()
-        if lowered.startswith("models/"):
-            parts = normalized.split("/", 1)
-            normalized = parts[1] if len(parts) > 1 else ""
-        segments = [segment for segment in normalized.split("/") if segment]
-        if len(segments) <= 1:
-            return normalized
-        first_lower = segments[0].lower()
-        if first_lower in MODEL_CATEGORY_PREFIXES:
-            trimmed = "/".join(segments[1:])
-            if trimmed:
-                return trimmed
-        return normalized
+        signature = (
+            str(reference.get("name") or ""),
+            str(reference.get("category") or ""),
+            str(reference.get("node_type") or ""),
+        )
+        value = derive_workflow_value_from_path(
+            abs_path,
+            signature,
+            models_root,
+            comfy_dir,
+        )
+        return value or ""
 
     @staticmethod
     def _normalize_identifier(value: Any) -> str:

@@ -2,17 +2,17 @@
 Charon helps you discover studio-ready workflows, drop them into Nuke, and drive ComfyUI renders without leaving the panel. The tool is built and maintained by **Kien**.
 
 ## What You Can Do
-- Browse the curated workflow library with metadata, tags, and previews.
+- Browse the curated workflow library with metadata and tags.
 - Inspect parameters, dependencies, and prompt text before committing.
 - Spawn CharonOps in your script with a single click.
 - Submit jobs to ComfyUI and watch status roll from `Ready -> Processing -> Completed`.
 
 ## Fast Workflow Run
-1. **Browse**: Locate a workflow from the left folder tree or use Quick Search (`Ctrl+F`).
+1. **Browse**: Locate a workflow from the left folder tree or use Quick Search (`F4`).
 2. **Review**: Check the metadata panel for descriptions, dependencies, and notes.
 3. **Grab**: Click **Grab Workflow** (or double-click the entry) to create a CharonOp in the current script.
 4. **Process**: On the CharonOp, press **Execute** to convert, submit, and monitor results.
-5. **Inspect**: Open the Execution History tab to review logs, outputs, and retry if needed.
+5. **Inspect**: Open CharonBoard to review node status and recent outputs.
 
 ## Essential Controls
 - `Ctrl+R` Refresh repository index and metadata cache.

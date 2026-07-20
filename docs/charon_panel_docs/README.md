@@ -11,6 +11,11 @@ If you need a refresher on the codebase as it exists today, read these first:
 3. `PROJECT_STRUCTURE.md`
 4. `18-testing-guide.md`
 5. `19-configuration-reference.md`
+6. `20-architecture-boundaries.md`
+7. `21-state-and-storage.md`
+8. `22-gui-system.md`
+9. `23-component-map.md`
+10. `24-refactor-plan.md`
 
 ## What Is Current
 - `01-architecture.md`
@@ -21,6 +26,18 @@ If you need a refresher on the codebase as it exists today, read these first:
   Paths, preferences, output layout, and dependency/bootstrap settings.
 - `PROJECT_STRUCTURE.md`
   Current repository layout and where the important modules live.
+- `20-architecture-boundaries.md`
+  Intended dependency direction and rules for new code.
+- `21-state-and-storage.md`
+  Sources of truth, cache projections, and invalidation events.
+- `22-gui-system.md`
+  Shared design tokens, primitives, layout rules, and interaction states.
+- `23-component-map.md`
+  Ownership and target boundaries for the major runtime and GUI components.
+- `24-refactor-plan.md`
+  Incremental implementation order and exit conditions.
+- `25-verification.md`
+  Automated baseline and required production smoke tests.
 
 ## What To Treat As Historical
 Most of the numbered deep dives from `02-17` still contain useful UI and

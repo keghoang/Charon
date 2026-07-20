@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import uuid
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TypedDict
 
 from .utilities import get_current_user_slug
 
@@ -25,6 +25,17 @@ OUTPUT_CATEGORY_3D = "3D"
 OUTPUT_PREFIX = "CharonOutput_v"
 OUTPUT_DIRECTORY_TEMPLATE = os.path.join("{category}", "{workflow}", "CharonOp_{node_id}")
 _NUKE_SCRIPT_VERSION_RE = re.compile(r"(?i)(?P<stem>.+?)(?:[._-])v\d+$")
+
+
+class ComfyEnvironment(TypedDict, total=False):
+    """Canonical filesystem identity for one ComfyUI installation."""
+
+    configured_path: str
+    base_dir: str
+    comfy_dir: str
+    models_dir: str
+    python_exe: Optional[str]
+    embedded_root: Optional[str]
 
 
 def get_default_comfy_launch_path():
@@ -167,35 +178,20 @@ def extend_sys_path_with_comfy(comfy_path):
         return
 
     try:
-        comfy_path = os.path.abspath(comfy_path)
-        if os.path.isdir(comfy_path):
-            base_dir = comfy_path
-        else:
-            base_dir = os.path.dirname(comfy_path)
-
+        env_info = resolve_comfy_environment(comfy_path)
         candidates = []
-        if base_dir and os.path.exists(base_dir):
-            candidates.append(base_dir)
-            comfy_sub = os.path.join(base_dir, "ComfyUI")
-            if os.path.exists(comfy_sub):
-                candidates.append(comfy_sub)
+        for key in ("base_dir", "comfy_dir"):
+            candidate = env_info.get(key)
+            if candidate and os.path.exists(candidate):
+                candidates.append(candidate)
 
-        search_dir = base_dir
-        for _ in range(4):
-            if not search_dir:
-                break
-            embed_root = os.path.join(search_dir, "python_embeded")
-            if os.path.exists(embed_root):
-                lib = os.path.join(embed_root, "Lib")
-                site = os.path.join(lib, "site-packages")
-                for item in (embed_root, lib, site):
-                    if os.path.exists(item):
-                        candidates.append(item)
-                break
-            parent = os.path.dirname(search_dir)
-            if parent == search_dir:
-                break
-            search_dir = parent
+        embed_root = env_info.get("embedded_root")
+        if embed_root:
+            lib = os.path.join(embed_root, "Lib")
+            site = os.path.join(lib, "site-packages")
+            for item in (embed_root, lib, site):
+                if os.path.exists(item):
+                    candidates.append(item)
 
         for candidate in candidates:
             if candidate and candidate not in sys.path:
@@ -205,19 +201,55 @@ def extend_sys_path_with_comfy(comfy_path):
         logger.warning("Failed to extend sys.path: %s", exc)
 
 
-def resolve_comfy_environment(comfy_path):
+def resolve_comfy_environment(comfy_path: str) -> ComfyEnvironment:
+    """Resolve common ComfyUI portable paths to one canonical environment.
+
+    ``comfy_path`` is user-configurable and historically accepted a launcher,
+    portable root, or ``ComfyUI`` directory.  Deployment tooling also commonly
+    supplies the ``ComfyUI/models`` directory, so normalize that form here
+    instead of making every validation caller guess the layout independently.
+    """
     comfy_path = comfy_path.strip() if comfy_path else ""
     if not comfy_path:
         return {}
 
-    base_dir = os.path.abspath(comfy_path) if os.path.isdir(comfy_path) else os.path.dirname(os.path.abspath(comfy_path))
-    comfy_dir = os.path.join(base_dir, "ComfyUI")
-    if not os.path.exists(comfy_dir):
-        comfy_dir = base_dir
+    configured_path = os.path.abspath(os.path.expanduser(comfy_path))
+    input_dir = (
+        configured_path
+        if os.path.isdir(configured_path)
+        else os.path.dirname(configured_path)
+    )
+
+    # Embedded Python may be selected directly by diagnostics or deployment
+    # scripts. Treat its parent as the portable root rather than as ComfyUI.
+    if (
+        os.path.basename(configured_path).lower() == "python.exe"
+        and os.path.basename(input_dir).lower() == "python_embeded"
+    ):
+        input_dir = os.path.dirname(input_dir)
+
+    if os.path.basename(input_dir).lower() == "models":
+        comfy_dir = os.path.dirname(input_dir)
+        models_dir = input_dir
+    else:
+        nested_comfy_dir = os.path.join(input_dir, "ComfyUI")
+        if os.path.isdir(nested_comfy_dir):
+            comfy_dir = nested_comfy_dir
+        else:
+            comfy_dir = input_dir
+        models_dir = os.path.join(comfy_dir, "models")
+
+    # The portable root owns python_embeded and launcher batch files. A source
+    # checkout can legitimately have no separate portable root.
+    comfy_parent = os.path.dirname(comfy_dir)
+    if os.path.isdir(os.path.join(comfy_parent, "python_embeded")):
+        base_dir = comfy_parent
+    else:
+        base_dir = input_dir
 
     python_exe = None
     embedded_root = None
-    search_dir = base_dir
+    search_dir = comfy_dir
     for _ in range(4):
         if not search_dir:
             break
@@ -232,8 +264,10 @@ def resolve_comfy_environment(comfy_path):
         search_dir = parent
 
     return {
+        "configured_path": configured_path,
         "base_dir": base_dir,
         "comfy_dir": comfy_dir,
+        "models_dir": models_dir,
         "python_exe": python_exe,
         "embedded_root": embedded_root,
     }

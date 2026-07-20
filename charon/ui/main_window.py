@@ -3286,19 +3286,6 @@ _run()
                 "margin: 0px; padding: 0px; border: none;"
             )
 
-        # Configure splitter inside Workflows tab (folders + workflows)
-        workflow_total = max(center_width, 600)
-        folder_width = int(workflow_total * config.UI_FOLDER_PANEL_RATIO)
-        workflow_content_width = max(workflow_total - folder_width, 400)
-        self.workflows_splitter.setSizes([folder_width, workflow_content_width])
-        handle = self.workflows_splitter.handle(1)
-        if handle is not None:
-            handle.setEnabled(False)
-            handle.setStyleSheet(
-                f"background: {COLOR_MAIN_BG}; width: {folder_workflow_gap}px; "
-                "margin: 0px; padding: 0px; border: none;"
-            )
-
         # Connect to splitter movement to detect when panels are collapsed
         self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
         self.workflows_splitter.splitterMoved.connect(self._on_workflows_splitter_moved)
@@ -4191,10 +4178,6 @@ QPushButton#NewWorkflowButton:pressed {{
         
         # Call directly - we're already on the main thread via the callback
         self.folder_panel.apply_compatibility(results)
-
-    def on_refresh_clicked(self):
-        """Handle public refresh request."""
-        self._refresh_everything()
 
     def _folder_has_visible_items(self, folder_path):
         """Check if a folder contains any visible subfolders or JSON files."""

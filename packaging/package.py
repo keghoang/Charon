@@ -4,14 +4,13 @@ name = 'charon'
 
 version = '1.3.0'
 
-description = 'Script Launcher for Nuke and Maya'
+description = 'Nuke workflow panel and ComfyUI execution bridge'
 
 authors = ['Kien']
 
 tools = []
 
 requires = [
-    '~maya-2022+',
     '~nuke-15+'
 ]
 

@@ -113,7 +113,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     return window
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Charon - Script Management Tool")
+    parser = argparse.ArgumentParser(description="Charon - Nuke/ComfyUI Workflow Panel")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode for verbose output")
     parser.add_argument("--host", help="Override host detection")
     parser.add_argument("--user", help="Override username")

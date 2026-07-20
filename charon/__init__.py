@@ -1,15 +1,15 @@
-"""
-Charon Script Manager
+r"""
+Charon workflow panel.
 
 Pipeline usage:
     import charon
     charon.Go()
     
     # Or with custom paths:
-    charon.Go(script_paths=[r"\path\to\scripts"])
+    charon.Go(global_path=r"\path\to\workflows")
 """
 
-__version__ = "1.0.0"
+__version__ = "1.3.0"
 __author__ = "Kien"
 
 

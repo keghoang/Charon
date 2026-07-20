@@ -343,7 +343,7 @@ def _format_for_api_path(value: str) -> str:
     Format a model path for API workflows, using backslashes for relative paths.
 
     ComfyUI API prompts expect backslashes in some relative model references
-    (e.g., ``qwen\qwen_image_vae.safetensors``). We only apply the conversion to
+    (e.g., ``qwen\\qwen_image_vae.safetensors``). We only apply the conversion to
     relative paths; absolute/UNC paths are left untouched.
     """
     normalized = value.replace("\\", "/").strip()
