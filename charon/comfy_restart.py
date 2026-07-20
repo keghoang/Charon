@@ -1,12 +1,35 @@
+import os
 import urllib.request
 import urllib.error
-from urllib.parse import urlparse
-from typing import Optional
+from typing import Iterable, Optional, Sequence
 
 from .charon_logger import system_warning
+from .path_safety import is_path_inside
 from .paths import resolve_comfy_environment
 
 DEFAULT_URL = "http://127.0.0.1:8188"
+RESTART_SIGNAL_REBOOT = "reboot"
+RESTART_SIGNAL_SHUTDOWN = "shutdown"
+
+
+def process_matches_configured_paths(
+    exe: str,
+    cmdline: Sequence[str],
+    candidates: Iterable[str],
+) -> bool:
+    """Return whether a process executable or absolute argument is under a configured path."""
+    roots = [path for path in candidates if path]
+    if not roots:
+        return False
+    for value in [exe, *(cmdline or [])]:
+        raw_value = str(value or "").strip().strip('"')
+        if raw_value.startswith("--") and "=" in raw_value:
+            raw_value = raw_value.split("=", 1)[1].strip().strip('"')
+        if not raw_value or not os.path.isabs(raw_value):
+            continue
+        if any(is_path_inside(raw_value, root) for root in roots):
+            return True
+    return False
 
 
 def send_shutdown_signal(base_url: str = DEFAULT_URL, *, allow_manager_reboot: bool = True) -> bool:
@@ -49,9 +72,35 @@ def send_shutdown_signal(base_url: str = DEFAULT_URL, *, allow_manager_reboot: b
     return False
 
 
+def request_restart_signal(base_url: str = DEFAULT_URL) -> Optional[str]:
+    """
+    Request a restart and report whether ComfyUI will reboot itself.
+
+    ComfyUI Manager's reboot endpoint is preferred because it owns the relaunch.
+    If it is unavailable, fall back to shutdown and let Charon launch the
+    configured instance after the process exits.
+    """
+    reboot_url = f"{base_url}/manager/reboot"
+    try:
+        req = urllib.request.Request(reboot_url, method="GET")
+        with urllib.request.urlopen(req, timeout=5):
+            return RESTART_SIGNAL_REBOOT
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (404, 405):
+            system_warning(f"ComfyUI Manager reboot request failed: {exc}")
+    except Exception as exc:  # pragma: no cover - defensive
+        msg = str(exc).lower()
+        if "connection reset" in msg or "forcibly closed" in msg:
+            return RESTART_SIGNAL_REBOOT
+
+    if send_shutdown_signal(base_url, allow_manager_reboot=False):
+        return RESTART_SIGNAL_SHUTDOWN
+    return None
+
+
 def shutdown_or_kill(comfy_path: Optional[str] = None, base_url: str = DEFAULT_URL) -> bool:
     """
-    Try graceful shutdown; if that fails, attempt to kill ComfyUI processes by path/port.
+    Try graceful shutdown; if that fails, terminate processes under the configured ComfyUI path.
     Mirrors the ComfyConnectionWidget restart/terminate behavior.
     """
     if send_shutdown_signal(base_url):
@@ -68,35 +117,15 @@ def shutdown_or_kill(comfy_path: Optional[str] = None, base_url: str = DEFAULT_U
         comfy_dir = comfy_env.get("comfy_dir") or ""
         base_dir = comfy_env.get("base_dir") or ""
         candidates = {c for c in (comfy_dir, base_dir) if c}
-        port_hint = urlparse(base_url).port or 8188
-        name_hints = {"comfyui", "comfy_ui"}
 
         killed = False
-        for proc in psutil.process_iter(["pid", "name", "exe", "cmdline", "connections"]):
+        for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
             try:
                 exe = proc.info.get("exe") or ""
-                name = (proc.info.get("name") or "").lower()
                 cmdline = proc.info.get("cmdline") or []
-                # Match by known paths
-                if candidates:
-                    if any(str(path) and str(path) in exe for path in candidates):
-                        proc.terminate()
-                        killed = True
-                        continue
-                    if any(any(str(path) in (arg or "") for path in candidates) for arg in cmdline):
-                        proc.terminate()
-                        killed = True
-                        continue
-                # Match by name/port hints
-                if any(hint in name for hint in name_hints):
+                if process_matches_configured_paths(exe, cmdline, candidates):
                     proc.terminate()
                     killed = True
-                    continue
-                conns = proc.info.get("connections") or []
-                if any(getattr(c, "laddr", None) and getattr(c.laddr, "port", None) == port_hint for c in conns):
-                    proc.terminate()
-                    killed = True
-                    continue
             except Exception:
                 continue
         return killed

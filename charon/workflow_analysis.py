@@ -1,5 +1,7 @@
 import json
 
+from .workflow_graph import iter_workflow_node_dicts
+
 
 CHARON_INPUT_PREFIX = "charoninput"
 
@@ -131,7 +133,7 @@ def analyze_ui_workflow_inputs(ui_workflow):
     if not isinstance(ui_workflow, dict):
         return inputs
 
-    nodes = ui_workflow.get("nodes", [])
+    nodes = list(iter_workflow_node_dicts(ui_workflow))
     set_identifiers = set()
 
     for node in nodes:
@@ -203,7 +205,7 @@ def validate_ui_workflow(ui_workflow):
     if not isinstance(ui_workflow, dict):
         return False, "No workflow data loaded"
 
-    nodes = ui_workflow.get("nodes", [])
+    nodes = list(iter_workflow_node_dicts(ui_workflow))
     has_load = any(node.get("type") == "LoadImage" for node in nodes)
     has_save = any(node.get("type") == "SaveImage" for node in nodes)
 
@@ -219,7 +221,7 @@ def validate_ui_workflow(ui_workflow):
 
 
 def workflow_display_text_ui(name, filename, ui_workflow):
-    nodes = ui_workflow.get("nodes", []) if isinstance(ui_workflow, dict) else []
+    nodes = list(iter_workflow_node_dicts(ui_workflow)) if isinstance(ui_workflow, dict) else []
     node_count = len(nodes)
     counts = {}
     for node in nodes:

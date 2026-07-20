@@ -36,6 +36,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
     else:
         global_repo = global_path or config.GLOBAL_REPO_PATH
         system_debug(f"Using global_path: {global_repo}")
+    global_repo = config.set_workflow_repository_root(global_repo)
 
     # Initialize the database with the determined global path
     from .settings import user_settings_db
@@ -76,6 +77,7 @@ def launch(host_override=None, user_override=None, global_path=None, local_path=
             return None
     except Exception as exc:
         system_error(f"First-time setup failed: {exc}")
+        return None
 
     # Always enforce ComfyUI-Manager security level on launch (no-op if Manager missing).
     try:

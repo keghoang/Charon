@@ -132,8 +132,9 @@ workflow converter. It reuses ComfyUI's real graph export behavior.
 
 ### Shared repository
 `config.WORKFLOW_REPOSITORY_ROOT` is the authoritative source for workflow
-folders. `workflow_runtime.load_workflow_bundle()` rejects folders outside this
-root.
+folders. `CHARON_REPO` or the launch-time `global_path` argument can override
+the default Buck path. `workflow_runtime.load_workflow_bundle()` rejects folders
+outside the active root.
 
 ### Local mirror
 The per-user mirror lives under the preferences root:
@@ -151,6 +152,9 @@ Important artifacts:
 `paths.py` manages temp/export/result/debug paths. Default root:
 
 - `D:\Nuke\charon`
+
+Set `CHARON_RUNTIME_ROOT` to override the runtime root. When the default root is
+not writable, Charon falls back to `%LOCALAPPDATA%\Charon\runtime`.
 
 Final outputs prefer BUCK project paths when available:
 

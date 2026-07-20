@@ -12,6 +12,7 @@ from .utilities import get_current_user_slug
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHARON_DIR = r"D:\Nuke\charon"
+CHARON_RUNTIME_ROOT_ENV = "CHARON_RUNTIME_ROOT"
 RESOURCE_DIR = os.path.join(os.path.dirname(__file__), "resources")
 
 WORK_FOLDER_TEMPLATE = "{user}"
@@ -115,16 +116,45 @@ def _normalize_charon_root(base_dir: Optional[str]) -> str:
     return os.path.normpath(normalized)
 
 
-def get_charon_temp_dir(base_dir=DEFAULT_CHARON_DIR):
-    base_dir = _normalize_charon_root(base_dir)
+def _local_runtime_fallback() -> str:
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if not local_app_data:
+        local_app_data = os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    return os.path.join(local_app_data, "Charon", "runtime")
+
+
+def _create_runtime_subdirs(base_dir: str) -> None:
     subdirs = ["temp", "exports", "results", "debug"]
     for subdir in subdirs:
         path = os.path.join(base_dir, subdir)
         os.makedirs(path, exist_ok=True)
-    return base_dir
 
 
-def get_temp_file(suffix=".png", subdir="temp", base_dir=DEFAULT_CHARON_DIR):
+def get_charon_temp_dir(base_dir=None):
+    """Return a writable runtime root while preserving the studio D: default."""
+    explicit_root = base_dir or os.getenv(CHARON_RUNTIME_ROOT_ENV)
+    if explicit_root:
+        root = _normalize_charon_root(explicit_root)
+        _create_runtime_subdirs(root)
+        return root
+
+    default_root = _normalize_charon_root(DEFAULT_CHARON_DIR)
+    try:
+        _create_runtime_subdirs(default_root)
+        return default_root
+    except OSError as exc:
+        fallback = _normalize_charon_root(_local_runtime_fallback())
+        logger.warning(
+            "Could not initialize default Charon runtime root %s: %s. Falling back to %s.",
+            default_root,
+            exc,
+            fallback,
+        )
+        _create_runtime_subdirs(fallback)
+        return fallback
+
+
+def get_temp_file(suffix=".png", subdir="temp", base_dir=None):
     root = get_charon_temp_dir(base_dir)
     temp_dir = os.path.join(root, subdir)
     os.makedirs(temp_dir, exist_ok=True)
@@ -277,6 +307,37 @@ def _ensure_directory(path: str) -> None:
         os.makedirs(path, exist_ok=True)
     except Exception as exc:
         logger.warning("Could not create directory %s: %s", path, exc)
+        raise
+
+
+def _allocate_versioned_output_file(base_output_dir: str, extension: str) -> str:
+    """Reserve the next CharonOutput path atomically to avoid concurrent collisions."""
+    prefix = OUTPUT_PREFIX
+    version_pattern = re.compile(rf"{re.escape(prefix)}(\d+)", re.IGNORECASE)
+    highest_version = 0
+    try:
+        for entry in os.listdir(base_output_dir):
+            match = version_pattern.match(entry)
+            if match:
+                try:
+                    highest_version = max(highest_version, int(match.group(1)))
+                except ValueError:
+                    continue
+    except FileNotFoundError:
+        _ensure_directory(base_output_dir)
+
+    for version in range(highest_version + 1, highest_version + 10000):
+        filename = f"{prefix}{version:03d}{extension.lower()}"
+        candidate = os.path.join(base_output_dir, filename)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(candidate, flags)
+        except FileExistsError:
+            continue
+        else:
+            os.close(fd)
+            return candidate
+    raise RuntimeError(f"Could not allocate a unique Charon output path in {base_output_dir}")
 
 
 def allocate_custom_output_path(
@@ -297,23 +358,7 @@ def allocate_custom_output_path(
 
     _ensure_directory(base_output_dir)
 
-    prefix = OUTPUT_PREFIX
-    version_pattern = re.compile(rf"{re.escape(prefix)}(\d+)", re.IGNORECASE)
-    highest_version = 0
-    try:
-        for entry in os.listdir(base_output_dir):
-            match = version_pattern.match(entry)
-            if match:
-                try:
-                    highest_version = max(highest_version, int(match.group(1)))
-                except ValueError:
-                    continue
-    except FileNotFoundError:
-        pass
-
-    next_version = highest_version + 1
-    filename = f"{prefix}{next_version:03d}{extension.lower()}"
-    return os.path.join(base_output_dir, filename)
+    return _allocate_versioned_output_file(base_output_dir, extension)
 
 
 def allocate_charon_output_path(
@@ -377,20 +422,4 @@ def allocate_charon_output_path(
 
     _ensure_directory(base_output_dir)
 
-    prefix = OUTPUT_PREFIX
-    version_pattern = re.compile(rf"{re.escape(prefix)}(\d+)", re.IGNORECASE)
-    highest_version = 0
-    try:
-        for entry in os.listdir(base_output_dir):
-            match = version_pattern.match(entry)
-            if match:
-                try:
-                    highest_version = max(highest_version, int(match.group(1)))
-                except ValueError:
-                    continue
-    except FileNotFoundError:
-        pass
-
-    next_version = highest_version + 1
-    filename = f"{prefix}{next_version:03d}{extension.lower()}"
-    return os.path.join(base_output_dir, filename)
+    return _allocate_versioned_output_file(base_output_dir, extension)

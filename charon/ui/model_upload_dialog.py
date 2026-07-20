@@ -8,7 +8,8 @@ from typing import Dict, List, Optional, Tuple, Any
 from ..qt_compat import QtCore, QtGui, QtWidgets
 from ..charon_logger import system_debug, system_warning, system_error
 from ..model_transfer_manager import TransferState, manager as transfer_manager
-from ..config import WORKFLOW_REPOSITORY_ROOT
+from .. import config
+from ..path_safety import ensure_path_inside
 
 # Reuse styling from validation dialog for consistency
 COLORS = {
@@ -223,11 +224,7 @@ class ModelUploadDialog(QtWidgets.QDialog):
 
         # Determine Global Repo Models Path
         # Assuming models/ sibling to workflows/
-        repo_root = Path(WORKFLOW_REPOSITORY_ROOT)
-        if repo_root.name.lower() == "workflows":
-            self.global_models_root = repo_root.parent / "shared_models"
-        else:
-            self.global_models_root = repo_root / "shared_models"
+        self.global_models_root = Path(config.get_shared_models_root())
 
         self.models_to_upload: List[ModelRow] = []
         self._setup_ui()
@@ -304,9 +301,20 @@ class ModelUploadDialog(QtWidgets.QDialog):
             file_name = os.path.basename(source)
             # Construct dest path: GlobalRepo/models/category/filename
             if category:
-                dest = self.global_models_root / category / file_name
+                candidate = self.global_models_root / category / file_name
             else:
-                dest = self.global_models_root / file_name
+                candidate = self.global_models_root / file_name
+            try:
+                dest = Path(
+                    ensure_path_inside(
+                        str(candidate),
+                        str(self.global_models_root),
+                        label="Shared model destination",
+                    )
+                )
+            except ValueError as exc:
+                system_warning(f"Skipping unsafe model upload destination: {exc}")
+                continue
                 
             exists = dest.exists()
             if not exists:

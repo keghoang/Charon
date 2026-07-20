@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from .workflow_graph import iter_workflow_nodes
+
 
 @dataclass(frozen=True)
 class NodeWidgetSpec:
@@ -282,7 +284,7 @@ def collect_workflow_widget_bindings_from_api(
     Walk the workflow document and return bindings using the provided object_info schema.
     """
     bindings: List[NodeWidgetBinding] = []
-    for node_id, node_data in _iter_workflow_nodes(workflow_document):
+    for node_id, node_data in iter_workflow_nodes(workflow_document):
         node_bindings = map_node_widgets(node_id, node_data, object_info)
         bindings.extend(node_bindings)
     return tuple(bindings)
@@ -303,20 +305,3 @@ def _filter_control_widget_values(values: List[Any]) -> List[Any]:
     # We no longer filter out control values (fixed, increment, etc.)
     # because we want to expose them as valid parameters in Nuke.
     return values
-
-
-def _iter_workflow_nodes(document: Dict[str, Any]) -> Iterable[Tuple[str, Dict[str, Any]]]:
-    if not isinstance(document, dict):
-        return
-
-    nodes = document.get("nodes")
-    if isinstance(nodes, list):
-        for node in nodes:
-            if isinstance(node, dict):
-                node_id = node.get("id")
-                yield str(node_id) if node_id is not None else "", node
-        return
-
-    for node_id, node_data in document.items():
-        if isinstance(node_data, dict):
-            yield str(node_id), node_data

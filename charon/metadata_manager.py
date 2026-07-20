@@ -5,6 +5,7 @@ from .utilities import is_compatible_with_host
 from .charon_logger import system_error, system_warning
 from .charon_metadata import load_charon_metadata, write_charon_metadata, CHARON_METADATA_FILENAME
 from .conversion_cache import clear_conversion_cache
+from .path_safety import resolve_relative_path_inside
 from .workflow_local_store import (
     get_local_workflow_folder,
     synchronize_remote_payload,
@@ -234,7 +235,11 @@ def load_workflow_data(script_path):
         or metadata.get("workflow_file")  # legacy field if present
         or "workflow.json"
     )
-    workflow_path = os.path.join(script_path, workflow_file)
+    workflow_path = resolve_relative_path_inside(
+        script_path,
+        workflow_file,
+        label="workflow_file",
+    )
 
     try:
         with open(workflow_path, "r", encoding="utf-8") as handle:

@@ -12,9 +12,14 @@ from ..comfy_client import ComfyUIClient
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
 import urllib.request
 import urllib.error
-from urllib.parse import urlparse
 
-from ..comfy_restart import send_shutdown_signal
+from ..comfy_restart import (
+    RESTART_SIGNAL_REBOOT,
+    RESTART_SIGNAL_SHUTDOWN,
+    process_matches_configured_paths,
+    request_restart_signal,
+    send_shutdown_signal,
+)
 
 try:  # PySide6 helper to check lifetime of wrapped objects
     from shiboken6 import isValid as _qt_is_valid  # type: ignore
@@ -33,6 +38,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
 
     _PATH_SETTING_KEY = "comfyui_launch_path"
     _DEFAULT_URL = "http://127.0.0.1:8188"
+    _RESTART_TIMEOUT_SECONDS = 120
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,6 +57,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._last_status_state = "path_required"
         self._managed_launch = False
         self._restart_pending = False
+        self._restart_started_at = 0.0
         self._managed_process: Optional[subprocess.Popen] = None
         self._launch_button_width: Optional[int] = None
         self._launch_button_height: Optional[int] = None
@@ -189,12 +196,24 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return
 
         now = time.time()
+        if (
+            self._restart_pending
+            and self._restart_started_at
+            and now - self._restart_started_at > self._RESTART_TIMEOUT_SECONDS
+        ):
+            system_warning("ComfyUI restart timed out; reset the restart action so the user can retry.")
+            self._restart_pending = False
+            self._restart_started_at = 0.0
+            self._launch_in_progress = False
+            self._set_status("offline", False)
         if self._launch_in_progress and now - self._launch_started_at > 600:
             self._launch_in_progress = False
 
         self._check_in_progress = True
         if manual:
-            if self._launch_in_progress:
+            if self._restart_pending:
+                self._set_status("restarting", False)
+            elif self._launch_in_progress:
                 self._set_status("launching", False)
             else:
                 self._set_status("checking", False)
@@ -239,6 +258,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._set_status("online", True)
             self._launch_in_progress = False
             self._restart_pending = False
+            self._restart_started_at = 0.0
             if status_changed:
                 system_info("ComfyUI connection established (watcher)")
             self.client_changed.emit(self._client)
@@ -246,7 +266,8 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             status_changed = self._connected
             self._client = None
             if self._launch_in_progress:
-                self._set_status("launching", False)
+                state = "restarting" if self._restart_pending else "launching"
+                self._set_status(state, False)
                 return
             else:
                 if self._comfy_path:
@@ -555,15 +576,17 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             system_warning(f"Could not prepare ComfyUI launcher script: {exc}")
             return None
 
-    def _launch_comfyui(self) -> None:
+    def _launch_comfyui(self, *, restarting: bool = False) -> None:
         if not self._comfy_path:
             QtWidgets.QMessageBox.warning(self, "Launch ComfyUI", "Please set the ComfyUI launch path first.")
             self._show_settings_popover(auto_focus=True)
+            self._reset_failed_restart_launch(restarting)
             return
 
         path = self._comfy_path
         if not os.path.exists(path):
             QtWidgets.QMessageBox.critical(self, "Launch ComfyUI", f"File not found:\n{path}")
+            self._reset_failed_restart_launch(restarting)
             return
 
         extend_sys_path_with_comfy(path)
@@ -626,8 +649,10 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._launch_in_progress = True
             self._launch_started_at = time.time()
             self._managed_launch = True
-            self._restart_pending = False
-            self._set_status("launching", self._connected)
+            self._restart_pending = restarting
+            self._restart_started_at = time.time() if restarting else 0.0
+            state = "restarting" if restarting else "launching"
+            self._set_status(state, self._connected)
             suffix = " (launcher script fallback)" if used_task_script else ""
             system_debug(
                 f"Launched ComfyUI via Task Scheduler ({task_name}) from {path}: "
@@ -654,6 +679,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                         exc = fallback_exc
             self._managed_process = None
             self._launch_in_progress = False
+            self._reset_failed_restart_launch(restarting)
             QtWidgets.QMessageBox.critical(
                 self,
                 "Launch ComfyUI",
@@ -663,8 +689,16 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         except Exception as exc:  # pragma: no cover - defensive path
             self._managed_process = None
             self._launch_in_progress = False
+            self._reset_failed_restart_launch(restarting)
             QtWidgets.QMessageBox.critical(self, "Launch ComfyUI", f"Failed to launch ComfyUI:\n{exc}")
             system_error(f"Failed to launch ComfyUI from {path}: {exc}")
+
+    def _reset_failed_restart_launch(self, restarting: bool) -> None:
+        if not restarting:
+            return
+        self._restart_pending = False
+        self._restart_started_at = 0.0
+        self._set_status("checking", False)
 
     def _show_launch_context_menu(self, pos: QtCore.QPoint) -> None:
         button = getattr(self, "launch_button", None)
@@ -736,21 +770,28 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return
         if self._managed_process and self._managed_process.poll() is None:
             self._restart_pending = True
+            self._restart_started_at = time.time()
             self._set_status("restarting", False)
             if self._terminate_managed_process():
-                QtCore.QTimer.singleShot(2000, self._launch_comfyui)
+                QtCore.QTimer.singleShot(2000, lambda: self._launch_comfyui(restarting=True))
                 return
             self._restart_pending = False
+            self._restart_started_at = 0.0
             self._set_status("checking", False)
             return
 
         # Externally launched instance: try graceful shutdown over HTTP, then relaunch via configured path.
         self._restart_pending = True
+        self._restart_started_at = time.time()
         self._set_status("restarting", False)
-        if self._send_shutdown_signal():
-            # If the external instance rebooted itself, just poll for connectivity instead of spawning another instance.
+        restart_signal = self._request_restart_signal()
+        if restart_signal == RESTART_SIGNAL_REBOOT:
+            # ComfyUI Manager owns the relaunch. Poll until the listener returns.
             self._set_status("restarting", False)
             QtCore.QTimer.singleShot(3000, lambda: self._check_connection(manual=True))
+        elif restart_signal == RESTART_SIGNAL_SHUTDOWN:
+            # Core shutdown endpoints stop the process but do not relaunch it.
+            QtCore.QTimer.singleShot(2000, lambda: self._launch_comfyui(restarting=True))
         else:
             QtWidgets.QMessageBox.information(
                 self,
@@ -759,21 +800,23 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
                 "Close it manually, then click Restart again.",
             )
             self._restart_pending = False
+            self._restart_started_at = 0.0
             self._set_status("checking", False)
 
     def _send_shutdown_signal(self, *, allow_manager_reboot: bool = True) -> bool:
         return send_shutdown_signal(self._DEFAULT_URL, allow_manager_reboot=allow_manager_reboot)
+
+    def _request_restart_signal(self) -> Optional[str]:
+        return request_restart_signal(self._DEFAULT_URL)
 
     def _force_kill_comfy_processes(self) -> bool:
         comfy_env = resolve_comfy_environment(self._comfy_path)
         comfy_dir = comfy_env.get("comfy_dir") or ""
         base_dir = comfy_env.get("base_dir") or ""
         candidates = {os.path.normpath(p) for p in (comfy_dir, base_dir) if p}
-        port_hint = urlparse(self._DEFAULT_URL).port or 8188
-        name_hints = {"comfyui", "comfy_ui"}
         if not candidates:
-            # Still try to find ComfyUI by name or listening port if paths are unknown.
-            candidates = set()
+            system_warning("Force kill skipped: ComfyUI launch path is not configured.")
+            return False
 
         try:
             import psutil  # type: ignore
@@ -782,41 +825,11 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             return False
 
         killed = False
-        port_pids = set()
-        try:
-            port_pids = {
-                conn.pid
-                for conn in psutil.net_connections(kind="inet")
-                if conn.pid and getattr(conn.laddr, "port", None) == port_hint
-            }
-        except Exception:
-            # AccessDenied is common on Windows without elevation; fall back to per-process scan.
-            port_pids = set()
-
         for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
             try:
-                exe = (proc.info.get("exe") or "").lower()
+                exe = proc.info.get("exe") or ""
                 cmdline_list = proc.info.get("cmdline") or []
-                cmdline = " ".join(cmdline_list).lower()
-                haystack = (exe, cmdline)
-                matches_path = any(
-                    candidate.lower() in text for candidate in candidates for text in haystack
-                )
-                matches_name = any(hint in exe or hint in cmdline for hint in name_hints)
-                matches_port = proc.info.get("pid") in port_pids
-                if not matches_port:
-                    try:
-                        for conn in proc.connections(kind="inet"):
-                            laddr = getattr(conn, "laddr", None)
-                            if laddr and getattr(laddr, "port", None) == port_hint:
-                                matches_port = True
-                                break
-                    except Exception:
-                        # AccessDenied and zombie processes are expected occasionally.
-                        pass
-
-                # Match by install path, default port, or process name to catch external launches.
-                if matches_path or matches_port or matches_name:
+                if process_matches_configured_paths(exe, cmdline_list, candidates):
                     system_debug(
                         f"Force-killing ComfyUI candidate PID {proc.pid} "
                         f"(name={proc.info.get('name')}, exe={proc.info.get('exe')})"

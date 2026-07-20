@@ -15,6 +15,7 @@ from .dialogs import CharonMetadataDialog
 from .custom_widgets import create_tag_badge
 from datetime import datetime, timezone, timedelta
 from ..workflow_local_store import get_validated_workflow_path, load_workflow_state
+from ..workflow_dependencies import load_workflow_dependencies
 
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -354,11 +355,11 @@ class MetadataPanel(QtWidgets.QWidget):
         initial_meta = {
             "workflow_file": self._guess_workflow_file(self.script_folder),
             "description": "",
-            "dependencies": [],
             "tags": [],
             "parameters": [],
         }
         dest_json = os.path.join(self.script_folder, initial_meta["workflow_file"])
+        initial_meta["dependencies"] = load_workflow_dependencies(dest_json)
         dialog = CharonMetadataDialog(initial_meta, workflow_path=dest_json, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             return

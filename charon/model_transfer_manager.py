@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -211,9 +212,11 @@ class ModelTransferManager:
             self._emit(state)
             return
         destination = state.destination
-        temp_path = f"{destination}.tmp"
+        temp_path = f"{destination}.{uuid.uuid4().hex}.tmp"
+        lock_path = f"{destination}.charon.lock"
         try:
             os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
+            self._acquire_destination_lock(destination, lock_path)
             total = os.path.getsize(state.source)
             state.total_bytes = total
             copied = 0
@@ -233,7 +236,7 @@ class ModelTransferManager:
                     state.copied_bytes = copied
                     state.percent = int((copied / total) * 100) if total else 0
                     self._emit(state)
-            os.replace(temp_path, destination)
+            self._publish_temp_file(temp_path, destination)
             state.percent = 100
             state.copied_bytes = total
             state.in_progress = False
@@ -244,17 +247,21 @@ class ModelTransferManager:
             system_warning(f"[Transfer] Copy failed | dest='{destination}' error='{exc}'")
             self._emit(state)
         finally:
-            if os.path.exists(temp_path) and state.error:
+            if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
                 except OSError:
                     pass
+            self._release_destination_lock(lock_path)
 
     def _run_download(self, state: TransferState) -> None:
         destination = state.destination
-        temp_path = f"{destination}.download"
+        temp_path = f"{destination}.{uuid.uuid4().hex}.download"
+        lock_path = f"{destination}.charon.lock"
         try:
-            with urllib.request.urlopen(state.url or "") as response:
+            os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
+            self._acquire_destination_lock(destination, lock_path)
+            with urllib.request.urlopen(state.url or "", timeout=30) as response:
                 total_header = response.getheader("Content-Length")
                 try:
                     total = int(total_header) if total_header else 0
@@ -263,7 +270,6 @@ class ModelTransferManager:
                 state.total_bytes = total
                 copied = 0
                 chunk_size = 4 * 1024 * 1024
-                os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
                 with open(temp_path, "wb") as dest_fp:
                     while True:
                         chunk = response.read(chunk_size)
@@ -279,7 +285,7 @@ class ModelTransferManager:
                         state.copied_bytes = copied
                         state.percent = int((copied / total) * 100) if total else 0
                         self._emit(state)
-            os.replace(temp_path, destination)
+            self._publish_temp_file(temp_path, destination)
             state.percent = 100
             state.copied_bytes = state.total_bytes or state.copied_bytes
             state.in_progress = False
@@ -290,11 +296,37 @@ class ModelTransferManager:
             system_warning(f"[Transfer] Download failed | dest='{destination}' url='{state.url}' error='{exc}'")
             self._emit(state)
         finally:
-            if os.path.exists(temp_path) and state.error:
+            if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
                 except OSError:
                     pass
+            self._release_destination_lock(lock_path)
+
+    def _acquire_destination_lock(self, destination: str, lock_path: str) -> None:
+        if os.path.exists(destination):
+            raise FileExistsError(f"Destination already exists: {destination}")
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(lock_path, flags)
+        except FileExistsError as exc:
+            raise RuntimeError(
+                f"Another workstation is already transferring this model: {destination}"
+            ) from exc
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(f"pid={os.getpid()}\n")
+
+    def _publish_temp_file(self, temp_path: str, destination: str) -> None:
+        if os.path.exists(destination):
+            raise FileExistsError(f"Destination already exists: {destination}")
+        os.replace(temp_path, destination)
+
+    def _release_destination_lock(self, lock_path: str) -> None:
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+        except OSError:
+            pass
 
 
 manager = ModelTransferManager.instance()

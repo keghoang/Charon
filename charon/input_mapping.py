@@ -143,7 +143,8 @@ def _get_cache_path() -> Path:
 def _fetch_object_info_with_cache() -> Optional[Dict[str, Any]]:
     """Try to fetch object info from API, update cache. On failure, read from cache."""
     cache_path = _get_cache_path()
-    client = ComfyUIClient(timeout=2) # Short timeout to avoid freezing if server down
+    client = ComfyUIClient(timeout=2, request_timeout=2, connect_timeout=1)
+    client.transient_retries = 0
     
     # Try live fetch first (non-blocking check ideally, but short timeout helps)
     info = client.get_object_info()

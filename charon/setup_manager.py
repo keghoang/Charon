@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Callable, Dict
 
 from .paths import resolve_comfy_environment, get_charon_temp_dir
+from .path_safety import ensure_path_inside
 from .charon_logger import system_error, system_info, system_debug
 
 # Type definition for progress callback: (progress_percent, status_message) -> None
@@ -35,6 +36,23 @@ class SetupManager:
         
         # Source for Charon (if running from source)
         self.charon_src = Path(__file__).resolve().parents[1] / "custom_nodes" / "comfyUI" / "ComfyUI-Charon"
+
+    def _environment_error(self) -> str:
+        if not self.python_exe or not os.path.isfile(self.python_exe):
+            return "ComfyUI embedded Python environment not found."
+        if not self.comfy_dir or not os.path.isdir(self.comfy_dir):
+            return "ComfyUI directory not found."
+        if not os.path.isfile(os.path.join(self.comfy_dir, "main.py")):
+            return f"ComfyUI main.py not found under: {self.comfy_dir}"
+        return ""
+
+    def _safe_custom_node_destination(self, destination: str) -> str:
+        return ensure_path_inside(
+            destination,
+            self.custom_nodes_dir,
+            label="Custom node destination",
+            allow_equal=False,
+        )
 
     def _log(self, message: str) -> None:
         """Internal logging helper."""
@@ -94,25 +112,33 @@ class SetupManager:
             return False
 
     def _has_folder(self, parent_dir: str, folder_name: str) -> bool:
-        """Checks if a folder exists within parent_dir (case-insensitive check)."""
+        """Check for a usable custom-node package rather than a partial clone folder."""
         if not os.path.exists(parent_dir):
             return False
         try:
             for entry in os.listdir(parent_dir):
                 path = os.path.join(parent_dir, entry)
                 if os.path.isdir(path) and entry.lower() == folder_name.lower():
-                    return True
+                    return os.path.isfile(os.path.join(path, "__init__.py"))
         except OSError:
             pass
         return False
+
+    def _prepare_clone_destination(self, destination: str) -> str:
+        """Remove a contained incomplete clone so an installation retry can proceed."""
+        destination = self._safe_custom_node_destination(destination)
+        if os.path.isdir(destination) and not os.path.isfile(os.path.join(destination, "__init__.py")):
+            shutil.rmtree(destination, ignore_errors=True)
+        return destination
 
     def check_dependencies(self) -> Dict[str, str]:
         """
         Checks the status of all dependencies.
         Returns a dict mapping dependency name to status ('missing', 'found', 'error').
         """
-        if not self.python_exe or not os.path.exists(self.python_exe):
-            return {"python": "missing"}
+        environment_error = self._environment_error()
+        if environment_error:
+            return {"environment": "error"}
 
         statuses = {}
         
@@ -138,6 +164,7 @@ class SetupManager:
     def _download_and_extract_zip(self, repo_url: str, dest_dir: str, branch: str = "main") -> Tuple[bool, str]:
         """Downloads and extracts a zip from GitHub as a fallback for git clone."""
         try:
+            dest_dir = self._safe_custom_node_destination(dest_dir)
             url = f"{repo_url.rstrip('/')}/archive/refs/heads/{branch}.zip"
             download_root = Path(get_charon_temp_dir()) / "downloads"
             ts = int(time.time())
@@ -149,7 +176,7 @@ class SetupManager:
             
             self._log(f"Downloading zip from {url} to {zip_path}")
             
-            with urllib.request.urlopen(url) as resp:
+            with urllib.request.urlopen(url, timeout=60) as resp:
                 zip_path.write_bytes(resp.read())
             
             extract_root.mkdir(parents=True, exist_ok=True)
@@ -205,8 +232,13 @@ class SetupManager:
                 callback(progress, msg)
             self._log(f"[Progress {progress}%] {msg}")
 
-        if not self.python_exe:
-            return False, messages, "ComfyUI Python environment not found."
+        environment_error = self._environment_error()
+        if environment_error:
+            return False, messages, environment_error
+        self.manager_dir = self._safe_custom_node_destination(self.manager_dir)
+        self.kjnodes_dir = self._safe_custom_node_destination(self.kjnodes_dir)
+        self.charon_dir = self._safe_custom_node_destination(self.charon_dir)
+        os.makedirs(self.custom_nodes_dir, exist_ok=True)
 
         update(5, "Checking current status...")
         current_status = self.check_dependencies()
@@ -296,6 +328,7 @@ class SetupManager:
             
             elif cmd == ["__INTERNAL_COPY__"]:
                 try:
+                    self.charon_dir = self._safe_custom_node_destination(self.charon_dir)
                     Path(self.charon_dir).parent.mkdir(parents=True, exist_ok=True)
                     shutil.rmtree(self.charon_dir, ignore_errors=True)
                     shutil.copytree(self.charon_src, self.charon_dir)
@@ -320,7 +353,12 @@ class SetupManager:
             
             else:
                 # Standard subprocess command
+                clone_destination = ""
+                if len(cmd) >= 3 and cmd[1] == "clone":
+                    clone_destination = self._prepare_clone_destination(cmd[-1])
                 ok, err = self._run_command(cmd)
+                if not ok and clone_destination:
+                    shutil.rmtree(clone_destination, ignore_errors=True)
 
             if not ok:
                 update(progress, f"Failed: {label}")

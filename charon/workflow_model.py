@@ -4,6 +4,7 @@ from .utilities import get_software_color_for_metadata
 from .cache_manager import get_cache_manager
 from .charon_logger import system_debug, log_user_action_detail
 from .network_optimizer import get_batch_reader
+from .path_safety import is_path_inside
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -169,9 +170,7 @@ class BookmarkLoader(BaseScriptLoader):
                     # IMPORTANT: Only include bookmarks that are within the current base path
                     if self.base_path:
                         # Normalize both paths for comparison
-                        normalized_script = os.path.normpath(script_path).lower()
-                        normalized_base = os.path.normpath(self.base_path).lower()
-                        if not normalized_script.startswith(normalized_base):
+                        if not is_path_inside(script_path, self.base_path):
                             continue
                     valid_bookmarks.append(script_path)
             

@@ -17,6 +17,8 @@ from ..input_mapping import (
     ExposableAttribute,
 )
 from ..charon_logger import system_debug
+from ..json_io import atomic_write_json
+from ..parameter_cache import parameter_cache_path
 from .custom_widgets import create_tag_badge
 from typing import Dict, Any, List, Optional, Tuple
 import hashlib
@@ -42,12 +44,11 @@ def _cache_key(path: str) -> str:
 
 
 def _cache_directory(path: str) -> str:
-    base_dir = os.path.dirname(os.path.abspath(path))
-    return os.path.join(base_dir, ".charon_cache")
+    return os.path.dirname(parameter_cache_path(path))
 
 
 def _cache_file_path(path: str) -> str:
-    return os.path.join(_cache_directory(path), _CACHE_FILENAME)
+    return parameter_cache_path(path)
 
 
 def _compute_workflow_hash(path: str) -> Optional[str]:
@@ -270,9 +271,16 @@ class _ParameterDiscoveryWorker(QtCore.QObject):
     def __init__(self, workflow_path: Optional[str]) -> None:
         super().__init__()
         self._workflow_path = workflow_path
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
 
     @QtCore.Slot()
     def run(self) -> None:
+        if self._cancelled or QtCore.QThread.currentThread().isInterruptionRequested():
+            self.finished.emit(tuple(), "Parameter discovery cancelled.")
+            return
         if not self._workflow_path:
             self.finished.emit(tuple(), None)
             return
@@ -283,10 +291,18 @@ class _ParameterDiscoveryWorker(QtCore.QObject):
             self.finished.emit(tuple(), str(exc))
             return
 
+        if self._cancelled or QtCore.QThread.currentThread().isInterruptionRequested():
+            self.finished.emit(tuple(), "Parameter discovery cancelled.")
+            return
+
         try:
             candidates = discover_prompt_widget_parameters(workflow_document)
         except Exception as exc:
             self.finished.emit(tuple(), str(exc))
+            return
+
+        if self._cancelled or QtCore.QThread.currentThread().isInterruptionRequested():
+            self.finished.emit(tuple(), "Parameter discovery cancelled.")
             return
 
         self.finished.emit(candidates, None)
@@ -860,13 +876,22 @@ class CharonMetadataDialog(QtWidgets.QDialog):
 
     def _cancel_parameter_discovery(self) -> None:
         thread = self._discovery_thread
+        worker = self._discovery_worker
+        if worker:
+            try:
+                worker.cancel()
+            except Exception:
+                pass
         if thread:
             try:
                 thread.requestInterruption()
             except Exception:
                 pass
             thread.quit()
-        self._clear_discovery_handles()
+            if not thread.isRunning():
+                self._clear_discovery_handles()
+        else:
+            self._clear_discovery_handles()
         self._stop_scan_animation()
 
     def _clear_discovery_handles(self) -> None:
@@ -1155,8 +1180,7 @@ class CharonMetadataDialog(QtWidgets.QDialog):
                 
                 if updated:
                     system_debug(f"Writing workflow to {self._workflow_path}. Keys: {list(workflow.keys())}")
-                    with open(self._workflow_path, 'w', encoding='utf-8') as f:
-                        json.dump(workflow, f, indent=2)
+                    atomic_write_json(self._workflow_path, workflow)
                     
                     if os.path.getsize(self._workflow_path) == 0:
                         system_debug("CRITICAL: Workflow file is empty after write!")

@@ -8,6 +8,7 @@ from ..script_table_model import ScriptTableModel
 from ..folder_table_model import FolderTableModel
 from .button_delegate import ButtonDelegate
 from .custom_delegates import ScriptNameDelegate
+from ..path_safety import is_path_inside
 
 
 class ScriptTableView(QtWidgets.QTableView):
@@ -447,7 +448,7 @@ class ScriptTableView(QtWidgets.QTableView):
 
         repo_root = Path(get_local_repository_root(ensure=False)).resolve()
         target = Path(local_folder).resolve()
-        if repo_root and not str(target).lower().startswith(str(repo_root).lower()):
+        if repo_root and not is_path_inside(str(target), str(repo_root)):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Reset Failed",

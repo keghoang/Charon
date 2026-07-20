@@ -8,6 +8,8 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 DEFAULT_PORT = 8188
@@ -20,8 +22,8 @@ def ensure_playwright_installed() -> None:
     except ImportError:
         pass
 
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
-    subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True, timeout=600)
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True, timeout=600)
 
 
 def _port_open(port: int, timeout: float = 2.0) -> bool:
@@ -30,6 +32,20 @@ def _port_open(port: int, timeout: float = 2.0) -> bool:
             return True
     except OSError:
         return False
+
+
+def _comfy_health_ok(port: int, timeout: float = 3.0) -> bool:
+    url = f"http://127.0.0.1:{port}/system_stats"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and (
+        "system" in payload or "devices" in payload
+    )
 
 
 def _wait_for_port(proc: subprocess.Popen, port: int, timeout: float = 180.0) -> bool:
@@ -150,6 +166,10 @@ def run_inspection_sync(workflow_path: str, comfy_dir: str) -> None:
     ensure_playwright_installed()
     proc: subprocess.Popen | None = None
     reuse_existing = _port_open(DEFAULT_PORT)
+    if reuse_existing and not _comfy_health_ok(DEFAULT_PORT):
+        raise RuntimeError(
+            "Port 8188 is already in use, but it does not look like a ComfyUI server."
+        )
     
     if not reuse_existing:
         proc = start_comfy_server(Path(comfy_dir))

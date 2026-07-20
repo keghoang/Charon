@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from typing import Dict, Optional
 
@@ -13,6 +14,7 @@ from .. import scene_nodes_runtime as runtime
 from .model_upload_dialog import ModelUploadDialog
 from ..comfy_validation import _validate_models
 from ..paths import resolve_comfy_environment, get_default_comfy_launch_path
+from ..path_safety import is_path_inside
 
 
 class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
@@ -697,7 +699,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
                 # If category missing, try to infer from path relative to models root
                 if not category:
                     models_root = issue.data.get("models_root")
-                    if models_root and norm_path.startswith(os.path.normpath(models_root)):
+                    if models_root and is_path_inside(norm_path, os.path.normpath(models_root)):
                         try:
                             rel = os.path.relpath(norm_path, models_root)
                             # e.g. checkpoints/foo.ckpt -> checkpoints
@@ -738,7 +740,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
                 f"Workflow file not found:\n{workflow_path}",
             )
             return
-        os.system(f'explorer /select,"{workflow_path}"')
+        subprocess.Popen(["explorer", f"/select,{workflow_path}"])
 
     def _copy_converted_workflow(self, info: runtime.SceneNodeInfo):
         try:

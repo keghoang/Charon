@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from .workflow_graph import iter_workflow_nodes
+
 
 class NodeLibraryUnavailable(RuntimeError):
     """Raised when the ComfyUI node registry cannot be imported."""
@@ -158,7 +160,7 @@ def collect_workflow_widget_bindings(workflow_document: Dict[str, Any]) -> Tuple
     widget-style inputs in the active ComfyUI environment.
     """
     bindings: List[NodeWidgetBinding] = []
-    for node_id, node_data in _iter_workflow_nodes(workflow_document):
+    for node_id, node_data in iter_workflow_nodes(workflow_document):
         node_bindings = map_node_widgets(node_id, node_data)
         bindings.extend(node_bindings)
     return tuple(bindings)
@@ -209,23 +211,6 @@ def _normalize_widget_spec(
         choices=choices,
         config=config,
     )
-
-
-def _iter_workflow_nodes(document: Dict[str, Any]) -> Iterable[Tuple[str, Dict[str, Any]]]:
-    if not isinstance(document, dict):
-        return
-
-    nodes = document.get("nodes")
-    if isinstance(nodes, list):
-        for node in nodes:
-            if isinstance(node, dict):
-                node_id = node.get("id")
-                yield str(node_id) if node_id is not None else "", node
-        return
-
-    for node_id, node_data in document.items():
-        if isinstance(node_data, dict):
-            yield str(node_id), node_data
 
 
 def _extract_scalar_inputs(node_data: Dict[str, Any]) -> Dict[str, Any]:

@@ -20,6 +20,7 @@ from ..validation_resolver import (
     install_custom_nodes_via_playwright,
     resolve_missing_custom_nodes,
     resolve_missing_models,
+    select_first_model_match,
 )
 from ..workflow_overrides import (
     apply_validation_model_overrides,
@@ -3511,14 +3512,19 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         expected_path: Optional[str] = None
         notified_manual = False
 
-        # 1) Local match (no prompt; pick first)
+        # 1) Local match
         local_matches = find_local_model_matches(reference, models_root)
         system_debug(
             "[Validation] Auto-resolve: local scan complete | "
             f"row={row} matches={len(local_matches) if local_matches else 0}"
         )
-        if local_matches:
-            selected = local_matches[0]
+        selected = select_first_model_match(local_matches)
+        if len(local_matches) > 1:
+            system_debug(
+                "[Validation] Multiple local model matches found; choosing first | "
+                f"row={row} selected='{selected}' matches={local_matches}"
+            )
+        if selected:
             system_debug(
                 "[Validation] Auto-resolve: local selection made | "
                 f"row={row} selected='{selected}'"
@@ -3594,14 +3600,19 @@ class ValidationResolveDialog(QtWidgets.QDialog):
         elif not url_value:
             system_debug("[Validation] Auto-resolve: no URL provided for missing model")
 
-        # 3) Global repo (no prompt; pick first)
+        # 3) Global repo
         shared_matches = find_shared_model_matches(file_name)
         system_debug(
             "[Validation] Auto-resolve: shared repo lookup complete | "
             f"row={row} matches={len(shared_matches) if shared_matches else 0}"
         )
-        if shared_matches and not notified_manual:
-            selected = shared_matches[0]
+        selected = select_first_model_match(shared_matches)
+        if len(shared_matches) > 1 and not notified_manual:
+            system_debug(
+                "[Validation] Multiple Global Repo model matches found; choosing first | "
+                f"row={row} selected='{selected}' matches={shared_matches}"
+            )
+        if selected and not notified_manual:
             system_debug(
                 "[Validation] Auto-resolve: shared repo selection made | "
                 f"row={row} selected='{selected}'"
@@ -3615,7 +3626,13 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 if models_root:
                     expected_path = os.path.join(models_root, file_name)
                 else:
-                    expected_path = os.path.join(os.path.dirname(selected), file_name)
+                    self._notify_manual_download(
+                        file_name,
+                        models_root,
+                        row_info=row_info,
+                        prefix_note="Could not determine a safe local model destination.",
+                    )
+                    return False
                 system_debug(
                     "[Validation] Auto-resolve: fallback expected path | "
                     f"row={row} expected='{expected_path}'"
@@ -3895,6 +3912,7 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
     def attach_connection_widget(self, widget: QtWidgets.QWidget) -> None:
         self._connection_widget = widget
+        self._connection_online = bool(getattr(widget, "_connected", False))
         if hasattr(widget, "connection_status_changed"):
             try:
                 widget.connection_status_changed.connect(self._handle_connection_status_changed)  # type: ignore[attr-defined]
@@ -3908,6 +3926,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
     def _handle_connection_status_changed(self, connected: bool) -> None:
         self._connection_online = bool(connected)
+        if self._connection_online and self._restart_in_progress:
+            self._on_restart_completed()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         if self._auto_resolve_running:
@@ -3930,11 +3950,10 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 btn.setText("Restarting")
             self._start_restart_animation()
         else:
-            was_restarting = self._restart_in_progress
-            self._restart_in_progress = False
-            if was_restarting:
+            if self._connection_online and self._restart_in_progress:
                 self._on_restart_completed()
             elif self._restart_required:
+                self._restart_in_progress = False
                 self._stop_restart_animation()
                 btn = getattr(self, "_restart_button", None)
                 if btn is not None:

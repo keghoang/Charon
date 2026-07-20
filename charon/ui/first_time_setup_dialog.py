@@ -26,6 +26,7 @@ COLORS = {
     "border": "#3f3f46",
     "btn_bg": "#27272a",
 }
+_ACTIVE_DIALOGS: set[object] = set()
 
 STYLESHEET = f"""
     QDialog {{
@@ -189,6 +190,7 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.setup_completed = False
         self.worker_thread: Optional[QtCore.QThread] = None
         self.worker: Optional[FirstTimeSetupWorker] = None
+        self._pending_install_result: Optional[tuple[bool, List[str], str]] = None
         self.comfy_running_preinstall = False
         self.restart_armed = False
         self.restart_ready = False
@@ -379,6 +381,9 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.stack.addWidget(page)
 
     def go_next(self) -> None:
+        if self._installation_running():
+            return
+
         if self.current_step == 1:
             self.current_step = 2
             self.stack.setCurrentIndex(1)
@@ -426,6 +431,9 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
             self.accept()
 
     def _start_installation(self) -> None:
+        if self._installation_running():
+            return
+
         self.install_desc.setText("Starting setup process...")
         self.progress_val = 0
         self.animation_tick = 0
@@ -435,6 +443,7 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.restart_armed = False
         self.restart_ready = False
         self.restart_seen_down = False
+        self._pending_install_result = None
         self._stop_restart_timer()
         self.comfy_running_preinstall = self._is_comfy_running()
 
@@ -487,16 +496,13 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.worker.moveToThread(self.worker_thread)
         self.worker.progress_changed.connect(self._apply_worker_progress)
         self.worker.finished.connect(self._handle_worker_finished)
-        
-        # Safe thread cleanup pattern:
-        # 1. Worker finishes -> Schedules deletion (while thread is still running)
+
+        # Follow Qt's worker-object cleanup pattern. The UI is finalized only
+        # after the thread exits, so the dialog cannot destroy a running thread.
+        self.worker.finished.connect(self.worker_thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
-        # 2. Worker destroyed -> Quits the thread loop
-        self.worker.destroyed.connect(self.worker_thread.quit)
-        # 3. Thread finishes -> Schedules thread deletion
+        self.worker_thread.finished.connect(self._handle_worker_thread_finished)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-        
-        self.worker_thread.finished.connect(lambda: setattr(self, "worker_thread", None))
         self.worker_thread.started.connect(self.worker.run)
         self.worker_thread.start()
 
@@ -520,11 +526,28 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
 
     def _handle_worker_finished(self, success: bool, messages: List[str], error: str) -> None:
         _debug_log(f"[finish-callback] success={success} error={error} messages={messages}")
+        self._pending_install_result = (success, list(messages or []), error or "")
         self.progress_target = 100
         self.progress_val = max(self.progress_val, 98)
         self.pbar.setValue(self.progress_val)
         self.progress_timer.stop()
+
+    def _handle_worker_thread_finished(self) -> None:
+        result = self._pending_install_result
         self.worker = None
+        self.worker_thread = None
+        self._pending_install_result = None
+        if result is None:
+            self.install_desc.setText("Setup stopped before completion.")
+            self.btn_next.setEnabled(True)
+            self.btn_next.setText("Retry")
+            return
+
+        success, messages, error = result
+        self.progress_target = 100
+        self.progress_val = max(self.progress_val, 98)
+        self.pbar.setValue(self.progress_val)
+        self.progress_timer.stop()
         summary = "\n".join(messages) if messages else ""
 
         if not success:
@@ -577,12 +600,22 @@ class FirstTimeSetupDialog(QtWidgets.QDialog):
         self.btn_next.setText("Next")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.requestInterruption()
+        if self._installation_running():
+            event.ignore()
+            return
         if self.progress_timer.isActive():
             self.progress_timer.stop()
         self._stop_restart_timer()
         super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self._installation_running():
+            return
+        super().reject()
+
+    def _installation_running(self) -> bool:
+        thread = self.worker_thread
+        return bool(thread is not None and thread.isRunning())
 
     def _is_comfy_running(self) -> bool:
         try:
@@ -658,4 +691,6 @@ def show_dialog() -> None:
         else None
     )
     dialog = FirstTimeSetupDialog(parent)
+    _ACTIVE_DIALOGS.add(dialog)
+    dialog.finished.connect(lambda _result, current=dialog: _ACTIVE_DIALOGS.discard(current))
     dialog.show()

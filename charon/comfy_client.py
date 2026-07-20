@@ -74,7 +74,12 @@ class ComfyUIClient:
         try:
             request = urllib.request.Request(f"{self.base_url}/system_stats")
             with self._urlopen_with_retry(request, timeout=self.connect_timeout, retries=2) as response:
-                return response.getcode() == 200
+                if response.getcode() != 200:
+                    return False
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                return isinstance(payload, dict) and (
+                    "system" in payload or "devices" in payload
+                )
         except Exception as exc:
             logger.error("Connection test failed: %s", exc)
             return False

@@ -6,11 +6,12 @@
   - `main.py`, `__init__.py` - launch helpers for embedding or standalone use.
   - `workflow_runtime.py`, `workflow_pipeline.py`, `workflow_analysis.py`, `workflow_browser_exporter.py` - discovery, conversion, prompt analysis, and the browser-based converter harness.
   - `processor.py`, `node_factory.py`, `scene_nodes_runtime.py` - CharonOp creation plus ComfyUI processing.
+  - `processor_context.py`, `processor_conversion.py`, `processor_output.py`, `processor_status.py`, `processor_submission.py` - testable processor helpers kept free of Nuke UI mutations.
   - `paths.py`, `preferences.py`, `config.py` - filesystem and configuration single sources of truth.
   - `ui/` - PySide6 widgets for the production panel.
   - `execution/`, `settings/` - script engine helpers and persisted preferences.
 - Documentation lives under `docs/charon_panel_docs/`; runtime assets are in `charon/resources/`.
-- Runtime artifacts continue to land in `D:\Nuke\charon\{temp,exports,results,status,debug}`. Only check in debug dumps when they document regressions.
+- Runtime artifacts default to `D:\Nuke\charon\{temp,exports,results,debug}`. Set `CHARON_RUNTIME_ROOT` to override this; inaccessible defaults fall back to `%LOCALAPPDATA%\Charon\runtime`.
 
 ## Build, Test, and Development Commands
 - Launch the production panel from Nuke's Script Editor:
@@ -44,12 +45,12 @@
 - Module constants stay UPPER_SNAKE_CASE; PySide classes use PascalCase.
 - Use explicit relative imports inside `charon/` and route user-visible strings through `charon.charon_logger`.
 - Workflow-facing copy must use "workflow" (no residual "script" wording).
-- `.charon.json` stores only `workflow_file`, `description`, `dependencies`, `last_changed`, `tags`, and `cm-cli` now populates `dependencies` from workflow metadata (don't hand-enter Git URLs).
+- `.charon.json` stores `workflow_file`, `description`, `dependencies`, `last_changed`, `tags`, `parameters`, `min_vram_gb`, and `is_3d_texturing`; `cm-cli` now populates `dependencies` from workflow metadata (don't hand-enter Git URLs).
 - `.gitignore` must exclude `__pycache__/` and `*.pyc`.
 
 ## Testing Guidelines
-- No automated suite exists yet; rely on manual verification:
-  - Panel flow: load a preset under `workflows/`, spawn a CharonOp, press **Execute**, confirm conversion, submission, status transitions (`Ready -> Processing -> Completed`), and asset ingestion. Inspect `D:\Nuke\charon\debug` and `...\results` as needed.
+- Run `python -m unittest discover -s tests` and `python -m compileall -q charon custom_nodes packaging main.py`, then perform manual verification:
+  - Panel flow: load a preset under `workflows/`, spawn a CharonOp, press **Execute**, confirm conversion, submission, status transitions (`Ready -> Processing -> Completed`), and asset ingestion. Inspect the configured runtime root's `debug` and `results` folders as needed.
   - Conversion path: after touching `workflow_pipeline.py` or `workflow_analysis.py`, rerun the smoke test with Set/Get heavy presets and capture stdout/stderr.
   - Sample data: no longer includes a seeding script; pull sample workflows from version control if you need a clean slate.
 
@@ -67,7 +68,7 @@
 - `paths.py` governs filesystem locations - extend it rather than hard-coding paths. Ensure the ComfyUI knob points to the portable install so `resolve_comfy_environment` finds `python_embeded`.
 - Dependencies must be installed into the ComfyUI bundle; `nodes.init_extra_nodes(init_custom_nodes=True)` expects a complete environment.
 - Preferences and caches persist under `%LOCALAPPDATA%\Charon\plugins\charon\`.
-- Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it reuses an existing ComfyUI on port 8188 when running and only launches a headless instance if the port is free.
+- Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it uses ComfyUI's standard `127.0.0.1:8188` endpoint, verifies the listener through `/system_stats`, and launches a headless instance only when the port is free.
 - Workflows that emit 3D outputs (e.g., `.glb`) are stored under the `_CHARON/3D` tree; `.glb` assets are auto-converted to `.obj` via `trimesh` using the ComfyUI embedded Python. On launch, Charon checks the ComfyUI env for `trimesh` and Playwright and prompts to install if missing. CharonRead nodes will use ReadGeo for these assets.
 
 ## Consolidation Status (2025-10-24)

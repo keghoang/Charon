@@ -5,6 +5,7 @@ import uuid
 from typing import Any, Dict, List, Tuple
 
 from . import config
+from .path_safety import is_path_inside, relative_path_from_root
 from .paths import get_nuke_script_hash
 from .workflow_local_store import get_local_workflow_root
 from .utilities import status_to_gl_color, status_to_tile_color
@@ -32,12 +33,10 @@ def _infer_source_folder_from_local_path(path_value: str) -> str:
     if not candidate_folder:
         return ""
 
-    normalized_local = os.path.normcase(local_root)
-    normalized_candidate = os.path.normcase(candidate_folder)
-    if not normalized_candidate.startswith(normalized_local):
+    if not is_path_inside(candidate_folder, local_root):
         return ""
 
-    rel_folder = os.path.relpath(candidate_folder, local_root)
+    rel_folder = relative_path_from_root(candidate_folder, local_root, label="Local workflow folder")
     remote_root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
     return os.path.normpath(os.path.join(remote_root, rel_folder))
 

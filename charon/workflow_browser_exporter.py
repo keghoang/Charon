@@ -8,6 +8,8 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -22,8 +24,8 @@ def ensure_playwright_installed() -> None:
     except ImportError:
         pass
 
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
-    subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True, timeout=600)
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True, timeout=600)
 
 
 def _port_open(port: int, timeout: float = 2.0) -> bool:
@@ -32,6 +34,20 @@ def _port_open(port: int, timeout: float = 2.0) -> bool:
             return True
     except OSError:
         return False
+
+
+def _comfy_health_ok(port: int, timeout: float = 3.0) -> bool:
+    url = f"http://127.0.0.1:{port}/system_stats"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and (
+        "system" in payload or "devices" in payload
+    )
 
 
 def _wait_for_port(proc: subprocess.Popen, port: int, timeout: float = 180.0) -> bool:
@@ -79,37 +95,38 @@ def start_comfy_server(comfy_dir: Path, python_exe: str | None = None) -> subpro
 async def export_workflow(playwright, workflow_path: Path, output_path: Path) -> None:
     """Drive the real ComfyUI frontend and export the workflow via graphToPrompt."""
     browser = await playwright.chromium.launch(headless=True)
-    page = await browser.new_page()
+    try:
+        page = await browser.new_page()
 
-    await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
-    await page.wait_for_function(
-        "window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app && "
-        "window.comfyAPI.app.app.graph",
-        timeout=120000,
-    )
-    await page.wait_for_function(
-        "window.LiteGraph && window.LiteGraph.registered_node_types && "
-        "Object.keys(window.LiteGraph.registered_node_types).length > 0",
-        timeout=240000,
-    )
+        await page.goto("http://127.0.0.1:8188", wait_until="load", timeout=120000)
+        await page.wait_for_function(
+            "window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app && "
+            "window.comfyAPI.app.app.graph",
+            timeout=120000,
+        )
+        await page.wait_for_function(
+            "window.LiteGraph && window.LiteGraph.registered_node_types && "
+            "Object.keys(window.LiteGraph.registered_node_types).length > 0",
+            timeout=240000,
+        )
 
-    with open(workflow_path, "r", encoding="utf-8") as handle:
-        workflow_json = json.load(handle)
+        with open(workflow_path, "r", encoding="utf-8") as handle:
+            workflow_json = json.load(handle)
 
-    prompt = await page.evaluate(
-        """async ({ workflow }) => {
-          const app = window.comfyAPI.app.app;
-          await app.loadGraphData(workflow, true);
-          const res = await app.graphToPrompt(app.graph);
-          return res.output;
-        }""",
-        {"workflow": workflow_json},
-    )
+        prompt = await page.evaluate(
+            """async ({ workflow }) => {
+              const app = window.comfyAPI.app.app;
+              await app.loadGraphData(workflow, true);
+              const res = await app.graphToPrompt(app.graph);
+              return res.output;
+            }""",
+            {"workflow": workflow_json},
+        )
 
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump(prompt, handle, indent=2)
-
-    await browser.close()
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(prompt, handle, indent=2)
+    finally:
+        await browser.close()
 
 
 def run_export_sync(workflow_path: str, output_path: str, comfy_dir: str) -> None:
@@ -117,6 +134,10 @@ def run_export_sync(workflow_path: str, output_path: str, comfy_dir: str) -> Non
     ensure_playwright_installed()
     proc: subprocess.Popen | None = None
     reuse_existing = _port_open(DEFAULT_PORT)
+    if reuse_existing and not _comfy_health_ok(DEFAULT_PORT):
+        raise RuntimeError(
+            "Port 8188 is already in use, but it does not look like a ComfyUI server."
+        )
     if not reuse_existing:
         proc = start_comfy_server(Path(comfy_dir))
     try:

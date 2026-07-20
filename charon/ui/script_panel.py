@@ -7,6 +7,12 @@ from ..settings import user_settings_db
 from .custom_table_widgets import ScriptTableView
 from ..charon_metadata import write_charon_metadata
 from ..workflow_runtime import load_workflow_bundle, spawn_charon_node
+from ..workflow_dependencies import load_workflow_dependencies
+from ..workflow_publication import (
+    create_staging_directory,
+    discard_staging_directory,
+    publish_staged_directory,
+)
 from ..utilities import get_current_user_slug
 from ..charon_logger import system_debug
 from ..cache_manager import get_cache_manager
@@ -14,11 +20,13 @@ from ..metadata_manager import invalidate_metadata_path
 from .. import config, preferences
 from ..comfy_validation import validate_comfy_environment, _validate_models
 from ..paths import get_default_comfy_launch_path, resolve_comfy_environment
+from ..path_safety import is_path_inside
 from .validation_dialog import ValidationResolveDialog
 from ..dependency_check import ensure_manager_security_level
 from .model_upload_dialog import ModelUploadDialog
 from ..workflow_local_store import (
     clear_validation_artifacts,
+    compute_validation_signature,
     write_validation_raw,
     write_validation_resolve_status,
     load_validation_resolve_status,
@@ -27,6 +35,7 @@ import os
 import shutil
 import re
 import json
+import subprocess
 from pathlib import Path
 from datetime import datetime
 import time
@@ -377,23 +386,32 @@ class ScriptPanel(QtWidgets.QWidget):
 
     def _read_validation_cache(self, script_path: str):
         normalized = self._normalize_script_path(script_path)
+        signature = compute_validation_signature(script_path)
         if normalized in self._validation_cache:
-            return self._validation_cache[normalized]
+            entry = self._validation_cache[normalized]
+            if isinstance(entry, dict) and entry.get("validation_signature") == signature:
+                return entry
+            self._validation_cache.pop(normalized, None)
 
         resolved_payload = load_validation_resolve_status(script_path or "")
         if isinstance(resolved_payload, dict):
             state = self._derive_state_from_payload(resolved_payload, fallback="needs_resolve")
-            entry = {"state": state, "payload": resolved_payload}
+            entry = {
+                "state": state,
+                "payload": resolved_payload,
+                "validation_signature": signature,
+            }
             self._validation_cache[normalized] = entry
             return entry
-        
-        # Cache the miss to avoid repeated lookups
-        self._validation_cache[normalized] = None
         return None
 
     def _write_validation_cache(self, script_path: str, state: str, payload) -> None:
         normalized = self._normalize_script_path(script_path)
-        self._validation_cache[normalized] = {"state": state, "payload": payload}
+        self._validation_cache[normalized] = {
+            "state": state,
+            "payload": payload,
+            "validation_signature": compute_validation_signature(script_path),
+        }
 
     def _clear_validation_cache(self, script_path: str) -> None:
         normalized = self._normalize_script_path(script_path)
@@ -478,7 +496,7 @@ class ScriptPanel(QtWidgets.QWidget):
             try:
                 root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
                 target = os.path.abspath(folder_path)
-                if not target.lower().startswith(root.lower()):
+                if not is_path_inside(target, root):
                     QtWidgets.QMessageBox.warning(
                         self,
                         "Unsupported Location",
@@ -866,7 +884,7 @@ class ScriptPanel(QtWidgets.QWidget):
                 # If category missing, try to infer from path relative to models root
                 if not category:
                     models_root = issue.data.get("models_root")
-                    if models_root and norm_path.startswith(os.path.normpath(models_root)):
+                    if models_root and is_path_inside(norm_path, os.path.normpath(models_root)):
                         try:
                             rel = os.path.relpath(norm_path, models_root)
                             dirname = os.path.dirname(rel)
@@ -1479,20 +1497,20 @@ class ScriptPanel(QtWidgets.QWidget):
             return False
 
         try:
-            os.makedirs(target_folder)
+            staging_folder = create_staging_directory(target_folder)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
                 self,
                 "Error",
-                f"Failed to create workflow folder: {exc}"
+                f"Failed to prepare workflow folder: {exc}"
             )
             return False
 
-        dest_json = os.path.join(target_folder, "workflow.json")
+        dest_json = os.path.join(staging_folder, "workflow.json")
         try:
             shutil.copyfile(workflow_path, dest_json)
         except Exception as exc:
-            shutil.rmtree(target_folder, ignore_errors=True)
+            discard_staging_directory(staging_folder)
             QtWidgets.QMessageBox.critical(
                 self,
                 "Error",
@@ -1504,7 +1522,7 @@ class ScriptPanel(QtWidgets.QWidget):
             "workflow_file": "workflow.json",
             "description": "",
             "min_vram_gb": None,
-            "dependencies": [],
+            "dependencies": load_workflow_dependencies(dest_json),
             "last_changed": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "tags": [],
             "parameters": [],
@@ -1512,7 +1530,7 @@ class ScriptPanel(QtWidgets.QWidget):
 
         dialog = CharonMetadataDialog(default_meta, workflow_path=dest_json, parent=self)
         if exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
-            shutil.rmtree(target_folder, ignore_errors=True)
+            discard_staging_directory(staging_folder)
             return None
 
         updated_meta = default_meta.copy()
@@ -1520,10 +1538,11 @@ class ScriptPanel(QtWidgets.QWidget):
         updated_meta["last_changed"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
         try:
-            if write_charon_metadata(target_folder, updated_meta) is None:
+            if write_charon_metadata(staging_folder, updated_meta) is None:
                 raise RuntimeError("Metadata writer returned False")
+            publish_staged_directory(staging_folder, target_folder)
         except Exception as exc:
-            shutil.rmtree(target_folder, ignore_errors=True)
+            discard_staging_directory(staging_folder)
             QtWidgets.QMessageBox.critical(
                 self,
                 "Error",
@@ -1607,7 +1626,7 @@ class ScriptPanel(QtWidgets.QWidget):
             
             system = platform.system()
             if system == "Windows":
-                subprocess.Popen(f'explorer "{self.parent_folder}"')
+                subprocess.Popen(["explorer", self.parent_folder])
             elif system == "Darwin":  # macOS
                 subprocess.Popen(["open", self.parent_folder])
             elif system == "Linux":

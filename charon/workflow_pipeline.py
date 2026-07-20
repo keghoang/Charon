@@ -4,11 +4,12 @@ import copy
 import json
 import logging
 import os
-import subprocess
 import uuid
 from pathlib import Path
 
+from . import config
 from .paths import get_charon_temp_dir, resolve_comfy_environment
+from .process_runner import ProcessExecutionError, run_subprocess
 
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,12 @@ module.run_export_sync(workflow_path, output_path, comfy_dir=comfy_dir)
             str(comfy_dir),
         ]
         logger.info("Launching browser export conversion: %s", command)
-        subprocess.check_call(command, cwd=str(SCRIPT_DIR))
+        run_subprocess(
+            command,
+            cwd=str(SCRIPT_DIR),
+            timeout=getattr(config, "WORKFLOW_CONVERSION_TIMEOUT_SEC", 600),
+            check=True,
+        )
 
         if not output_path.exists():
             raise RuntimeError("Browser export did not produce an output file.")
@@ -90,8 +96,10 @@ module.run_export_sync(workflow_path, output_path, comfy_dir=comfy_dir)
         if not isinstance(converted, dict):
             raise RuntimeError("Browser export returned an unexpected payload.")
         return converted
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Browser conversion failed: {exc}") from exc
+    except ProcessExecutionError as exc:
+        detail = exc.result.tail()
+        suffix = f"\n\nLast subprocess output:\n{detail}" if detail else ""
+        raise RuntimeError(f"Browser conversion failed: {exc}{suffix}") from exc
     finally:
         for path in (input_path, output_path, runner_path):
             try:

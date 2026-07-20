@@ -38,6 +38,7 @@ except ImportError:
         UI_NAVIGATION_DELAY_MS = 50
     config = FallbackConfig()
 from ..metadata_manager import clear_metadata_cache, get_charon_config, get_folder_tags
+from ..path_safety import is_path_inside
 from ..workflow_model import GlobalIndexLoader
 from ..settings import user_settings_db
 from ..utilities import get_current_user_slug
@@ -222,6 +223,7 @@ class CharonWindow(QtWidgets.QWidget):
         self._pending_folder_selection: Optional[str] = None
 
         resolved_global_path = global_path or config.WORKFLOW_REPOSITORY_ROOT
+        config.set_workflow_repository_root(resolved_global_path)
         self.global_path = resolved_global_path
         if not os.path.isdir(self.global_path):
             system_warning(f"Workflow repository is not accessible: {self.global_path}")
@@ -4675,7 +4677,7 @@ QPushButton#NewWorkflowButton:pressed {{
     def _get_actual_script_path(self, script_path):
         """Get the actual script path based on current base, handling path mismatches."""
         # If the script path already starts with current base, return it as-is
-        if self.current_base and script_path.startswith(self.current_base):
+        if self.current_base and is_path_inside(script_path, self.current_base):
             return script_path
             
         # Always reconstruct the path based on current base to avoid cached paths
@@ -4692,7 +4694,7 @@ QPushButton#NewWorkflowButton:pressed {{
         
         relative_path = None
         for base in possible_bases:
-            if base and script_path.startswith(base):
+            if base and is_path_inside(script_path, base):
                 # Extract the relative path after the base
                 relative_path = os.path.relpath(script_path, base)
                 break

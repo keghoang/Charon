@@ -6,6 +6,7 @@ import os
 
 COMFY_URL_BASE = "http://127.0.0.1:8188"
 COMFY_BATCH_TIMEOUT_SEC = 300
+WORKFLOW_CONVERSION_TIMEOUT_SEC = 600
 COMFY_QUEUE_GRACE_SEC = 15
 COMFY_RESULT_WATCH_TIMEOUT_SEC = 300
 COMFY_RESULT_WATCH_GRACE_SEC = 60
@@ -25,7 +26,7 @@ AUTO_IMPORT_ATTACH_IVT = True
 CONTACT_SHEET_MAX_IMAGES = 48
 CONTACT_SHEET_SCAN_OUTPUT_DIR = False
 CONTACT_SHEET_MAX_SCAN_FILES = 400
-DEBUG_STEP_TRACE = True
+DEBUG_STEP_TRACE = False
 CHARON_NODE_ID_LENGTH = 12
 CHARON_NODE_ID_SCRIPT_HASH_PREFIX = 5
 
@@ -78,8 +79,11 @@ else:  # Linux
 
 # Repository search paths - used when no repository is specified at runtime
 # First existing path will be used
-# Priority order: Runtime argument → CHARON_REPO env var → These paths
-WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\workflows"
+# Priority order: runtime argument -> CHARON_REPO environment variable -> default path
+DEFAULT_WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\workflows"
+WORKFLOW_REPOSITORY_ROOT = os.path.abspath(
+    os.environ.get("CHARON_REPO") or DEFAULT_WORKFLOW_REPOSITORY_ROOT
+)
 REPOSITORY_SEARCH_PATHS = [
     WORKFLOW_REPOSITORY_ROOT,
 ]
@@ -87,6 +91,24 @@ REPOSITORY_SEARCH_PATHS = [
 # Legacy fallback - kept for backward compatibility
 # Deprecated: Use REPOSITORY_SEARCH_PATHS instead
 GLOBAL_REPO_PATH = WORKFLOW_REPOSITORY_ROOT
+
+
+def set_workflow_repository_root(path):
+    """Update the active workflow root for helpers that do not receive an explicit path."""
+    global WORKFLOW_REPOSITORY_ROOT, REPOSITORY_SEARCH_PATHS, GLOBAL_REPO_PATH
+    root = os.path.abspath(path or DEFAULT_WORKFLOW_REPOSITORY_ROOT)
+    WORKFLOW_REPOSITORY_ROOT = root
+    REPOSITORY_SEARCH_PATHS = [root]
+    GLOBAL_REPO_PATH = root
+    return root
+
+
+def get_shared_models_root():
+    """Return the shared-model folder adjacent to the active workflows root."""
+    root = os.path.abspath(WORKFLOW_REPOSITORY_ROOT)
+    if os.path.basename(root).lower() == "workflows":
+        return os.path.join(os.path.dirname(root), "shared_models")
+    return os.path.join(root, "shared_models")
 
 
 # =============================================================================

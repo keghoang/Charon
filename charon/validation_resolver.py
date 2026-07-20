@@ -9,11 +9,19 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+from . import config
 from .charon_logger import system_debug, system_error, system_info, system_warning
+from .comfy_client import ComfyUIClient
+from .path_safety import ensure_path_inside
 from .paths import resolve_comfy_environment
 
 
-SHARED_MODELS_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\shared_models"
+SHARED_MODELS_ROOT: Optional[str] = None
+
+
+def get_shared_models_root() -> str:
+    """Return the active shared-model root, allowing tests to override it."""
+    return SHARED_MODELS_ROOT or config.get_shared_models_root()
 
 
 @dataclass
@@ -94,20 +102,26 @@ def find_local_model_matches(
 def find_shared_model_matches(file_name: str) -> List[str]:
     """Search the global shared models repository for matching files."""
     file_name = os.path.basename(_safe_str(file_name))
-    if not file_name or not os.path.isdir(SHARED_MODELS_ROOT):
+    shared_models_root = get_shared_models_root()
+    if not file_name or not os.path.isdir(shared_models_root):
         system_debug(
             "[Validation] Shared repo scan skipped | "
-            f"name='{file_name}' root_exists={os.path.isdir(SHARED_MODELS_ROOT)}"
+            f"name='{file_name}' root_exists={os.path.isdir(shared_models_root)}"
         )
         return []
     matches: List[str] = []
-    for candidate in _iter_matching_files(SHARED_MODELS_ROOT, file_name):
+    for candidate in _iter_matching_files(shared_models_root, file_name):
         matches.append(candidate)
     system_debug(
         "[Validation] Shared repo scan finished | "
         f"name='{file_name}' matches={matches}"
     )
     return matches
+
+
+def select_first_model_match(matches: Sequence[str]) -> Optional[str]:
+    """Return the first discovered model match according to resolver search priority."""
+    return matches[0] if matches else None
 
 
 def format_model_reference_for_workflow(
@@ -364,6 +378,12 @@ def install_custom_nodes_via_playwright(
     if not comfy_dir or not os.path.isdir(comfy_dir):
         result.failed.append("ComfyUI directory missing; cannot run Playwright install.")
         return result
+    if not ComfyUIClient(connect_timeout=3).test_connection():
+        result.failed.append(
+            "No valid ComfyUI server is responding on 127.0.0.1:8188. "
+            "Start ComfyUI and wait for it to finish loading before installing custom nodes."
+        )
+        return result
 
     unique_repos: List[str] = []
     seen: set[str] = set()
@@ -515,18 +535,25 @@ def _expected_model_path(
     attempted_directories: Optional[List[str]] = None,
 ) -> Optional[str]:
     raw_name = _safe_str(reference.get("name"))
-    if not raw_name:
+    if not raw_name or not models_root:
         return None
 
+    models_root = os.path.abspath(models_root)
     normalized = raw_name.replace("/", os.sep).replace("\\", os.sep)
     if os.path.isabs(normalized):
-        return normalized
+        try:
+            return ensure_path_inside(normalized, models_root, label="Model destination")
+        except ValueError:
+            normalized = os.path.basename(normalized)
 
     candidate = None
     if comfy_dir:
         candidate = os.path.join(comfy_dir, normalized)
         if os.path.exists(candidate):
-            return os.path.abspath(candidate)
+            try:
+                return ensure_path_inside(candidate, models_root, label="Model destination")
+            except ValueError:
+                pass
 
     base_name = os.path.basename(normalized)
     categories_to_consider: List[str] = []
@@ -544,18 +571,20 @@ def _expected_model_path(
     categories_to_consider.append("")
 
     candidate_dirs: List[str] = []
-    for directory in attempted_directories or reference.get("attempted_directories") or []:
-        if not isinstance(directory, str):
-            continue
-        normalized_dir = os.path.abspath(directory)
-        if os.path.isdir(normalized_dir) and normalized_dir not in candidate_dirs:
-            candidate_dirs.append(normalized_dir)
     for category in categories_to_consider:
         normalized_category = _safe_str(category)
         if not normalized_category:
             continue
         candidate_dir = os.path.join(models_root, normalized_category)
-        if os.path.isdir(candidate_dir):
+        try:
+            candidate_dir = ensure_path_inside(
+                candidate_dir,
+                models_root,
+                label="Model category",
+            )
+        except ValueError:
+            continue
+        if os.path.isdir(candidate_dir) and candidate_dir not in candidate_dirs:
             candidate_dirs.append(candidate_dir)
 
     if models_root not in candidate_dirs and os.path.isdir(models_root):
@@ -564,8 +593,12 @@ def _expected_model_path(
     for directory in candidate_dirs:
         target = os.path.join(directory, base_name)
         if target:
-            return os.path.abspath(target)
-    return os.path.abspath(os.path.join(models_root, base_name))
+            return ensure_path_inside(target, models_root, label="Model destination")
+    return ensure_path_inside(
+        os.path.join(models_root, base_name),
+        models_root,
+        label="Model destination",
+    )
 
 
 def _find_matching_file(root: str, file_name: str) -> Optional[str]:
@@ -587,14 +620,22 @@ def _iter_matching_files(root: str, file_name: str) -> Iterator[str]:
     normalized_root = os.path.abspath(root)
     if not os.path.isdir(normalized_root):
         return
+    seen: set[str] = set()
     direct_candidate = os.path.join(normalized_root, file_name)
     if os.path.isfile(direct_candidate):
-        yield os.path.abspath(direct_candidate)
+        direct_candidate = os.path.abspath(direct_candidate)
+        seen.add(os.path.normcase(direct_candidate))
+        yield direct_candidate
     lowered = file_name.lower()
     for candidate_root, _dirs, files in os.walk(normalized_root):
         for entry in files:
             if entry.lower() == lowered:
-                yield os.path.abspath(os.path.join(candidate_root, entry))
+                candidate = os.path.abspath(os.path.join(candidate_root, entry))
+                normalized = os.path.normcase(candidate)
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                yield candidate
 
 
 def _normalize_repo_url(value: str) -> str:

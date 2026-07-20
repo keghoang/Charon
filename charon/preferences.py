@@ -1,6 +1,7 @@
 import json
-import json
 import os
+import threading
+import uuid
 from typing import Any, Dict, Optional, Tuple
 
 from .charon_logger import system_warning
@@ -13,6 +14,7 @@ except Exception:  # pragma: no cover - defensive import
 
 _DEFAULT_FILENAME = "preferences.json"
 _WARNING_SHOWN = False
+_PREFERENCES_LOCK = threading.RLock()
 
 
 def _default_plugin_dir() -> str:
@@ -66,16 +68,17 @@ def load_preferences(
     filename: str = _DEFAULT_FILENAME,
     parent: Optional[object] = None,
 ) -> Dict[str, Any]:
-    path = preferences_path(filename, parent=parent, ensure_dir=False)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict):
-            return data
-    except Exception as exc:  # pragma: no cover - defensive path
-        system_warning(f"Could not load preferences from {path}: {exc}")
+    with _PREFERENCES_LOCK:
+        path = preferences_path(filename, parent=parent, ensure_dir=False)
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:  # pragma: no cover - defensive path
+            system_warning(f"Could not load preferences from {path}: {exc}")
     return {}
 
 
@@ -85,9 +88,21 @@ def save_preferences(
     filename: str = _DEFAULT_FILENAME,
     parent: Optional[object] = None,
 ) -> None:
-    path = preferences_path(filename, parent=parent, ensure_dir=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
+    with _PREFERENCES_LOCK:
+        path = preferences_path(filename, parent=parent, ensure_dir=True)
+        temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
 
 
 def get_preference(
@@ -108,9 +123,10 @@ def set_preference(
     filename: str = _DEFAULT_FILENAME,
     parent: Optional[object] = None,
 ) -> None:
-    prefs = load_preferences(filename=filename, parent=parent)
-    prefs[key] = value
-    save_preferences(prefs, filename=filename, parent=parent)
+    with _PREFERENCES_LOCK:
+        prefs = load_preferences(filename=filename, parent=parent)
+        prefs[key] = value
+        save_preferences(prefs, filename=filename, parent=parent)
 
 
 def get_preferences_root(

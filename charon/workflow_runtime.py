@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import config
 from .charon_logger import system_debug, system_warning, system_error
 from .metadata_manager import load_workflow_data, get_charon_config
+from .path_safety import ensure_path_inside
 from .utilities import get_current_user_slug
 from .workflow_analysis import analyze_ui_workflow_inputs, analyze_workflow_inputs
 from .node_factory import create_charon_group_node
@@ -93,9 +94,11 @@ def load_workflow_bundle(folder_path: str) -> Dict[str, Any]:
         raise ValueError("Workflow folder path is required.")
 
     root = _resolve_root()
-    folder_abs = os.path.abspath(folder_path)
-    if not folder_abs.lower().startswith(os.path.abspath(root).lower()):
-        raise ValueError(f"Workflow path {folder_abs} is outside the Charon repository.")
+    folder_abs = ensure_path_inside(
+        folder_path,
+        root,
+        label="Workflow path",
+    )
 
     bundle = load_workflow_data(folder_abs)
     system_debug(f"Loaded workflow bundle: {bundle.get('workflow_file')} from {folder_abs}")

@@ -9,7 +9,6 @@ from . import preferences
 from .charon_logger import system_error, system_info
 from .dependency_check import PREF_DEPENDENCIES_VERIFIED, ensure_manager_security_level
 from .paths import resolve_comfy_environment, get_default_comfy_launch_path
-from .qt_compat import QtWidgets
 from .setup_manager import SetupManager
 
 FIRST_TIME_SETUP_KEY = "first_time_setup_complete"
@@ -50,6 +49,7 @@ def run_first_time_setup_if_needed(parent=None, force: bool = False) -> bool:
 
     try:
         from .ui.first_time_setup_dialog import FirstTimeSetupDialog
+        from .qt_compat import QtWidgets
     except Exception as exc:
         system_error(f"Could not load first-time setup dialog: {exc}")
         return False

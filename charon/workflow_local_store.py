@@ -12,6 +12,9 @@ from typing import Any, Dict, Optional, Tuple
 from . import config, preferences
 from .charon_logger import system_debug, system_warning
 from .conversion_cache import clear_conversion_cache, compute_workflow_hash
+from .json_io import atomic_write_json
+from .path_safety import is_path_inside, relative_path_from_root
+from .paths import resolve_comfy_environment
 
 LOCAL_REPO_DIR = "Charon_repo_local"
 LOCAL_WORKFLOW_DIR = "workflow"
@@ -27,6 +30,7 @@ LEGACY_CACHE_SUBDIR = ".charon_cache"
 
 VALIDATION_LOG_FILENAME = "validation_log.json"
 RESOLVE_STATUS_FILENAME = "validation_resolve_status.json"
+CHARON_METADATA_FILENAME = ".charon.json"
 
 
 class WorkflowState(Dict[str, Any]):
@@ -131,19 +135,18 @@ def _relative_workflow_path(remote_folder: str) -> str:
         raise ValueError("Remote workflow folder is required.")
 
     source_root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
-    folder_path = os.path.abspath(remote_folder)
-    if not folder_path.lower().startswith(source_root.lower()):
-        raise ValueError(
-            f"Workflow folder '{remote_folder}' is outside the configured repository root."
-        )
-    rel_path = os.path.relpath(folder_path, source_root)
+    rel_path = relative_path_from_root(
+        remote_folder,
+        source_root,
+        label="Workflow folder",
+    )
     return rel_path.strip(".\\/")
 
 
 def get_local_workflow_folder(remote_folder: str, *, ensure: bool = True) -> str:
     folder_path = os.path.abspath(remote_folder)
     local_root = os.path.abspath(get_local_workflow_root(ensure=ensure))
-    if folder_path.lower().startswith(local_root.lower()):
+    if is_path_inside(folder_path, local_root):
         # Already points into the local mirror; just ensure it exists and return.
         if ensure:
             os.makedirs(folder_path, exist_ok=True)
@@ -197,8 +200,7 @@ def load_workflow_state(remote_folder: str) -> WorkflowState:
 def _write_workflow_state(remote_folder: str, state: WorkflowState) -> WorkflowState:
     path = _state_path(remote_folder, ensure=True)
     try:
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2)
+        atomic_write_json(str(path), state)
     except Exception as exc:
         system_warning(f"Failed to persist workflow state for '{remote_folder}': {exc}")
     else:
@@ -293,6 +295,7 @@ def clear_validation_artifacts(remote_folder: str) -> None:
         state['validated'] = False
         state['validated_hash'] = None
         state['validated_at'] = None
+        state['validation_signature'] = None
         state['local_path'] = state.get('source_path') or ''
         _write_workflow_state(remote_folder, state)
 
@@ -313,15 +316,19 @@ def synchronize_remote_payload(
     local_path = get_validated_workflow_path(remote_folder, ensure=True)
     state = load_workflow_state(remote_folder)
     new_source_hash = compute_workflow_hash(workflow_payload)
+    new_validation_signature = compute_validation_signature(remote_folder)
     cache_present = validation_cache_has_artifacts(remote_folder)
     source_hash = state.get("source_hash")
     if source_hash is None:
         source_changed = not cache_present
     else:
         source_changed = source_hash != new_source_hash
-    if source_changed:
+    signature_changed = bool(state.get("validated")) and (
+        state.get("validation_signature") != new_validation_signature
+    )
+    if source_changed or signature_changed:
         system_debug(
-            f"[WorkflowSync] Source workflow changed for '{remote_folder}'; "
+            f"[WorkflowSync] Workflow inputs changed for '{remote_folder}'; "
             "invalidating local cache."
         )
         state["validated"] = False
@@ -334,6 +341,7 @@ def synchronize_remote_payload(
             _write_json(local_path, workflow_payload)
 
     state["source_hash"] = new_source_hash
+    state["validation_signature"] = new_validation_signature
     state["source_path"] = workflow_path or state.get("source_path") or ""
     state["local_path"] = local_path
     state["last_synced_at"] = time.time()
@@ -360,15 +368,63 @@ def mark_validated_workflow(
     state["validated"] = True
     state["validated_hash"] = compute_workflow_hash(workflow_payload)
     state["validated_at"] = time.time()
+    state["validation_signature"] = compute_validation_signature(remote_folder)
     state["local_path"] = local_path
     _write_workflow_state(remote_folder, state)
     return local_path
 
 
 def _write_json(path: str, payload: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+    atomic_write_json(path, payload)
+
+
+def compute_validation_signature(remote_folder: str) -> str:
+    """Fingerprint inputs that can make a previously validated override stale."""
+    comfy_path = str(preferences.get_preference("comfyui_launch_path", "") or "").strip()
+    env_info = resolve_comfy_environment(comfy_path)
+    comfy_dir = str(env_info.get("comfy_dir") or "")
+    payload = {
+        "comfy_path": _normalize_signature_path(comfy_path),
+        "comfy_dir": _normalize_signature_path(comfy_dir),
+        "python_exe": _normalize_signature_path(str(env_info.get("python_exe") or "")),
+        "metadata_hash": _metadata_hash(remote_folder),
+        "custom_nodes": _directory_inventory(os.path.join(comfy_dir, "custom_nodes")),
+        "model_roots": _directory_inventory(os.path.join(comfy_dir, "models")),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _metadata_hash(remote_folder: str) -> str:
+    metadata_path = os.path.join(remote_folder, CHARON_METADATA_FILENAME)
+    try:
+        with open(metadata_path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _directory_inventory(root: str) -> list[tuple[str, int]]:
+    if not root or not os.path.isdir(root):
+        return []
+    entries: list[tuple[str, int]] = []
+    try:
+        for entry in os.scandir(root):
+            try:
+                mtime_ns = entry.stat(follow_symlinks=False).st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            entries.append((entry.name.lower(), mtime_ns))
+    except OSError:
+        return []
+    entries.sort()
+    return entries
+
+
+def _normalize_signature_path(path: str) -> str:
+    if not path:
+        return ""
+    return os.path.normcase(os.path.abspath(os.path.normpath(path)))
 
 
 def write_validation_raw(remote_folder: str, payload: Dict[str, Any], *, overwrite: bool = False) -> None:
@@ -725,7 +781,7 @@ def _normalize_validation_payload(
     return normalized_payload
 
 
-_VALIDATION_STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
+_VALIDATION_STATUS_CACHE: Dict[str, Optional[Dict[str, Any]]] = {}
 
 
 def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any], *, overwrite: bool = True) -> None:
@@ -740,10 +796,14 @@ def write_validation_resolve_status(remote_folder: str, payload: Dict[str, Any],
     if status_path.exists() and not overwrite:
         return
     wrapped = _build_resolve_status_payload(payload, remote_folder)
+    signature = compute_validation_signature(remote_folder)
+    wrapped["validation_signature"] = signature
     try:
-        with status_path.open("w", encoding="utf-8") as handle:
-            json.dump(wrapped, handle, indent=2)
-        _VALIDATION_STATUS_CACHE[normalized_folder] = wrapped.get("payload") or wrapped
+        atomic_write_json(str(status_path), wrapped)
+        _VALIDATION_STATUS_CACHE[normalized_folder] = {
+            "validation_signature": signature,
+            "payload": wrapped.get("payload") or wrapped,
+        }
         system_debug(f"[Validation] Persisted resolve status to '{status_path}'")
     except Exception as exc:
         system_warning(f"Failed to write validation resolve status for '{remote_folder}': {exc}")
@@ -753,8 +813,12 @@ def load_validation_resolve_status(remote_folder: str) -> Optional[Dict[str, Any
     if not remote_folder:
         return None
     normalized_folder = os.path.normpath(remote_folder)
-    if normalized_folder in _VALIDATION_STATUS_CACHE:
-        return _VALIDATION_STATUS_CACHE[normalized_folder]
+    signature = compute_validation_signature(remote_folder)
+    cached = _VALIDATION_STATUS_CACHE.get(normalized_folder)
+    if isinstance(cached, dict) and cached.get("validation_signature") == signature:
+        payload = cached.get("payload")
+        return payload if isinstance(payload, dict) else None
+    _VALIDATION_STATUS_CACHE.pop(normalized_folder, None)
 
     status_path = validation_resolve_status_path(remote_folder, ensure_parent=False)
     if not status_path.exists():
@@ -764,11 +828,19 @@ def load_validation_resolve_status(remote_folder: str) -> Optional[Dict[str, Any
         with status_path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
+            if data.get("validation_signature") != signature:
+                return None
             payload = data.get("payload")
             if isinstance(payload, dict):
-                _VALIDATION_STATUS_CACHE[normalized_folder] = payload
+                _VALIDATION_STATUS_CACHE[normalized_folder] = {
+                    "validation_signature": signature,
+                    "payload": payload,
+                }
                 return payload
-            _VALIDATION_STATUS_CACHE[normalized_folder] = data
+            _VALIDATION_STATUS_CACHE[normalized_folder] = {
+                "validation_signature": signature,
+                "payload": data,
+            }
             return data
     except Exception as exc:
         system_warning(f"Failed to read validation resolve status for '{remote_folder}': {exc}")

@@ -158,7 +158,11 @@ def ensure_manager_security_level(
 
         env = resolve_comfy_environment(comfy_path)
         comfy_dir = env.get("comfy_dir")
-        if not comfy_dir or not os.path.isdir(comfy_dir):
+        if (
+            not comfy_dir
+            or not os.path.isdir(comfy_dir)
+            or not os.path.isfile(os.path.join(comfy_dir, "main.py"))
+        ):
             system_debug(
                 f"Manager security enforcement skipped: ComfyUI directory not found for {comfy_path}."
             )

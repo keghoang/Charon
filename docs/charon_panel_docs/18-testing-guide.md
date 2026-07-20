@@ -63,6 +63,9 @@ Checklist:
 3. Confirm the ComfyUI path is remembered.
 4. Confirm the footer reaches a stable connected/offline state.
 5. Confirm ComfyUI-Manager security level is forced to `weak`.
+6. Enable **Force First Time Setup**, relaunch, and confirm Step 2 reaches **Next** without a host crash.
+7. While Step 2 is actively installing, confirm closing the wizard is blocked until the worker thread exits.
+8. Select an invalid launcher layout and confirm setup reports the missing ComfyUI `main.py` instead of copying custom nodes.
 
 ### 2. Workflow browse / validate / grab
 Use this after touching:
@@ -142,7 +145,8 @@ Checklist:
 
 ## Useful Artifact Locations
 - Runtime temp/export/result/debug root:
-  `D:\Nuke\charon`
+  `CHARON_RUNTIME_ROOT`, otherwise `D:\Nuke\charon`, otherwise
+  `%LOCALAPPDATA%\Charon\runtime`
 - Local mirror and validation cache:
   `GALT_PLUGIN_DIR` or
   `%USERPROFILE%\AppData\Local\Galt\plugins\charon\Charon_repo_local`

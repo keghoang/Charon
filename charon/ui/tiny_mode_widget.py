@@ -7,6 +7,7 @@ Condensed CharonBoard surface that tracks the most relevant CharonOp progress.
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Dict, Iterable, List, Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui
@@ -526,7 +527,7 @@ class TinyModeWidget(QtWidgets.QWidget):
             )
             return
         try:
-            os.system(f'explorer /select,"{workflow_path}"')
+            subprocess.Popen(["explorer", f"/select,{workflow_path}"])
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
                 self, "Workflow Location", f"Failed to reveal workflow: {exc}"

@@ -46,7 +46,10 @@ These are used in `node_factory.py`, `processor.py`, and
 Defined in `config.py`:
 
 ```python
-WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\workflows"
+DEFAULT_WORKFLOW_REPOSITORY_ROOT = r"\\buck\globalprefs\SHARED\CODE\Charon_repo\workflows"
+WORKFLOW_REPOSITORY_ROOT = os.path.abspath(
+    os.environ.get("CHARON_REPO") or DEFAULT_WORKFLOW_REPOSITORY_ROOT
+)
 REPOSITORY_SEARCH_PATHS = [WORKFLOW_REPOSITORY_ROOT]
 GLOBAL_REPO_PATH = WORKFLOW_REPOSITORY_ROOT
 ```
@@ -56,6 +59,8 @@ Behavior:
 - `workflow_runtime.load_workflow_bundle()` rejects folders outside this root.
 - `workflow_local_store.py` mirrors workflow folders relative to this root.
 - `FolderPanel` and folder loaders should never traverse above this root.
+- Launch-time `global_path` overrides call `config.set_workflow_repository_root()`
+  so model search, uploads, local mirrors, and node helpers share one active root.
 
 ## Preference Storage
 
@@ -95,6 +100,9 @@ Default root:
 D:\Nuke\charon
 ```
 
+Set `CHARON_RUNTIME_ROOT` to override this location. If the default root cannot
+be created, Charon falls back to `%LOCALAPPDATA%\Charon\runtime`.
+
 `get_charon_temp_dir()` ensures these subfolders exist:
 
 - `temp`
@@ -107,7 +115,7 @@ D:\Nuke\charon
 
 1. `BUCK_PROJECT_PATH\Production\Work\<user>\_CHARON\...`
 2. `BUCK_WORK_ROOT\Work\<user>\_CHARON\...`
-3. fallback `D:\Nuke\charon\results\...`
+3. fallback `<runtime root>\results\...`
 
 Versioned filenames are emitted as:
 

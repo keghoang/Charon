@@ -56,12 +56,13 @@ class PersistentCacheManager:
 
 5. **Workflow Input Cache**
    - Stores per-workflow parameter discovery results
-   - Saved as `.charon_cache/input_mapping_cache.json` inside each workflow folder
+   - Saved under the per-user local mirror as `.charon_cache/input_mapping_cache.json`
+   - Arbitrary workflow files outside the repository use a hashed per-user cache folder
    - Cache entries include the workflow file hash to guarantee freshness
    - Conversion prompts generated during API export also live in `.charon_cache`
    - Conversion cache cleanup preserves the validation subdirectory so raw payloads and resolve logs remain intact
    - Keeps metadata dialogs snappy on subsequent opens without re-running the scan
-   - Local to each workflow folder so artists can diff/inspect if needed
+   - Keeps shared workflow folders read-only during parameter discovery
 
 6. **Hot Folders**
    - Tracks recently accessed folders using OrderedDict (LRU)

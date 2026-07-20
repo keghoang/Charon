@@ -48,6 +48,9 @@ def _save_mesh(mesh: "trimesh.Trimesh", input_path: str) -> str:
 
 
 def get_symmetry_plane(normals: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    if normals.size == 0 or positions.size == 0 or normals.shape[0] != positions.shape[0]:
+        raise ValueError("Cannot detect symmetry plane from empty or mismatched mesh data.")
+
     if normals.shape[0] > MAX_POLYS:
         idx = np.random.choice(normals.shape[0], MAX_POLYS, replace=False)
         normals = normals[idx]
@@ -75,6 +78,8 @@ def get_symmetry_plane(normals: np.ndarray, positions: np.ndarray) -> np.ndarray
         (np.linalg.norm(normals_2 - normals_3, axis=1) < SYMMETRY_PAIR_DIST) &
         (plane_normals_scale > 1e-6)
     )[0]
+    if idx.size == 0:
+        raise ValueError("No symmetry pairs were detected.")
     plane_normals = plane_normals[idx]
     plane_centers = np.sum((positions_1 + positions_2)[idx] / 2 * plane_normals, axis=1)
 
@@ -94,22 +99,38 @@ def get_symmetry_plane(normals: np.ndarray, positions: np.ndarray) -> np.ndarray
     value, count = np.unique(plane_int_hash, return_counts=True)
     origin = plane_int[(plane_int_hash == value[np.argmax(count)]).nonzero()[0][0]] * SYMMETRY_BUCKET_SIZE
     dist = np.linalg.norm(plane - origin.reshape(1, -1), axis=1)
-    plane_res = np.median(plane[(dist < SYMMETRY_BUCKET_SIZE).nonzero()[0]], axis=0)
+    plane_candidates = plane[(dist < SYMMETRY_BUCKET_SIZE).nonzero()[0]]
+    if plane_candidates.size == 0:
+        raise ValueError("Symmetry plane bucket was empty.")
+    plane_res = np.median(plane_candidates, axis=0)
     plane_res[3] = plane_res[3] * (plane_centers_std + 1e-6)
-    plane_res[:3] = plane_res[:3] / np.linalg.norm(plane_res[:3])
+    normal_len = np.linalg.norm(plane_res[:3])
+    if normal_len <= 1e-8:
+        raise ValueError("Detected symmetry plane has a degenerate normal.")
+    plane_res[:3] = plane_res[:3] / normal_len
     return plane_res
 
 
 def get_matrix(areas: np.ndarray, normals: np.ndarray, fixed_axis=None) -> np.ndarray:
+    if areas.size == 0 or normals.size == 0:
+        return np.identity(3)
+    area_sum = float(np.sum(areas))
+    if not np.isfinite(area_sum) or area_sum <= 1e-12:
+        return np.identity(3)
+
     if areas.size > MAX_POLYS:
-        idx = np.random.choice(areas.size, MAX_POLYS, p=areas / sum(areas), replace=False)
+        idx = np.random.choice(areas.size, MAX_POLYS, p=areas / area_sum, replace=False)
         areas = areas[idx]
         normals = normals[idx]
+        area_sum = float(np.sum(areas))
+        if not np.isfinite(area_sum) or area_sum <= 1e-12:
+            return np.identity(3)
 
-    first_indices = np.random.choice(areas.size, ITERATION_RANSAC, p=areas / sum(areas))
+    first_indices = np.random.choice(areas.size, ITERATION_RANSAC, p=areas / area_sum)
 
     best_model = np.identity(3)
     best_value = -1.0
+    best_indices = np.ones(areas.shape, dtype=bool)
 
     for index in first_indices:
         model = np.zeros((3, 3))
@@ -117,13 +138,21 @@ def get_matrix(areas: np.ndarray, normals: np.ndarray, fixed_axis=None) -> np.nd
         next_indices = np.nonzero(np.abs(normals @ model[0]) < np.sin(THRESHOLD))[0]
         if next_indices.size > 0:
             next_areas = areas[next_indices]
-            model[1] = normals[np.random.choice(next_indices, p=next_areas / sum(next_areas))]
+            next_area_sum = float(np.sum(next_areas))
+            if np.isfinite(next_area_sum) and next_area_sum > 1e-12:
+                model[1] = normals[np.random.choice(next_indices, p=next_areas / next_area_sum)]
+            else:
+                model[1] = np.zeros(3)
+                model[1][(np.argmax(np.abs(model[0])) + 1) % 3] = 1
         else:
             model[1] = np.zeros(3)
             model[1][(np.argmax(np.abs(model[0])) + 1) % 3] = 1
 
         model[1] = np.cross(model[0], model[1])
-        model[1] = model[1] / np.linalg.norm(model[1])
+        axis_len = np.linalg.norm(model[1])
+        if axis_len <= 1e-8:
+            continue
+        model[1] = model[1] / axis_len
         model[2] = np.cross(model[0], model[1])
 
         idx = np.max(np.abs(normals @ model.T), axis=1) > np.cos(THRESHOLD)
@@ -194,14 +223,22 @@ def get_matrix(areas: np.ndarray, normals: np.ndarray, fixed_axis=None) -> np.nd
 
 
 def align_mesh(mesh: "trimesh.Trimesh", symmetry: bool, ground_snap: bool):
+    if mesh.vertices.size == 0:
+        print("[CHARON_3D_Auto_Align] Mesh has no vertices; using identity alignment.")
+        return mesh.copy(), np.identity(3), np.zeros(3)
+
     areas = mesh.area_faces
     normals = _normalize(mesh.face_normals)
     vertex_normals = _normalize(mesh.vertex_normals)
     positions = mesh.vertices
 
     if symmetry:
-        plane = get_symmetry_plane(vertex_normals, positions)
-        rotation = get_matrix(areas, normals, fixed_axis=plane[:3])
+        try:
+            plane = get_symmetry_plane(vertex_normals, positions)
+            rotation = get_matrix(areas, normals, fixed_axis=plane[:3])
+        except ValueError as exc:
+            print(f"[CHARON_3D_Auto_Align] Symmetry detection failed; falling back to non-symmetry alignment: {exc}")
+            rotation = get_matrix(areas, normals)
     else:
         rotation = get_matrix(areas, normals)
 

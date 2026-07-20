@@ -17,6 +17,7 @@ from .charon_logger import system_debug, system_error, system_info, system_warni
 from .comfy_client import ComfyUIClient
 from .paths import get_charon_temp_dir, resolve_comfy_environment
 from .validation_resolver import locate_manager_cli
+from .workflow_graph import iter_workflow_node_dicts
 
 
 DEFAULT_PING_URL = "http://127.0.0.1:8188"
@@ -397,11 +398,38 @@ async def main():
                     const registry = window.LiteGraph?.registered_node_types || {};
                     const registered = new Set(Object.keys(registry));
 
-                    const nodesArray = Array.isArray(workflow?.nodes)
-                        ? workflow.nodes
-                        : Array.isArray(workflow)
-                            ? workflow
-                            : Object.values(workflow?.nodes || workflow || {});
+                    const collectNodes = (document) => {
+                        const collected = [];
+                        const visitGraph = (graph) => {
+                            if (!graph || typeof graph !== "object") return;
+                            const nodes = Array.isArray(graph.nodes)
+                                ? graph.nodes
+                                : Array.isArray(graph)
+                                    ? graph
+                                    : [];
+                            for (const node of nodes) {
+                                if (node && typeof node === "object") collected.push(node);
+                            }
+                            const definitions = graph.definitions;
+                            const nested = definitions && typeof definitions === "object"
+                                ? definitions.subgraphs
+                                : null;
+                            const subgraphs = Array.isArray(nested)
+                                ? nested
+                                : nested && typeof nested === "object"
+                                    ? Object.values(nested)
+                                    : [];
+                            for (const subgraph of subgraphs) visitGraph(subgraph);
+                        };
+                        visitGraph(document);
+                        if (collected.length === 0 && document && typeof document === "object") {
+                            for (const value of Object.values(document)) {
+                                if (value && typeof value === "object") collected.push(value);
+                            }
+                        }
+                        return collected;
+                    };
+                    const nodesArray = collectNodes(workflow);
 
                     let nodePacks = {};
                     try {
@@ -830,6 +858,18 @@ def _validate_custom_nodes_browser(
             ok=False,
             summary="ComfyUI directory missing; cannot validate custom nodes.",
             details=["Fix the ComfyUI path first."],
+        ), payload
+
+    if not ComfyUIClient(DEFAULT_PING_URL, connect_timeout=3).test_connection():
+        return ValidationIssue(
+            key="custom_nodes",
+            label="ComfyUI server reachable",
+            ok=False,
+            summary="No valid ComfyUI server is responding on 127.0.0.1:8188.",
+            details=[
+                "Start ComfyUI and wait for it to finish loading. "
+                "If another service uses port 8188, stop that service before retrying."
+            ],
         ), payload
 
     workflow = workflow_bundle.get("workflow") if isinstance(workflow_bundle, dict) else None
@@ -2289,13 +2329,9 @@ def _collect_aux_repos(workflow_bundle: Optional[Dict[str, Any]]) -> Dict[str, s
     if not isinstance(workflow_bundle, dict):
         return mapping
     workflow = workflow_bundle.get("workflow")
-    nodes = []
-    if isinstance(workflow, dict):
-        if isinstance(workflow.get("nodes"), list):
-            nodes = workflow["nodes"]
-        else:
-            nodes = list(workflow.values())
-    for node in nodes:
+    if not isinstance(workflow, dict):
+        return mapping
+    for node in iter_workflow_node_dicts(workflow):
         if not isinstance(node, dict):
             continue
         node_type = str(node.get("type") or node.get("class_type") or "").strip()
@@ -2366,13 +2402,8 @@ def _collect_model_references(
 
     references: Dict[Tuple[str, str], Dict[str, str]] = {}
 
-    if "nodes" in workflow and isinstance(workflow["nodes"], list):
-        nodes_iter = workflow["nodes"]
-        for node in nodes_iter:
-            _collect_references_from_node(node, references)
-    else:
-        for node in workflow.values():
-            _collect_references_from_node(node, references)
+    for node in iter_workflow_node_dicts(workflow):
+        _collect_references_from_node(node, references)
 
     return list(references.values())
 
@@ -2420,27 +2451,14 @@ def _collect_node_types(
     names: List[str] = []
     seen: set[str] = set()
 
-    if "nodes" in workflow and isinstance(workflow["nodes"], list):
-        iterator: Iterable[Any] = workflow["nodes"]
-        for node in iterator:
-            node_type = str(node.get("type") or "").strip()
-            normalized = node_type.lower()
-            if normalized in IGNORED_NODE_TYPES:
-                continue
-            if node_type and node_type not in seen:
-                seen.add(node_type)
-                names.append(node_type)
-    else:
-        for node in workflow.values():
-            if not isinstance(node, dict):
-                continue
-            node_type = str(node.get("class_type") or "").strip()
-            normalized = node_type.lower()
-            if normalized in IGNORED_NODE_TYPES:
-                continue
-            if node_type and node_type not in seen:
-                seen.add(node_type)
-                names.append(node_type)
+    for node in iter_workflow_node_dicts(workflow):
+        node_type = str(node.get("type") or node.get("class_type") or "").strip()
+        normalized = node_type.lower()
+        if normalized in IGNORED_NODE_TYPES:
+            continue
+        if node_type and node_type not in seen:
+            seen.add(node_type)
+            names.append(node_type)
 
     return names
 

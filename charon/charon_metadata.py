@@ -27,6 +27,7 @@ import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 from .charon_logger import system_debug
+from .json_io import atomic_write_json
 
 CHARON_METADATA_FILENAME = ".charon.json"
 
@@ -43,10 +44,11 @@ CHARON_DEFAULTS: Dict[str, Any] = {
 
 
 def _normalize_dependency(dep) -> Optional[Dict[str, str]]:
-    """Normalize a dependency entry into a dict with repo/name/ref keys."""
+    """Normalize a dependency entry into a dict with portable package hints."""
     repo = ""
     name = ""
     ref = ""
+    cnr_id = ""
 
     if isinstance(dep, str):
         repo = dep.strip()
@@ -54,6 +56,7 @@ def _normalize_dependency(dep) -> Optional[Dict[str, str]]:
         repo = (dep.get("repo") or dep.get("url") or "").strip()
         name = (dep.get("name") or "").strip()
         ref = (dep.get("ref") or "").strip()
+        cnr_id = (dep.get("cnr_id") or "").strip()
     else:
         return None
 
@@ -74,6 +77,8 @@ def _normalize_dependency(dep) -> Optional[Dict[str, str]]:
         result["repo"] = repo
     if ref:
         result["ref"] = ref
+    if cnr_id:
+        result["cnr_id"] = cnr_id
     return result or None
 
 
@@ -163,8 +168,7 @@ def write_charon_metadata(script_path: str, data: Optional[Dict[str, Any]] = Non
         payload.update(filtered)
 
     try:
-        with open(charon_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        atomic_write_json(charon_path, payload)
     except Exception:
         system_debug(f"Failed to write metadata at {charon_path}")
         return None

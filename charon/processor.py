@@ -2,7 +2,6 @@
 import copy
 import json
 import os
-import subprocess
 import threading
 import time
 import uuid
@@ -13,9 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .conversion_cache import (
     compute_workflow_hash,
-    desired_prompt_path,
     load_cached_conversion,
-    write_conversion_cache,
 )
 from .paths import (
     allocate_charon_output_path,
@@ -30,6 +27,24 @@ from .paths import (
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
 from .workflow_overrides import apply_validation_model_overrides
 from .workflow_local_store import get_local_workflow_folder
+from .path_safety import is_path_inside
+from .nuke_threading import is_main_thread, run_on_main_thread, run_on_main_thread_async
+from .process_runner import ProcessExecutionError, run_subprocess
+from .processor_context import capture_processor_run_context
+from .processor_conversion import load_cached_prompt_payload, write_converted_prompt_payload
+from .processor_output import (
+    collect_output_artifacts,
+    is_camera_output_entry,
+    is_ignored_output_path,
+    is_image_output_entry,
+    is_mesh_output_entry,
+    normalize_download_target,
+    output_entry_label,
+    progress_for_batch,
+    resolve_local_output_candidate,
+)
+from .processor_status import lifecycle_from_progress, update_status_payload
+from .processor_submission import build_batch_prompt, submit_prompt_or_raise
 from .comfy_client import ComfyUIClient
 from . import config, preferences
 from .node_factory import generate_charon_node_id, reset_charon_node_state, update_charon_node_identity
@@ -172,16 +187,19 @@ def _load_parameter_specs(node) -> List[Dict[str, Any]]:
 
 def _write_parameter_specs(node, specs: List[Dict[str, Any]]) -> None:
     """Persist updated parameter specs back onto the CharonOp knob."""
-    try:
-        knob = node.knob("charon_parameters")
-    except Exception:
-        knob = None
-    if knob is None:
-        return
-    try:
-        knob.setValue(json.dumps(specs))
-    except Exception as exc:
-        log_debug(f"Failed to store parameter specs: {exc}", "WARNING")
+    def _write() -> None:
+        try:
+            knob = node.knob("charon_parameters")
+        except Exception:
+            knob = None
+        if knob is None:
+            return
+        try:
+            knob.setValue(json.dumps(specs))
+        except Exception as exc:
+            log_debug(f"Failed to store parameter specs: {exc}", "WARNING")
+
+    run_on_main_thread(_write)
 
 
 def _coerce_parameter_value(value_type: str, value: Any) -> Any:
@@ -298,9 +316,15 @@ if not os.path.exists(obj_path):
     raise SystemExit(2)
 """
     try:
-        subprocess.check_call([python_exe, "-c", script, glb_path, obj_path])
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"GLB to OBJ conversion failed via ComfyUI Python: {exc}") from exc
+        run_subprocess(
+            [python_exe, "-c", script, glb_path, obj_path],
+            timeout=getattr(config, "WORKFLOW_CONVERSION_TIMEOUT_SEC", 600),
+            check=True,
+        )
+    except ProcessExecutionError as exc:
+        detail = exc.result.tail()
+        suffix = f"\n{detail}" if detail else ""
+        raise RuntimeError(f"GLB to OBJ conversion failed via ComfyUI Python: {exc}{suffix}") from exc
     if not os.path.exists(obj_path):
         raise RuntimeError(f"OBJ export did not produce a file: {obj_path}")
     return obj_path
@@ -474,10 +498,7 @@ def _is_ignored_output(path: Optional[str]) -> bool:
     """
     Determine whether a file should be ignored based on the configured prefix.
     """
-    if not path:
-        return False
-    base = os.path.basename(str(path)).strip().lower()
-    return base.startswith(IGNORE_OUTPUT_PREFIX)
+    return is_ignored_output_path(path, IGNORE_OUTPUT_PREFIX)
 
 
 def _apply_parameter_overrides(
@@ -517,19 +538,23 @@ def _apply_parameter_overrides(
             )
             continue
 
-        try:
-            knob = node.knob(knob_name)
-        except Exception:
-            knob = None
-        if knob is None:
-            log_debug(f"Knob {knob_name} not found on node; skipping override", "WARNING")
-            continue
-            
         if knob_name in overrides:
             raw_value = overrides[knob_name]
         else:
+            def _read_knob_value():
+                try:
+                    knob = node.knob(knob_name)
+                except Exception:
+                    knob = None
+                if knob is None:
+                    raise KeyError(knob_name)
+                return knob.value()
+
             try:
-                raw_value = knob.value()
+                raw_value = run_on_main_thread(_read_knob_value)
+            except KeyError:
+                log_debug(f"Knob {knob_name} not found on node; skipping override", "WARNING")
+                continue
             except Exception as exc:
                 log_debug(f"Failed to read knob {knob_name}: {exc}", "WARNING")
                 continue
@@ -1511,25 +1536,28 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             return path_value, hash_value
 
         def store_cached_prompt(path_value, hash_value):
-            normalized_path = path_value.replace('\\', '/') if isinstance(path_value, str) else ''
-            try:
-                knob = node.knob('charon_prompt_path')
-                if knob is not None:
-                    knob.setValue(normalized_path)
-            except Exception:
-                pass
-            normalized_hash = str(hash_value or '')
-            hash_knob = _ensure_prompt_hash_knob()
-            if hash_knob is not None:
+            def _store():
+                normalized_path = path_value.replace('\\', '/') if isinstance(path_value, str) else ''
                 try:
-                    hash_knob.setValue(normalized_hash)
+                    knob = node.knob('charon_prompt_path')
+                    if knob is not None:
+                        knob.setValue(normalized_path)
                 except Exception:
                     pass
-            write_metadata('charon/prompt_hash', normalized_hash)
-            if hash_value:
-                log_debug(f'Stored prompt cache hash {hash_value}')
-            if normalized_path:
-                log_debug(f'Stored prompt cache path {normalized_path}')
+                normalized_hash = str(hash_value or '')
+                hash_knob = _ensure_prompt_hash_knob()
+                if hash_knob is not None:
+                    try:
+                        hash_knob.setValue(normalized_hash)
+                    except Exception:
+                        pass
+                write_metadata('charon/prompt_hash', normalized_hash)
+                if hash_value:
+                    log_debug(f'Stored prompt cache hash {hash_value}')
+                if normalized_path:
+                    log_debug(f'Stored prompt cache path {normalized_path}')
+
+            run_on_main_thread(_store)
         
         # Set initial status
         try:
@@ -1544,6 +1572,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             status_payload_knob = None
 
         def resolve_auto_import():
+            if not is_main_thread():
+                return run_on_main_thread(resolve_auto_import)
             try:
                 knob = node.knob('charon_auto_import')
                 if knob is not None:
@@ -2141,6 +2171,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             nonlocal _cached_script_name
             if _cached_script_name is not None:
                 return _cached_script_name
+            if not is_main_thread():
+                return run_on_main_thread(_resolve_nuke_script_name)
             script_reference = ""
             try:
                 root = nuke.root()
@@ -3140,8 +3172,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             source_folder = _resolve_existing_folder(source_path)
             if not source_folder:
                 continue
-            source_abs = os.path.abspath(source_folder)
-            if source_abs.lower().startswith(repo_root.lower()):
+            if is_path_inside(source_folder, repo_root):
                 workflow_repository_folder = source_folder
                 break
 
@@ -3392,12 +3423,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             except Exception:
                 pass
 
-            lifecycle = 'Processing'
-            normalized = (status or '').lower()
-            if clamped_progress < 0 or normalized.startswith('error'):
-                lifecycle = 'Error'
-            elif clamped_progress >= 0.999:
-                lifecycle = 'Completed'
+            lifecycle = lifecycle_from_progress(clamped_progress, status)
 
             current_node_state = lifecycle
             now_tick = time.time()
@@ -3408,68 +3434,25 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 apply_status_color(current_node_state)
 
             payload = load_status_payload()
-            runs = ensure_history(payload)
-            current_run = payload.get('current_run')
-            if not isinstance(current_run, dict) or current_run.get('id') != current_run_id:
-                current_run = {
-                    'id': current_run_id,
-                    'started_at': run_started_at,
-                }
             now = time.time()
             auto_import_flag = resolve_auto_import()
-            current_run.update({
-                'status': lifecycle,
-                'message': status,
-                'progress': clamped_progress,
-                'updated_at': now,
-                'auto_import': auto_import_flag,
-            })
             if extra and isinstance(extra, dict):
-                current_run.update(extra)
                 if 'output_path' in extra:
                     update_last_output(extra.get('output_path'))
-            if lifecycle == 'Completed':
-                current_run['completed_at'] = now
-            if error:
-                current_run['error'] = error
-
-            payload.update({
-                'status': status,
-                'state': lifecycle,
-                'message': status,
-                'progress': clamped_progress,
-                'run_id': current_run_id,
-                'updated_at': now,
-                'current_run': current_run,
-                'auto_import': auto_import_flag,
-            })
-            if extra and isinstance(extra, dict):
-                payload.update(extra)
-            if error:
-                payload['last_error'] = error
-
-            if lifecycle in ('Completed', 'Error'):
-                if lifecycle == 'Error':
-                    update_last_output(None)
-                summary = {
-                    'id': current_run_id,
-                    'status': lifecycle,
-                    'message': status,
-                    'progress': clamped_progress,
-                    'started_at': current_run.get('started_at', run_started_at),
-                    'completed_at': current_run.get('completed_at', now),
-                    'error': current_run.get('error'),
-                    'auto_import': auto_import_flag,
-                }
-                for key in ('output_path', 'elapsed_time', 'prompt_id'):
-                    if key in current_run:
-                        summary[key] = current_run[key]
-                runs.append(summary)
-                payload['runs'] = runs[-10:]
-                payload.pop('current_run', None)
-            else:
-                payload['runs'] = runs
-                payload['current_run'] = current_run
+            if lifecycle == 'Error':
+                update_last_output(None)
+            payload = update_status_payload(
+                payload,
+                lifecycle=lifecycle,
+                message=status,
+                progress=clamped_progress,
+                run_id=current_run_id,
+                run_started_at=run_started_at,
+                auto_import=auto_import_flag,
+                extra=extra,
+                error=error,
+                now=now,
+            )
 
             save_status_payload(payload)
 
@@ -3477,11 +3460,14 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         def _safe_node_coords():
             """Return node x/y positions without raising if the node was deleted."""
-            try:
-                return node.xpos(), node.ypos()
-            except Exception as exc:
-                log_debug(f"Node position unavailable: {exc}", "WARNING")
-                return 0, 0
+            def _capture():
+                try:
+                    return node.xpos(), node.ypos()
+                except Exception as exc:
+                    log_debug(f"Node position unavailable: {exc}", "WARNING")
+                    return 0, 0
+
+            return run_on_main_thread(_capture)
 
         def background_process():
             nonlocal batch_count
@@ -3531,9 +3517,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     if cache_hit:
                         trace_step("conversion_cache_hit", prompt_path=cache_hit.get("prompt_path", ""))
                         try:
-                            with open(cache_hit['prompt_path'], 'r', encoding='utf-8') as handle:
-                                prompt_data = json.load(handle)
-                            converted_prompt_path = cache_hit['prompt_path'].replace('\\', '/')
+                            prompt_data, converted_prompt_path = load_cached_prompt_payload(cache_hit)
                             conversion_extra.update({
                                 'converted_prompt_path': converted_prompt_path,
                                 'conversion_cached': True,
@@ -3564,40 +3548,25 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             raise Exception('Converted workflow is invalid')
                         prompt_data = converted_prompt
 
-                        if workflow_hash and workflow_cache_folder:
-                            try:
-                                target_path = desired_prompt_path(workflow_cache_folder, workflow_path or '', workflow_hash)
-                                target_path.parent.mkdir(parents=True, exist_ok=True)
-                                with open(target_path, 'w', encoding='utf-8') as handle:
-                                    json.dump(converted_prompt, handle, indent=2)
-                                stored_path = write_conversion_cache(
-                                    workflow_cache_folder,
-                                    workflow_path or '',
-                                    workflow_hash,
-                                    str(target_path),
-                                )
-                                converted_prompt_path = stored_path.replace('\\', '/')
-                            except Exception as exc:
-                                log_debug(f'Failed to cache converted workflow: {exc}', 'WARNING')
-                                debug_dir = os.path.join(temp_root, 'debug')
-                                os.makedirs(debug_dir, exist_ok=True)
-                                fallback_path = os.path.join(
-                                    debug_dir,
-                                    f'converted_{current_run_id}.json',
-                                )
-                                with open(fallback_path, 'w', encoding='utf-8') as handle:
-                                    json.dump(converted_prompt, handle, indent=2)
-                                converted_prompt_path = fallback_path.replace('\\', '/')
-                        else:
-                            debug_dir = os.path.join(temp_root, 'debug')
-                            os.makedirs(debug_dir, exist_ok=True)
-                            fallback_path = os.path.join(
-                                debug_dir,
-                                f'converted_{current_run_id}.json',
+                        try:
+                            converted_prompt_path = write_converted_prompt_payload(
+                                converted_prompt,
+                                workflow_cache_folder=workflow_cache_folder,
+                                workflow_path=workflow_path or '',
+                                workflow_hash=workflow_hash,
+                                temp_root=temp_root,
+                                current_run_id=current_run_id,
                             )
-                            with open(fallback_path, 'w', encoding='utf-8') as handle:
-                                json.dump(converted_prompt, handle, indent=2)
-                            converted_prompt_path = fallback_path.replace('\\', '/')
+                        except Exception as exc:
+                            log_debug(f'Failed to cache converted workflow: {exc}', 'WARNING')
+                            converted_prompt_path = write_converted_prompt_payload(
+                                converted_prompt,
+                                workflow_cache_folder='',
+                                workflow_path=workflow_path or '',
+                                workflow_hash=None,
+                                temp_root=temp_root,
+                                current_run_id=current_run_id,
+                            )
 
                         conversion_extra.update({
                             'converted_prompt_path': converted_prompt_path,
@@ -3652,7 +3621,18 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                 # Apply client-side logic (e.g. seed randomization)
                 # This returns explicit values to use, decoupling data from UI lag
-                parameter_overrides = _resolve_client_side_logic(node, parameter_specs_local)
+                parameter_overrides = run_on_main_thread(
+                    _resolve_client_side_logic,
+                    node,
+                    parameter_specs_local,
+                )
+                run_context = capture_processor_run_context(
+                    node,
+                    parameter_specs_local,
+                    log_warning=lambda message: log_debug(message, "WARNING"),
+                )
+                captured_parameter_values = dict(run_context.parameter_values)
+                captured_parameter_values.update(parameter_overrides)
 
                 if render_jobs:
                     update_progress(0.2, 'Uploading images', extra=conversion_extra or None)
@@ -3665,7 +3645,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     node,
                     workflow_copy,
                     parameter_specs_local,
-                    knob_values=parameter_overrides,
+                    knob_values=captured_parameter_values,
                 )
                 if applied_overrides:
                     log_debug(
@@ -3816,29 +3796,10 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 download_hard_timeout = float(getattr(config, "COMFY_DOWNLOAD_HARD_TIMEOUT_SEC", 90.0))
 
                 def _normalize_download_target(filename: Optional[str], subfolder: Optional[str]) -> Tuple[str, str]:
-                    if not filename:
-                        return "", (subfolder or "").strip().strip("/\\")
-                    name = str(filename)
-                    cleaned = name.replace("\\", "/")
-                    subfolder_val = (subfolder or "").strip().strip("/\\")
-                    if os.path.isabs(name):
-                        return name, subfolder_val
-                    if "/" in cleaned:
-                        base = os.path.basename(cleaned)
-                        if not subfolder_val:
-                            rel_dir = os.path.dirname(cleaned).strip("/\\")
-                            subfolder_val = rel_dir
-                        return base, subfolder_val
-                    return name, subfolder_val
+                    return normalize_download_target(filename, subfolder)
 
                 def _resolve_local_output_candidate(filename: str, subfolder: str) -> str:
-                    if not comfy_output_root or not filename:
-                        return ""
-                    parts = [comfy_output_root]
-                    if subfolder:
-                        parts.append(subfolder)
-                    parts.append(filename)
-                    return os.path.normpath(os.path.join(*parts))
+                    return resolve_local_output_candidate(comfy_output_root, filename, subfolder)
 
                 def _find_output_by_basename(filename: str, since_time: float) -> str:
                     if not comfy_output_root or not filename or not os.path.isdir(comfy_output_root):
@@ -3959,83 +3920,16 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     return found
 
                 def _progress_for(batch_index: int, local: float) -> float:
-                    local_clamped = max(0.0, min(1.0, local))
-                    base_value = 0.5 + per_batch_progress * batch_index
-                    return min(base_value + per_batch_progress * local_clamped, 1.0)
+                    return progress_for_batch(batch_index, local, per_batch_progress)
 
                 def _collect_output_artifacts(outputs_map, prompt_lookup):
-                    """
-                    Extract all available output artifacts (images/files/meshes).
-                    Returns list of dicts with filename, subfolder, type, extension, node_id, class_type, kind.
-                    """
-                    artifacts = []
-                    if not isinstance(outputs_map, dict):
-                        return artifacts
-                    for node_id, output_data in outputs_map.items():
-                        if not isinstance(output_data, dict):
-                            continue
-                        class_type = (prompt_lookup.get(node_id) or {}).get("class_type") or ""
-
-                        def _append_artifact(path: str, kind: str = "output"):
-                            if not path:
-                                return
-                            ext_local = (os.path.splitext(path)[1] or "").lower()
-                            artifacts.append(
-                                {
-                                    "filename": path,
-                                    "subfolder": output_data.get("subfolder") or "",
-                                    "type": output_data.get("type") or "output",
-                                    "extension": ext_local,
-                                    "node_id": node_id,
-                                    "class_type": class_type,
-                                    "kind": kind,
-                                }
-                            )
-
-                        for key in ("images", "files", "meshes"):
-                            entries = output_data.get(key)
-                            if not isinstance(entries, list) or not entries:
-                                continue
-                            for entry in entries:
-                                filename = entry.get("filename")
-                                if not filename:
-                                    continue
-                                if _is_ignored_output(filename):
-                                    continue
-                                ext = (entry.get("extension") or os.path.splitext(filename)[1] or "").lower()
-                                artifacts.append(
-                                    {
-                                        "filename": filename,
-                                        "subfolder": entry.get("subfolder") or "",
-                                        "type": entry.get("type") or "output",
-                                        "extension": ext,
-                                        "node_id": node_id,
-                                        "class_type": class_type,
-                                        "kind": key,
-                                    }
-                                )
-                        for value in output_data.values():
-                            if isinstance(value, str):
-                                candidate = value.strip()
-                                if _is_ignored_output(candidate):
-                                    continue
-                                ext_local = os.path.splitext(candidate)[1].lower()
-                                if ext_local in CAMERA_OUTPUT_EXTENSIONS:
-                                    _append_artifact(candidate, "camera")
-                                elif ext_local in MODEL_OUTPUT_EXTENSIONS:
-                                    _append_artifact(candidate, "meshes")
-                            elif isinstance(value, list):
-                                for item in value:
-                                    if isinstance(item, str):
-                                        candidate = item.strip()
-                                        if _is_ignored_output(candidate):
-                                            continue
-                                        ext_local = os.path.splitext(candidate)[1].lower()
-                                        if ext_local in CAMERA_OUTPUT_EXTENSIONS:
-                                            _append_artifact(candidate, "camera")
-                                        elif ext_local in MODEL_OUTPUT_EXTENSIONS:
-                                            _append_artifact(candidate, "meshes")
-                    return artifacts
+                    return collect_output_artifacts(
+                        outputs_map,
+                        prompt_lookup,
+                        ignored_output=_is_ignored_output,
+                        camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                        model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                    )
 
                 def _recover_cached_artifacts(prompt_payload: Dict[str, Any], current_prompt_id: Optional[str]) -> List[Dict[str, Any]]:
                     """
@@ -4166,53 +4060,53 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 for batch_index in range(batch_count):
                     trace_step("batch_started", batch=batch_index + 1, total=batch_count)
                     seed_offset = batch_index * 9973
-                    prompt_payload = copy.deepcopy(base_prompt)
-                    
-
-
-                    if seed_records:
-                        _apply_seed_offset(prompt_payload, seed_records, seed_offset)
-
                     batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
-                    normalized_paths = _normalize_prompt_model_paths(prompt_payload)
+                    try:
+                        prompt_payload, normalized_paths, prompt_payload_str = build_batch_prompt(
+                            base_prompt,
+                            seed_records=seed_records,
+                            seed_offset=seed_offset,
+                            apply_seed_offset=_apply_seed_offset,
+                            normalize_model_paths=_normalize_prompt_model_paths,
+                        )
+                    except Exception as exc:
+                        log_debug(f"Failed to prepare prompt payload: {exc}", "WARNING")
+                        prompt_payload = copy.deepcopy(base_prompt)
+                        prompt_payload_str = ""
+                        normalized_paths = _normalize_prompt_model_paths(prompt_payload)
                     if normalized_paths:
                         log_debug(
                             f"Normalized {normalized_paths} model path value(s) after Nuke reload."
                         )
-                    prompt_payload_str = ""
-                    workflow_payload_str = ""
-                    try:
-                        prompt_payload_str = json.dumps(
-                            prompt_payload, separators=(",", ":"), ensure_ascii=True
-                        )
-                    except Exception as exc:
-                        log_debug(f"Failed to serialize prompt payload for PNG embed: {exc}", "WARNING")
-                    workflow_payload_str = ""
-
-                    debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{batch_index}.json').replace('\\', '/')
-                    try:
-                        os.makedirs(os.path.dirname(debug_file), exist_ok=True)
-                        with open(debug_file, 'w', encoding='utf-8') as df:
-                            json.dump(prompt_payload, df, indent=2)
-                        log_debug(f"Debug: Wrote prompt payload to {debug_file}")
-                    except Exception as de:
-                        log_debug(f"Debug: Failed to write payload file: {de}", "WARNING")
+                    if getattr(config, "DEBUG_MODE", False) or getattr(config, "DEBUG_STEP_TRACE", False):
+                        debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{batch_index}.json').replace('\\', '/')
+                        try:
+                            os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+                            with open(debug_file, 'w', encoding='utf-8') as df:
+                                json.dump(prompt_payload, df, indent=2)
+                            log_debug(f"Debug: Wrote prompt payload to {debug_file}")
+                        except Exception as de:
+                            log_debug(f"Debug: Failed to write payload file: {de}", "WARNING")
                     
                     update_progress(
                         _progress_for(batch_index, 0.0),
                         f'Submitting {batch_label.lower()}',
                     )
-                    prompt_id = comfy_client.submit_workflow(prompt_payload)
-                    if not prompt_id:
-                        save_hint = ''
-                        if converted_prompt_path:
-                            save_hint = f' (converted prompt saved to {converted_prompt_path})'
-                        log_debug(f'ComfyUI did not return a prompt id{save_hint}', 'ERROR')
-                        raise Exception(f'Failed to submit workflow{save_hint}')
+                    try:
+                        prompt_id = submit_prompt_or_raise(
+                            comfy_client,
+                            prompt_payload,
+                            converted_prompt_path=converted_prompt_path or '',
+                        )
+                    except Exception as exc:
+                        log_debug(f'ComfyUI did not return a prompt id: {exc}', 'ERROR')
+                        raise
                     trace_step("batch_submitted", batch=batch_index + 1, prompt_id=prompt_id)
 
                     try:
-                        node.knob('charon_prompt_id').setValue(prompt_id)
+                        run_on_main_thread_async(
+                            lambda: node.knob('charon_prompt_id').setValue(prompt_id)
+                        )
                     except Exception:
                         pass
 
@@ -4855,60 +4749,34 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                     pass
 
                                     def _is_mesh_entry(entry: Dict[str, Any]) -> bool:
-                                        output_kind = (entry.get('output_kind') or '').upper()
-                                        kind = (entry.get('comfy_output_kind') or '').lower()
-                                        path = entry.get('output_path') or ''
-                                        ext = os.path.splitext(str(path))[1].lower()
-                                        if ext in CAMERA_OUTPUT_EXTENSIONS:
-                                            return False
-                                        if output_kind == '3D':
-                                            return True
-                                        return kind == 'meshes' or ext in MODEL_OUTPUT_EXTENSIONS
+                                        return is_mesh_output_entry(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                        )
 
                                     def _is_image_entry(entry: Dict[str, Any]) -> bool:
-                                        if _is_mesh_entry(entry):
-                                            return False
-                                        output_kind = (entry.get('output_kind') or '').upper()
-                                        if output_kind == '2D':
-                                            return True
-                                        kind = (entry.get('comfy_output_kind') or '').lower()
-                                        if kind == 'images':
-                                            return True
-                                        path = entry.get('output_path') or ''
-                                        ext = os.path.splitext(str(path))[1].lower()
-                                        return ext in IMAGE_OUTPUT_EXTENSIONS
+                                        return is_image_output_entry(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                            image_extensions=IMAGE_OUTPUT_EXTENSIONS,
+                                        )
 
                                     def _is_camera_entry(entry: Dict[str, Any]) -> bool:
-                                        path = (
-                                            entry.get('output_path')
-                                            or entry.get('download_path')
-                                            or entry.get('original_filename')
-                                            or entry.get('extension')
-                                            or ''
+                                        return is_camera_output_entry(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
                                         )
-                                        ext = os.path.splitext(str(path))[1].lower()
-                                        return ext in CAMERA_OUTPUT_EXTENSIONS
 
                                     def _output_label(entry: Dict[str, Any], default_prefix: str = "Output") -> str:
-                                        ext_local = os.path.splitext(
-                                            entry.get('output_path')
-                                            or entry.get('download_path')
-                                            or entry.get('original_filename')
-                                            or ''
-                                        )[1].lower()
-                                        if ext_local in CAMERA_OUTPUT_EXTENSIONS:
-                                            return CAMERA_OUTPUT_LABEL
-                                        label = (
-                                            entry.get('comfy_node_class')
-                                            or entry.get('class_type')
-                                            or entry.get('original_filename')
-                                            or default_prefix
+                                        return output_entry_label(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            camera_label=CAMERA_OUTPUT_LABEL,
+                                            sanitize_name=_sanitize_name,
+                                            default_prefix=default_prefix,
                                         )
-                                        node_id_val = entry.get('comfy_node_id') or entry.get('node_id')
-                                        base = _sanitize_name(str(label), default_prefix)
-                                        if node_id_val:
-                                            base = f"{base}_{_sanitize_name(str(node_id_val), '')}"
-                                        return base
 
                                     parent_norm = _normalize_node_id(charon_node_id)
                                     if not parent_norm:
@@ -5932,6 +5800,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             else:
                 log_debug('Timed out waiting for result file.', 'WARNING')
                 trace_step("result_watcher_timeout", timeout_sec=watch_timeout)
+                update_progress(
+                    -1.0,
+                    'Error: timed out waiting for result file',
+                    error='Timed out waiting for result file.',
+                )
 
         watcher_thread = threading.Thread(target=result_watcher)
         watcher_thread.daemon = True
