@@ -6,11 +6,22 @@ import unittest
 from charon.processor_conversion import (
     load_cached_prompt_payload,
     resolve_cached_prompt,
+    resolve_existing_folder,
     write_converted_prompt_payload,
 )
 
 
 class ProcessorConversionTests(unittest.TestCase):
+    def test_resolves_existing_folder_from_file_or_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = os.path.join(tmp, "workflow.json")
+            with open(file_path, "w", encoding="utf-8") as handle:
+                handle.write("{}")
+
+            self.assertEqual(resolve_existing_folder(tmp), tmp)
+            self.assertEqual(resolve_existing_folder(file_path), tmp)
+            self.assertEqual(resolve_existing_folder(os.path.join(tmp, "missing.json")), tmp)
+
     @staticmethod
     def _is_api_prompt(payload):
         return isinstance(payload, dict) and bool(payload) and all(
@@ -63,6 +74,30 @@ class ProcessorConversionTests(unittest.TestCase):
             store_cache=lambda path, value: stores.append((path, value)),
             log_debug=lambda *_args: None,
         )
+
+        self.assertIsNone(resolution.payload)
+        self.assertEqual((resolution.path, resolution.workflow_hash), ("", ""))
+        self.assertEqual(stores, [("", "")])
+
+    def test_resolve_cached_prompt_rejects_source_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_path = os.path.join(tmp, "prompt.json")
+            with open(prompt_path, "w", encoding="utf-8") as handle:
+                json.dump({"9": {"class_type": "SaveImage"}}, handle)
+            stores = []
+
+            resolution = resolve_cached_prompt(
+                {"nodes": [{"id": 75, "type": "SaveVideo"}]},
+                workflow_hash="workflow-hash",
+                cached_path=prompt_path,
+                cached_hash="workflow-hash",
+                is_api_prompt=self._is_api_prompt,
+                validate_prompt=lambda _source, _prompt: (_ for _ in ()).throw(
+                    RuntimeError("source mismatch")
+                ),
+                store_cache=lambda path, value: stores.append((path, value)),
+                log_debug=lambda *_args: None,
+            )
 
         self.assertIsNone(resolution.payload)
         self.assertEqual((resolution.path, resolution.workflow_hash), ("", ""))

@@ -16,6 +16,13 @@ class CachedPromptResolution:
     workflow_hash: str
 
 
+def resolve_existing_folder(path_value: str) -> str:
+    if not path_value:
+        return ""
+    folder = path_value if os.path.isdir(path_value) else os.path.dirname(path_value)
+    return folder if folder and os.path.isdir(folder) else ""
+
+
 def resolve_cached_prompt(
     workflow_data: Dict[str, Any],
     *,
@@ -23,6 +30,7 @@ def resolve_cached_prompt(
     cached_path: str,
     cached_hash: str,
     is_api_prompt,
+    validate_prompt=None,
     store_cache,
     log_debug,
 ) -> CachedPromptResolution:
@@ -53,12 +61,17 @@ def resolve_cached_prompt(
                 with open(normalized_path, "r", encoding="utf-8") as cached_handle:
                     candidate = json.load(cached_handle)
                 if is_api_prompt(candidate):
+                    if validate_prompt is not None:
+                        validate_prompt(workflow_data, candidate)
                     payload = candidate
                     log_debug(f"Loaded cached API prompt from {normalized_path}")
                 else:
                     log_debug("Cached prompt is not API formatted; ignoring stored prompt", "WARNING")
             except Exception as exc:
                 log_debug(f"Failed to read cached prompt: {exc}", "WARNING")
+                store_cache("", "")
+                normalized_path = ""
+                normalized_hash = ""
         else:
             log_debug(f"Cached prompt path missing: {normalized_path}", "WARNING")
             store_cache("", "")

@@ -38,6 +38,45 @@ After linked-read repository and status-color adapter extraction: 139 tests
 passed; compile and diff checks passed. The processor coordinator is 3,183 lines
 with 13 direct closures remaining (down from 87 nested functions at evaluation).
 
+After Read/ReadGeo lifecycle and remaining context helper extraction: 148 tests
+passed; compile and diff checks passed. The processor coordinator is 2,864 lines
+with nine direct closures remaining.
+
+After status-controller, result-watcher protocol, grouped Read indexing, and
+placeholder cleanup extraction: 157 tests passed; compile and diff checks
+passed. The processor coordinator is 2,730 lines with eight direct closures
+remaining.
+
+After result cleanup/contact-sheet policy, upload-input assignment, and recursive
+completion extraction: 163 tests passed; compile and diff checks passed. The
+processor coordinator is 2,615 lines. The 829-line worker has no internal
+closures; output ingestion has only the inverse-view-transform transaction left
+as an internal closure.
+
+After browser-conversion startup and source-identity hardening: 167 tests passed;
+compile and diff checks passed. A live conversion of
+`mab/ltx_ff2v_static_camera/workflow.json` produced 54 API nodes, retained all
+four parameter IDs, and exported node `75` as `SaveVideo`.
+
+After repairing the output-label sanitizer wiring discovered in live Nuke
+ingestion: 168 tests passed; compile and diff checks passed. The deployed MP4
+completed successfully; the missing Read was traced to the retired
+`_sanitize_name` callback rather than output generation or media support.
+
+After restoring the extracted batch-navigation compatibility hook and making
+Read identity/anchor persistence independent of optional presentation
+callbacks: 170 tests passed; compile and diff checks passed. Live Nuke
+re-import loaded the deployed H.264 MP4 and displayed its thumbnail. The blank
+Read was caused by a `NameError` before file assignment; the same exception had
+also prevented the parent ID, link anchor, label, and lifecycle colors from
+being applied.
+
+After routing 2D Read assignments through Nuke's native `fromUserText` parser
+and restoring the built-in Read tab after Charon metadata controls are added:
+172 tests passed; compile and diff checks passed. This keeps movie frame ranges
+consistent with drag/drop imports and prevents the custom Charon Info tab from
+becoming the initial control-panel tab.
+
 Regression coverage now includes:
 
 - portable launcher, portable root, `ComfyUI/models`, and embedded Python path
@@ -70,6 +109,15 @@ Regression coverage now includes:
   one-warning host metadata writes
 - linked Read/ReadGeo lookup precedence, parent-target collection, and lifecycle
   color/metadata propagation
+- Read label/info rendering, link/unlink transactions, placeholder protection,
+  output-name sanitation, node-coordinate capture, and workflow-folder resolution
+- result-manifest readiness and schema checks, legacy/batched result
+  normalization, newest-entry import caps, grouped Read-node indexing, and
+  linked-placeholder removal
+- consumed-manifest cleanup with debug-file preservation, contact-sheet dispatch,
+  uploaded-input socket assignment, and recursive next-run/disabled behavior
+- browser-export source node/type identity, stale prompt-cache rejection, and
+  protection against ComfyUI startup overwriting a requested workflow
 
 ## Manual verification still required
 

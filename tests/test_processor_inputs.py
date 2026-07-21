@@ -1,6 +1,6 @@
 import unittest
 
-from charon.processor_inputs import coerce_crop_box, resolve_crop_settings
+from charon.processor_inputs import assign_uploaded_input, coerce_crop_box, resolve_crop_settings
 
 
 class _BoundingBox:
@@ -34,6 +34,22 @@ class _Node:
 
 
 class ProcessorInputTests(unittest.TestCase):
+    def test_assigns_uploaded_input_to_requested_or_compatible_socket(self):
+        workflow = {
+            "1": {"inputs": {"custom": "old", "image": "fallback"}},
+            "2": {"inputs": {"mask": "old"}},
+            "3": {"inputs": {}},
+        }
+
+        self.assertTrue(assign_uploaded_input(workflow, 1, "one.png", "custom"))
+        self.assertTrue(assign_uploaded_input(workflow, 2, "two.png"))
+        self.assertTrue(assign_uploaded_input(workflow, 3, "three.png"))
+        self.assertFalse(assign_uploaded_input(workflow, 4, "missing.png"))
+
+        self.assertEqual(workflow["1"]["inputs"]["custom"], "one.png")
+        self.assertEqual(workflow["2"]["inputs"]["mask"], "two.png")
+        self.assertEqual(workflow["3"]["inputs"]["image"], "three.png")
+
     def test_resolves_enabled_non_empty_crop(self):
         messages = []
 

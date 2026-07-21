@@ -15,6 +15,7 @@ from .model_upload_dialog import ModelUploadDialog
 from ..comfy_validation import _validate_models
 from ..paths import resolve_comfy_environment, get_default_comfy_launch_path
 from ..path_safety import is_path_inside
+from ..processor_read_nodes import assign_read_file
 
 
 class _ProgressDelegate(QtWidgets.QStyledItemDelegate):
@@ -583,7 +584,7 @@ class SceneNodesPanel(QtWidgets.QWidget):
         def create_read():
             try:
                 read_node = nuke.createNode("Read")
-                read_node["file"].setValue(normalized)
+                assign_read_file(read_node, normalized)
                 read_node.setXpos(info.node.xpos() + 200)
                 read_node.setYpos(info.node.ypos())
                 read_node.setSelected(True)

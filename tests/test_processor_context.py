@@ -1,6 +1,7 @@
 import unittest
 
 from charon.processor_context import (
+    capture_node_coordinates,
     capture_processor_run_context,
     resolve_batch_count,
     resolve_node_auto_import,
@@ -52,6 +53,9 @@ class _Nuke:
 
 
 class ProcessorContextTests(unittest.TestCase):
+    def test_captures_node_coordinates(self):
+        self.assertEqual(capture_node_coordinates(_Node()), (10, 20))
+
     def test_resolves_workflow_name_from_knob_then_path(self):
         named = _Node(
             {

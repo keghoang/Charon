@@ -8,6 +8,7 @@ import uuid
 import zlib
 import shutil
 import random
+from functools import partial
 from typing import Any, Dict, List, Optional, Tuple
 
 from .conversion_cache import (
@@ -25,6 +26,7 @@ from .paths import (
     resolve_comfy_environment,
 )
 from .workflow_runtime import convert_workflow as runtime_convert_workflow
+from .workflow_pipeline import validate_converted_workflow
 from .workflow_overrides import apply_validation_model_overrides
 from .workflow_local_store import get_local_workflow_folder
 from .path_safety import is_path_inside
@@ -36,13 +38,14 @@ from .nuke_threading import (
 )
 from .process_runner import ProcessExecutionError, run_subprocess
 from .processor_context import (
+    capture_node_coordinates,
     capture_processor_run_context,
     resolve_batch_count,
     resolve_node_auto_import,
     resolve_nuke_script_name,
     resolve_workflow_display_name,
 )
-from .processor_inputs import resolve_crop_settings
+from .processor_inputs import assign_uploaded_input, resolve_crop_settings
 from .processor_node_state import (
     LinkedOutputRepository,
     NodeMetadataWriter,
@@ -57,19 +60,26 @@ from .processor_node_state import (
 from .processor_conversion import (
     load_cached_prompt_payload,
     resolve_cached_prompt,
+    resolve_existing_folder,
     write_converted_prompt_payload,
 )
 from .processor_output import (
     allocate_result_manifest_path,
+    cleanup_result_handoff,
     collect_output_artifacts,
     is_camera_output_entry,
     is_ignored_output_path,
     is_image_output_entry,
     is_mesh_output_entry,
+    limit_output_entries,
     normalize_download_target,
     output_entry_label,
     progress_for_batch,
+    read_result_manifest,
+    resolve_result_entries,
+    run_auto_contact_sheet,
     resolve_local_output_candidate,
+    sanitize_output_name,
     write_result_manifest,
 )
 from .processor_recovery import (
@@ -81,13 +91,25 @@ from .processor_recovery import (
     resolve_batch_timeout,
     resolve_result_watch_timeout,
 )
+from .processor_read_nodes import (
+    assign_read_file,
+    batch_navigation_controls as ensure_batch_navigation_controls,
+    ensure_placeholder_read_node as ensure_import_placeholder,
+    index_grouped_read_nodes,
+    link_read_node,
+    remove_linked_placeholder_nodes,
+    set_output_label,
+    unlink_read_node as unlink_imported_read_node,
+    update_read_info,
+    update_read_label,
+)
 from .processor_prompt_cache import PromptCacheRepository
+from .processor_recursion import handle_recursive_completion
 from .processor_trace import create_execution_trace
 from .processor_status import (
+    ProcessorStatusController,
     StatusPayloadRepository,
     initialize_status_payload,
-    lifecycle_from_progress,
-    update_status_payload,
 )
 from .processor_submission import build_batch_prompt, submit_prompt_or_raise
 from .comfy_client import ComfyUIClient
@@ -958,9 +980,12 @@ def _batch_nav_command(step: int) -> str:
         "index_knob.setValue(idx)\n"
         "path = outputs[idx]\n"
         "try:\n"
-        "    node['file'].setValue(path)\n"
+        "    node['file'].fromUserText(str(path).replace('\\\\', '/'))\n"
         "except Exception:\n"
-        "    pass\n"
+        "    try:\n"
+        "        node['file'].setValue(path)\n"
+        "    except Exception:\n"
+        "        pass\n"
 "label_knob = node.knob('charon_batch_label')\n"
 "if label_knob is not None:\n"
 "    try:\n"
@@ -1277,7 +1302,7 @@ def _handle_recursive_updates(node, last_output):
             
             if read_node and 'file' in read_node.knobs():
                 log_debug(f"Updating Read node {read_name} with {last_output}")
-                read_node['file'].setValue(last_output)
+                assign_read_file(read_node, last_output)
                 final_source_node = read_node
                 
                 # ACES Handling
@@ -1533,9 +1558,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             charon_node_id,
             write_metadata=write_metadata,
         )
-        current_node_state = 'Ready'
-        last_status_color_state = current_node_state
-        last_status_color_time = 0.0
+        initial_node_state = "Ready"
 
         linked_outputs = LinkedOutputRepository(nuke, node, charon_node_id)
         iter_candidate_read_nodes = linked_outputs.iter_candidates
@@ -1570,387 +1593,95 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         if isinstance(initial_payload, dict):
             initial_state = initial_payload.get('state') or initial_payload.get('status')
             if initial_state:
-                current_node_state = initial_state
-        apply_status_color(current_node_state)
+                initial_node_state = initial_state
+        apply_status_color(initial_node_state)
+
+        status_controller = ProcessorStatusController(
+            node,
+            nuke,
+            status_repository,
+            run_id=current_run_id,
+            run_started_at=run_started_at,
+            resolve_auto_import=resolve_auto_import,
+            update_last_output=update_last_output,
+            apply_status_color=apply_status_color,
+            log_debug=log_debug,
+            initial_state=initial_node_state,
+        )
 
         def assign_read_label(read_node, label_text=None):
-            if read_node is None:
-                return
-            output_label = ""
-            try:
-                output_label = (read_node.metadata('charon/output_label') or "").strip()
-            except Exception:
-                output_label = ""
-            if not output_label:
-                try:
-                    knob_val = read_node.knob('charon_output_label')
-                    if knob_val:
-                        output_label = str(knob_val.value() or "").strip()
-                except Exception:
-                    output_label = ""
-            file_display = ""
-            try:
-                file_display = os.path.basename(str(read_node['file'].value() or "").strip())
-            except Exception:
-                file_display = ""
-            if label_text is None:
-                parts = []
-                if output_label:
-                    parts.append(f"Output: {output_label}")
-                if file_display:
-                    parts.append(f"File: {file_display}")
-                parent_text = read_node_parent_id(read_node) or 'N/A'
-                read_id_text = read_node_unique_id(read_node) or 'N/A'
-                parts.append(f"Charon Parent: {parent_text}")
-                parts.append(f"Read ID: {read_id_text}")
-                label_text = "\n".join(parts)
-        try:
-            label_knob = read_node['label']
-        except Exception:
-            label_knob = None
-        if label_knob is not None:
-            try:
-                label_knob.setValue(label_text or "")
-            except Exception:
-                pass
-
-        def ensure_batch_navigation_controls(read_node):
-            return None, None, None
+            update_read_label(
+                read_node,
+                parent_id=read_node_parent_id(read_node),
+                read_id=read_node_unique_id(read_node),
+                label_text=label_text,
+            )
 
         def ensure_read_node_info(read_node, read_id: str, state: Optional[str] = None):
-            if read_node is None:
-                return
-            try:
-                info_tab = read_node.knob('charon_info_tab')
-            except Exception:
-                info_tab = None
-            if info_tab is None:
-                try:
-                    info_tab = nuke.Tab_Knob('charon_info_tab', 'Charon Info')
-                    read_node.addKnob(info_tab)
-                except Exception:
-                    info_tab = None
-            try:
-                info_text = read_node.knob('charon_info_text')
-            except Exception:
-                info_text = None
-            if info_text is None and info_tab is not None:
-                try:
-                    info_text = nuke.Text_Knob('charon_info_text', 'Metadata', '')
-                    read_node.addKnob(info_text)
-                except Exception:
-                    info_text = None
-            parent_display = read_node_parent_id(read_node) or 'N/A'
-            status_display = state or current_node_state
-            color_hex = resolve_status_color_hex(status_display)
-            summary = [
-                f"Parent ID: {parent_display}",
-                f"Read Node ID: {read_id or 'N/A'}",
-            ]
-            summary.append(f"Status: {status_display or 'N/A'}")
-            if color_hex:
-                summary.append(f"Color: {color_hex.upper()}")
-            if info_text is not None:
-                try:
-                    info_text.setValue("\n".join(summary))
-                except Exception:
-                    pass
-            ensure_batch_navigation_controls(read_node)
+            status_display = state or status_controller.current_state
+            update_read_info(
+                nuke,
+                read_node,
+                parent_id=read_node_parent_id(read_node),
+                read_id=read_id,
+                state=status_display,
+                color_hex=resolve_status_color_hex(status_display),
+            )
 
         def mark_read_node(read_node):
-            nonlocal current_node_state
-            if read_node is None:
-                return
-            read_id = read_node_unique_id(read_node)
-            if not read_id:
-                read_id = uuid.uuid4().hex[:12].lower()
-            if charon_node_id:
-                try:
-                    read_node.setMetaData('charon/parent_id', charon_node_id)
-                except Exception:
-                    pass
-                try:
-                    parent_knob = read_node.knob('charon_parent_id')
-                except Exception:
-                    parent_knob = None
-                if parent_knob is None:
-                    try:
-                        parent_knob = nuke.String_Knob('charon_parent_id', 'Charon Parent ID', '')
-                        parent_knob.setFlag(nuke.NO_ANIMATION)
-                        parent_knob.setFlag(nuke.INVISIBLE)
-                        read_node.addKnob(parent_knob)
-                    except Exception:
-                        parent_knob = None
-                if parent_knob is not None:
-                    try:
-                        parent_knob.setValue(charon_node_id)
-                    except Exception:
-                        pass
-            try:
-                read_node.setMetaData('charon/read_id', read_id)
-            except Exception:
-                pass
-            try:
-                read_id_knob = read_node.knob('charon_read_id')
-            except Exception:
-                read_id_knob = None
-            if read_id_knob is None:
-                try:
-                    read_id_knob = nuke.String_Knob('charon_read_id', 'Charon Read ID', '')
-                    read_id_knob.setFlag(nuke.NO_ANIMATION)
-                    read_id_knob.setFlag(nuke.INVISIBLE)
-                    read_node.addKnob(read_id_knob)
-                except Exception:
-                    read_id_knob = None
-            if read_id_knob is not None:
-                try:
-                    read_id_knob.setValue(read_id)
-                except Exception:
-                    pass
-            ensure_read_node_info(read_node, read_id, current_node_state)
-            assign_read_label(read_node)
-            apply_status_color(current_node_state, read_node)
-
-            try:
-                read_anchor_knob = read_node.knob('charon_link_anchor')
-            except Exception:
-                read_anchor_knob = None
-            if read_anchor_knob is None:
-                try:
-                    read_anchor_knob = nuke.Double_Knob('charon_link_anchor', 'Charon Link Anchor')
-                    read_anchor_knob.setFlag(nuke.NO_ANIMATION)
-                    read_anchor_knob.setFlag(nuke.INVISIBLE)
-                    read_node.addKnob(read_anchor_knob)
-                except Exception:
-                    read_anchor_knob = None
-            if read_anchor_knob is not None:
-                try:
-                    read_anchor_knob.setExpression(f"{node.fullName()}.charon_link_anchor")
-                except Exception:
-                    try:
-                        read_anchor_knob.clearAnimated()
-                    except Exception:
-                        pass
-                    try:
-                        read_anchor_knob.setValue(link_anchor_value)
-                    except Exception:
-                        pass
-            try:
-                knob = node.knob('charon_read_node')
-                if knob is not None:
-                    knob.setValue(read_node.name())
-            except Exception:
-                pass
-            write_metadata('charon/read_node', read_node.name())
-            try:
-                read_id_knob = node.knob('charon_read_node_id')
-                if read_id_knob is not None:
-                    read_id_knob.setValue(read_id or "")
-            except Exception:
-                pass
-            write_metadata('charon/read_node_id', read_id or "")
-            _refresh_linked_read_info()
-            try:
-                recreate_knob = node.knob('charon_recreate_read')
-                if recreate_knob is not None:
-                    recreate_knob.setEnabled(True)
-            except Exception:
-                pass
-            try:
-                payload = load_status_payload()
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                if payload.get('read_node_id') != read_id:
-                    payload['read_node_id'] = read_id
-                    try:
-                        save_status_payload(payload)
-                    except Exception:
-                        pass
+            return link_read_node(
+                nuke,
+                node,
+                read_node,
+                parent_id=charon_node_id,
+                link_anchor_value=link_anchor_value,
+                current_state=status_controller.current_state,
+                write_metadata=write_metadata,
+                read_id_resolver=read_node_unique_id,
+                update_info=ensure_read_node_info,
+                update_label=assign_read_label,
+                apply_status=apply_status_color,
+                refresh_linked_info=lambda: refresh_linked_output_info(
+                    nuke,
+                    node,
+                    charon_node_id,
+                ),
+                load_status_payload=load_status_payload,
+                save_status_payload=save_status_payload,
+            )
 
         def unlink_read_node(read_node):
-            nonlocal current_node_state
-            if read_node is None:
-                return
-            try:
-                read_node.setMetaData('charon/parent_id', "")
-            except Exception:
-                pass
-            try:
-                read_node.setMetaData('charon/read_id', "")
-            except Exception:
-                pass
-            try:
-                parent_knob = read_node.knob('charon_parent_id')
-            except Exception:
-                parent_knob = None
-            if parent_knob is not None:
-                try:
-                    parent_knob.setValue("")
-                except Exception:
-                    pass
-            try:
-                read_id_knob = read_node.knob('charon_read_id')
-            except Exception:
-                read_id_knob = None
-            if read_id_knob is not None:
-                try:
-                    read_id_knob.setValue("")
-                except Exception:
-                    pass
-            try:
-                outputs_knob = read_node.knob('charon_batch_outputs')
-            except Exception:
-                outputs_knob = None
-            if outputs_knob is not None:
-                try:
-                    outputs_knob.setValue("")
-                except Exception:
-                    pass
-            try:
-                index_knob = read_node.knob('charon_batch_index')
-            except Exception:
-                index_knob = None
-            if index_knob is not None:
-                try:
-                    index_knob.setValue(0)
-                except Exception:
-                    pass
-            try:
-                label_knob = read_node.knob('charon_batch_label')
-            except Exception:
-                label_knob = None
-            if label_knob is not None:
-                try:
-                    label_knob.setValue('')
-                except Exception:
-                    pass
-            ensure_read_node_info(read_node, "", current_node_state)
-            assign_read_label(read_node, "")
-            try:
-                knob = node.knob('charon_read_node_id')
-                if knob is not None:
-                    knob.setValue("")
-            except Exception:
-                pass
-            write_metadata('charon/read_node_id', "")
-            _refresh_linked_read_info()
-            try:
-                name_knob = node.knob('charon_read_node')
-                if name_knob is not None:
-                    name_knob.setValue("")
-            except Exception:
-                pass
-            write_metadata('charon/read_node', "")
-            has_output_value = _safe_knob_value(node, 'charon_last_output')
-            if not has_output_value:
-                try:
-                    has_output_value = node.metadata('charon/last_output')
-                except Exception:
-                    has_output_value = ""
-            try:
-                recreate_knob = node.knob('charon_recreate_read')
-                if recreate_knob is not None:
-                    recreate_knob.setEnabled(bool(str(has_output_value or "").strip()))
-            except Exception:
-                pass
-            apply_status_color(current_node_state)
-            try:
-                anchor_knob = read_node.knob('charon_link_anchor')
-            except Exception:
-                anchor_knob = None
-            if anchor_knob is not None:
-                try:
-                    anchor_knob.clearAnimated()
-                except Exception:
-                    pass
-                try:
-                    anchor_knob.setValue(0.0)
-                except Exception:
-                    pass
-            try:
-                payload = load_status_payload()
-            except Exception:
-                payload = None
-            if isinstance(payload, dict) and payload.get('read_node_id'):
-                payload['read_node_id'] = ""
-                try:
-                    save_status_payload(payload)
-                except Exception:
-                    pass
-
-        def _sanitize_name(value: str, default: str = "Workflow") -> str:
-            text = (value or "").strip()
-            if not text:
-                text = default
-            sanitized = "".join(c if c.isalnum() or c in {"_", "-"} else "_" for c in text)
-            sanitized = sanitized.strip("_") or default
-            return sanitized[:64]
+            unlink_imported_read_node(
+                node,
+                read_node,
+                current_state=status_controller.current_state,
+                write_metadata=write_metadata,
+                update_info=ensure_read_node_info,
+                update_label=assign_read_label,
+                apply_status=apply_status_color,
+                refresh_linked_info=lambda: refresh_linked_output_info(
+                    nuke,
+                    node,
+                    charon_node_id,
+                ),
+                load_status_payload=load_status_payload,
+                save_status_payload=save_status_payload,
+            )
 
         workflow_display_name = resolve_workflow_display_name(node)
 
         def ensure_placeholder_read_node():
-            placeholder_path = get_placeholder_image_path()
-            if not placeholder_path or not charon_node_id:
-                return
-
-            placeholder_norm = placeholder_path.replace("\\", "/").lower()
-            existing_node = find_linked_read_node()
-
-            if existing_node is not None:
-                try:
-                    current_file = str(existing_node['file'].value() or "").strip()
-                except Exception:
-                    current_file = ""
-                current_norm = current_file.replace("\\", "/").lower()
-                if not current_norm or current_norm == placeholder_norm:
-                    try:
-                        existing_node['file'].setValue(placeholder_path.replace("\\", "/"))
-                        log_debug('Updated existing Read node with placeholder preview.')
-                    except Exception as assign_error:
-                        log_debug(f'Failed to assign placeholder to existing Read node: {assign_error}', 'WARNING')
-                else:
-                    log_debug('Existing Read node already has rendered output; skipping placeholder update.')
-                mark_read_node(existing_node)
-                return
-
-            creator_group = node.parent() or nuke.root()
-            try:
-                creator_group.begin()
-                read_node = nuke.createNode('Read', inpanel=False)
-            finally:
-                try:
-                    creator_group.end()
-                except Exception:
-                    pass
-
-            read_base = _sanitize_name(workflow_display_name, "Workflow")
-            target_read_name = f"CR2D_{read_base}"
-            try:
-                read_node.setName(target_read_name)
-            except Exception:
-                try:
-                    read_node.setName(f"CR2D_{read_base}_{charon_node_id}")
-                except Exception:
-                    try:
-                        read_node.setName("CR2D")
-                    except Exception:
-                        pass
-            try:
-                read_node['file'].setValue(placeholder_path.replace("\\", "/"))
-            except Exception as assign_error:
-                log_debug(f'Failed to assign placeholder file: {assign_error}', 'WARNING')
-            try:
-                read_node.setXpos(node.xpos())
-                read_node.setYpos(node.ypos() + 60)
-            except Exception:
-                pass
-            try:
-                read_node.setSelected(False)
-            except Exception:
-                pass
-            mark_read_node(read_node)
-            log_debug('Created placeholder Read node.')
+            ensure_import_placeholder(
+                nuke,
+                node,
+                parent_id=charon_node_id,
+                workflow_display_name=workflow_display_name,
+                placeholder_path=get_placeholder_image_path(),
+                find_linked_read=find_linked_read_node,
+                mark_read=mark_read_node,
+                sanitize_name=sanitize_output_name,
+                log_debug=log_debug,
+            )
 
         save_status_payload(
             initialize_status_payload(
@@ -2036,6 +1767,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             cached_path=cached_prompt_path,
             cached_hash=cached_prompt_hash,
             is_api_prompt=is_api_prompt,
+            validate_prompt=validate_converted_workflow,
             store_cache=store_cached_prompt,
             log_debug=log_debug,
         )
@@ -2082,14 +1814,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         except Exception:
             pass
 
-        def _resolve_existing_folder(path_value):
-            if not path_value:
-                return ''
-            folder_candidate = path_value if os.path.isdir(path_value) else os.path.dirname(path_value)
-            if folder_candidate and os.path.isdir(folder_candidate):
-                return folder_candidate
-            return ''
-
         source_candidates = [source_candidate]
         try:
             if meta_source_path and meta_source_path not in source_candidates:
@@ -2099,7 +1823,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         repo_root = os.path.abspath(config.WORKFLOW_REPOSITORY_ROOT)
         for source_path in source_candidates:
-            source_folder = _resolve_existing_folder(source_path)
+            source_folder = resolve_existing_folder(source_path)
             if not source_folder:
                 continue
             if is_path_inside(source_folder, repo_root):
@@ -2107,7 +1831,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 break
 
         for candidate in candidate_paths:
-            folder_candidate = _resolve_existing_folder(candidate)
+            folder_candidate = resolve_existing_folder(candidate)
             if folder_candidate:
                 workflow_cache_folder = folder_candidate
                 break
@@ -2315,87 +2039,12 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
         result_file = allocate_result_manifest_path(temp_root)
 
-        def update_progress(progress, status='Processing', error=None, extra=None):
-            nonlocal current_node_state, last_status_color_state, last_status_color_time
-            try:
-                numeric_progress = float(progress)
-            except Exception:
-                numeric_progress = 0.0
-            clamped_progress = max(-1.0, min(numeric_progress, 1.0))
-            if clamped_progress >= 0.999:
-                clamped_progress = 1.0
+        update_progress = status_controller.update
 
-            # Nuke node/metadata writes are not thread-safe from worker threads.
-            # Route progress updates back to the main thread.
-            if threading.current_thread() is not threading.main_thread():
-                safe_extra = dict(extra) if isinstance(extra, dict) else extra
-                try:
-                    nuke.executeInMainThread(
-                        lambda: update_progress(
-                            progress=clamped_progress,
-                            status=status,
-                            error=error,
-                            extra=safe_extra,
-                        )
-                    )
-                except Exception as dispatch_exc:
-                    try:
-                        log_debug(f'Failed to dispatch progress update to main thread: {dispatch_exc}', 'WARNING')
-                    except Exception:
-                        pass
-                return
-
-            try:
-                node.knob('charon_progress').setValue(clamped_progress)
-                node.knob('charon_status').setValue(status)
-            except Exception:
-                pass
-
-            lifecycle = lifecycle_from_progress(clamped_progress, status)
-
-            current_node_state = lifecycle
-            now_tick = time.time()
-            should_apply = lifecycle != last_status_color_state
-            if should_apply:
-                last_status_color_state = lifecycle
-                last_status_color_time = now_tick
-                apply_status_color(current_node_state)
-
-            payload = load_status_payload()
-            now = time.time()
-            auto_import_flag = resolve_auto_import()
-            if extra and isinstance(extra, dict):
-                if 'output_path' in extra:
-                    update_last_output(extra.get('output_path'))
-            if lifecycle == 'Error':
-                update_last_output(None)
-            payload = update_status_payload(
-                payload,
-                lifecycle=lifecycle,
-                message=status,
-                progress=clamped_progress,
-                run_id=current_run_id,
-                run_started_at=run_started_at,
-                auto_import=auto_import_flag,
-                extra=extra,
-                error=error,
-                now=now,
-            )
-
-            save_status_payload(payload)
-
-            log_debug(f'Updated progress: {clamped_progress:.1%} - {status}')
-
-        def _safe_node_coords():
-            """Return node x/y positions without raising if the node was deleted."""
-            def _capture():
-                try:
-                    return node.xpos(), node.ypos()
-                except Exception as exc:
-                    log_debug(f"Node position unavailable: {exc}", "WARNING")
-                    return 0, 0
-
-            return run_on_main_thread(_capture)
+        _safe_node_coords = lambda: capture_node_coordinates(
+            node,
+            log_warning=lambda message: log_debug(message, "WARNING"),
+        )
 
         def background_process():
             nonlocal batch_count
@@ -2434,6 +2083,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         trace_step("conversion_cache_hit", prompt_path=cache_hit.get("prompt_path", ""))
                         try:
                             prompt_data, converted_prompt_path = load_cached_prompt_payload(cache_hit)
+                            validate_converted_workflow(workflow_data, prompt_data)
                             conversion_extra.update({
                                 'converted_prompt_path': converted_prompt_path,
                                 'conversion_cached': True,
@@ -2628,26 +2278,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     update_progress(progress, f'Uploaded {len(uploaded_assets)}/{len(render_jobs)} images')
                     trace_step("input_upload_progress_updated", index=idx, progress=round(progress, 4))
 
-                def assign_to_node(target_node_id, filename, target_socket=None):
-                    node_key = str(target_node_id)
-                    node_entry = workflow_copy.get(node_key)
-                    if not isinstance(node_entry, dict):
-                        return
-                    inputs_dict = node_entry.setdefault('inputs', {})
-                    if not isinstance(inputs_dict, dict):
-                        return
-                    if target_socket and target_socket in inputs_dict:
-                        inputs_dict[target_socket] = filename
-                        return
-                    if 'image' in inputs_dict and not isinstance(inputs_dict.get('image'), list):
-                        inputs_dict['image'] = filename
-                    elif 'input' in inputs_dict and not isinstance(inputs_dict.get('input'), list):
-                        inputs_dict['input'] = filename
-                    elif 'mask' in inputs_dict and not isinstance(inputs_dict.get('mask'), list):
-                        inputs_dict['mask'] = filename
-                    else:
-                        inputs_dict['image'] = filename
-
                 if isinstance(input_mapping, list):
                     for job in render_jobs:
                         mapping = job.get('mapping', {})
@@ -2662,27 +2292,27 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             normalized = normalize_identifier(identifier)
                             target = set_targets.get(normalized)
                             if target:
-                                assign_to_node(target[0], uploaded_filename)
+                                assign_uploaded_input(workflow_copy, target[0], uploaded_filename)
                                 continue
                             if node_id is not None:
                                 set_entry = workflow_copy.get(str(node_id))
                                 if isinstance(set_entry, dict):
                                     for value in set_entry.get('inputs', {}).values():
                                         if isinstance(value, list) and len(value) >= 1:
-                                            assign_to_node(value[0], uploaded_filename)
+                                            assign_uploaded_input(workflow_copy, value[0], uploaded_filename)
                         elif node_id is not None:
-                            assign_to_node(node_id, uploaded_filename)
+                            assign_uploaded_input(workflow_copy, node_id, uploaded_filename)
                         else:
                             for target_id, target_data in workflow_copy.items():
                                 if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
-                                    assign_to_node(target_id, uploaded_filename)
+                                    assign_uploaded_input(workflow_copy, target_id, uploaded_filename)
                                     break
                 elif render_jobs:
                     filename = uploaded_assets.get(primary_index)
                     if filename:
                         for target_id, target_data in workflow_copy.items():
                             if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
-                                assign_to_node(target_id, filename)
+                                assign_uploaded_input(workflow_copy, target_id, filename)
                                 break
 
 
@@ -2696,9 +2326,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 download_retry_delay = float(getattr(config, "COMFY_DOWNLOAD_RETRY_DELAY_SEC", 0.75))
                 download_min_bytes = int(getattr(config, "COMFY_DOWNLOAD_MIN_BYTES", 1))
                 download_hard_timeout = float(getattr(config, "COMFY_DOWNLOAD_HARD_TIMEOUT_SEC", 90.0))
-
-                def _progress_for(batch_index: int, local: float) -> float:
-                    return progress_for_batch(batch_index, local, per_batch_progress)
 
                 for batch_index in range(batch_count):
                     trace_step("batch_started", batch=batch_index + 1, total=batch_count)
@@ -2732,7 +2359,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             log_debug(f"Debug: Failed to write payload file: {de}", "WARNING")
                     
                     update_progress(
-                        _progress_for(batch_index, 0.0),
+                        progress_for_batch(batch_index, 0.0, per_batch_progress),
                         f'Submitting {batch_label.lower()}',
                     )
                     try:
@@ -2762,7 +2389,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     poll_iteration = 0
                     next_poll_trace_at = start_time
                     update_progress(
-                        _progress_for(batch_index, 0.1),
+                        progress_for_batch(batch_index, 0.1, per_batch_progress),
                         f'{batch_label}: queued on ComfyUI',
                         extra={
                             'prompt_id': prompt_id,
@@ -2794,7 +2421,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 progress=float(progress_val or 0.0),
                             )
                             if progress_val > 0:
-                                mapped_progress = _progress_for(batch_index, 0.2 + (progress_val * 0.6))
+                                mapped_progress = progress_for_batch(
+                                    batch_index,
+                                    0.2 + (progress_val * 0.6),
+                                    per_batch_progress,
+                                )
                                 update_progress(
                                     mapped_progress,
                                     f'{batch_label}: processing',
@@ -2941,7 +2572,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         )
                                         artifact_progress = 0.8 + (0.2 * ((artifact_index + 1) / len(artifacts)))
                                         update_progress(
-                                            _progress_for(batch_index, artifact_progress),
+                                            progress_for_batch(
+                                                batch_index,
+                                                artifact_progress,
+                                                per_batch_progress,
+                                            ),
                                             f'{batch_label}: downloading result ({artifact_index + 1}/{len(artifacts)})',
                                             extra={
                                                 'prompt_id': prompt_id,
@@ -3185,7 +2820,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             'output_kind': last_entry.get('output_kind'),
                                         }
                                         update_progress(
-                                            _progress_for(batch_index, 1.0),
+                                            progress_for_batch(
+                                                batch_index,
+                                                1.0,
+                                                per_batch_progress,
+                                            ),
                                             f'{batch_label}: completed',
                                             extra=extra_payload,
                                         )
@@ -3354,39 +2993,17 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
             while time.time() - watch_start < watch_timeout:
                 if os.path.exists(result_file):
                     try:
-                        if os.path.getsize(result_file) == 0:
+                        result_data = read_result_manifest(result_file)
+                        if result_data is None:
                             time.sleep(0.2)
                             continue
-                    except Exception:
-                        time.sleep(0.2)
-                        continue
-                    try:
-                        with open(result_file, 'r') as fp:
-                            result_data = json.load(fp)
                         trace_step(
                             "result_file_detected",
                             success=int(bool(result_data.get("success"))),
                             result_file=result_file.replace("\\", "/"),
                         )
                         if result_data.get('success'):
-                            def cleanup_files():
-                                try:
-                                    if os.path.exists(result_file):
-                                        os.remove(result_file)
-                                except Exception as cleanup_error:
-                                    log_debug(f'Could not remove result file: {cleanup_error}', 'WARNING')
-                                try:
-                                    for temp_path in list(rendered_files.values()):
-                                        if os.path.exists(temp_path):
-                                            # os.remove(temp_path)
-                                            log_debug(f'Preserved temp file for debugging: {temp_path}')
-                                except Exception as cleanup_error:
-                                    log_debug(f'Could not clean up files: {cleanup_error}', 'WARNING')
-
-                            entries = result_data.get('outputs')
-                            if not isinstance(entries, list) or not entries:
-                                entries = [result_data]
-                            total_batches = result_data.get('batch_total') or len(entries)
+                            entries, total_batches = resolve_result_entries(result_data)
                             if 'node_x' in result_data and 'node_y' in result_data:
                                 node_x = result_data.get('node_x')
                                 node_y = result_data.get('node_y')
@@ -3404,13 +3021,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     max_auto_import_per_group = int(
                                         getattr(config, "AUTO_IMPORT_MAX_PER_GROUP", 120)
                                     )
-                                    limited_entries = list(entries)
-                                    if (
-                                        max_auto_import_outputs > 0
-                                        and len(limited_entries) > max_auto_import_outputs
-                                    ):
-                                        dropped = len(limited_entries) - max_auto_import_outputs
-                                        limited_entries = limited_entries[-max_auto_import_outputs:]
+                                    limited_entries, dropped = limit_output_entries(
+                                        entries,
+                                        max_auto_import_outputs,
+                                    )
+                                    if dropped:
                                         log_debug(
                                             f"Auto-import capped to last {max_auto_import_outputs} outputs "
                                             f"(dropped {dropped} older entries).",
@@ -3424,140 +3039,78 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     except Exception:
                                         reuse_existing = False
 
-                                    def _matches_parent(candidate):
-                                        normalized_parent = _normalize_node_id(charon_node_id)
-                                        if not normalized_parent:
-                                            return False
-                                        return _normalize_node_id(read_node_parent_id(candidate)) == normalized_parent
-
-                                    def _remove_mismatched_reads(required_class: str):
-                                        try:
-                                            candidates = list(nuke.allNodes("Read")) + list(nuke.allNodes("ReadGeo2"))
-                                        except Exception:
-                                            candidates = []
-                                        for candidate in candidates:
-                                            if not _matches_parent(candidate):
-                                                continue
-                                            try:
-                                                current_class = getattr(candidate, "Class", lambda: "")()
-                                            except Exception:
-                                                current_class = ""
-                                            if current_class and current_class != required_class:
-                                                try:
-                                                    nuke.delete(candidate)
-                                                    log_debug(f'Removed outdated CharonRead node ({current_class}) for 3D output.')
-                                                except Exception:
-                                                    pass
-
-                                    def _is_mesh_entry(entry: Dict[str, Any]) -> bool:
-                                        return is_mesh_output_entry(
-                                            entry,
-                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
-                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
-                                        )
-
-                                    def _is_image_entry(entry: Dict[str, Any]) -> bool:
-                                        return is_image_output_entry(
-                                            entry,
-                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
-                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
-                                            image_extensions=IMAGE_OUTPUT_EXTENSIONS,
-                                        )
-
-                                    def _is_camera_entry(entry: Dict[str, Any]) -> bool:
-                                        return is_camera_output_entry(
-                                            entry,
-                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
-                                        )
-
-                                    def _output_label(entry: Dict[str, Any], default_prefix: str = "Output") -> str:
-                                        return output_entry_label(
-                                            entry,
-                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
-                                            camera_label=CAMERA_OUTPUT_LABEL,
-                                            sanitize_name=_sanitize_name,
-                                            default_prefix=default_prefix,
-                                        )
-
                                     parent_norm = _normalize_node_id(charon_node_id)
                                     if not parent_norm:
                                         log_debug(
                                             "Charon node ID is missing; skipping auto-import to avoid orphaned read nodes.",
                                             "ERROR",
                                         )
-                                        cleanup_files()
+                                        cleanup_result_handoff(
+                                            result_file,
+                                            rendered_files.values(),
+                                            log_debug,
+                                        )
                                         return
 
-                                    grouped_candidates: Dict[str, Dict[str, Any]] = {"Read": {}, "ReadGeo2": {}}
-
-                                    def _index_grouped_reads(required_class: str):
+                                    grouped_candidates: Dict[str, Dict[str, Any]] = {}
+                                    for required_class in ("Read", "ReadGeo2"):
                                         try:
                                             candidates = list(nuke.allNodes(required_class))
                                         except Exception:
                                             candidates = []
-                                        label_map: Dict[str, Any] = {}
-                                        for candidate in candidates:
-                                            if not _matches_parent(candidate):
-                                                continue
-                                            try:
-                                                current_label = (candidate.metadata('charon/output_label') or "").strip().lower()
-                                            except Exception:
-                                                current_label = ""
-                                            if not current_label:
-                                                try:
-                                                    knob_val = candidate.knob('charon_output_label')
-                                                    if knob_val:
-                                                        current_label = str(knob_val.value() or "").strip().lower()
-                                                except Exception:
-                                                    current_label = ""
-                                            if current_label and current_label not in label_map:
-                                                label_map[current_label] = candidate
-                                        grouped_candidates[required_class] = label_map
+                                        grouped_candidates[required_class] = index_grouped_read_nodes(
+                                            candidates,
+                                            parent_id=charon_node_id,
+                                            parent_id_resolver=read_node_parent_id,
+                                            normalize_id=_normalize_node_id,
+                                        )
 
-                                    def _find_grouped_read(required_class: str, group_label: str):
-                                        class_map = grouped_candidates.get(required_class) or {}
-                                        return class_map.get((group_label or "").lower())
-
-                                    _index_grouped_reads("Read")
-                                    _index_grouped_reads("ReadGeo2")
-
-                                    placeholder_norm = ""
                                     try:
-                                        placeholder_norm = (get_placeholder_image_path() or "").replace("\\", "/").lower()
+                                        placeholder_path = get_placeholder_image_path() or ""
                                     except Exception:
-                                        placeholder_norm = ""
-                                    if placeholder_norm:
-                                        try:
-                                            candidates = list(iter_candidate_read_nodes())
-                                        except Exception:
-                                            candidates = []
-                                        for candidate in candidates:
-                                            if candidate is None:
-                                                continue
-                                            try:
-                                                parent_val = _normalize_node_id(read_node_parent_id(candidate))
-                                            except Exception:
-                                                parent_val = ""
-                                            if parent_val != parent_norm:
-                                                continue
-                                            try:
-                                                file_val = (candidate["file"].value() or "").strip()
-                                            except Exception:
-                                                file_val = ""
-                                            if file_val.replace("\\", "/").lower() == placeholder_norm:
-                                                try:
-                                                    unlink_read_node(candidate)
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    nuke.delete(candidate)
-                                                    log_debug("Removed placeholder CharonRead node before importing outputs.")
-                                                except Exception:
-                                                    pass
+                                        placeholder_path = ""
+                                    try:
+                                        candidates = list(iter_candidate_read_nodes())
+                                    except Exception:
+                                        candidates = []
+                                    remove_linked_placeholder_nodes(
+                                        nuke,
+                                        candidates,
+                                        parent_id=charon_node_id,
+                                        placeholder_path=placeholder_path,
+                                        parent_id_resolver=read_node_parent_id,
+                                        normalize_id=_normalize_node_id,
+                                        unlink_node=unlink_read_node,
+                                        log_debug=log_debug,
+                                    )
 
-                                    image_entries = [e for e in limited_entries if _is_image_entry(e)]
-                                    mesh_entries = [e for e in limited_entries if _is_mesh_entry(e)]
-                                    camera_entries = [e for e in limited_entries if _is_camera_entry(e)]
+                                    image_entries = [
+                                        entry
+                                        for entry in limited_entries
+                                        if is_image_output_entry(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                            image_extensions=IMAGE_OUTPUT_EXTENSIONS,
+                                        )
+                                    ]
+                                    mesh_entries = [
+                                        entry
+                                        for entry in limited_entries
+                                        if is_mesh_output_entry(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            model_extensions=MODEL_OUTPUT_EXTENSIONS,
+                                        )
+                                    ]
+                                    camera_entries = [
+                                        entry
+                                        for entry in limited_entries
+                                        if is_camera_output_entry(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                        )
+                                    ]
                                     trace_step(
                                         "mainthread_import_classified",
                                         image_entries=len(image_entries),
@@ -3567,7 +3120,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                                     if not image_entries and not mesh_entries and not camera_entries:
                                         log_debug('No output paths available for Read update.', 'WARNING')
-                                        cleanup_files()
+                                        cleanup_result_handoff(
+                                            result_file,
+                                            rendered_files.values(),
+                                            log_debug,
+                                        )
                                         log_debug(
                                             f"Output ingestion finished with no importable entries in "
                                             f"{time.time() - ingest_started_at:.2f}s."
@@ -3585,29 +3142,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             )
                                             if camera_path:
                                                 log_debug(f'Camera output stored at: {camera_path}')
-
-                                    def _ensure_output_label_metadata(read_node, label_text: str):
-                                        try:
-                                            read_node.setMetaData('charon/output_label', label_text or "")
-                                        except Exception:
-                                            pass
-                                        try:
-                                            label_knob = read_node.knob('charon_output_label')
-                                        except Exception:
-                                            label_knob = None
-                                        if label_knob is None:
-                                            try:
-                                                label_knob = nuke.String_Knob('charon_output_label', 'Charon Output Label', '')
-                                                label_knob.setFlag(nuke.NO_ANIMATION)
-                                                label_knob.setFlag(nuke.INVISIBLE)
-                                                read_node.addKnob(label_knob)
-                                            except Exception:
-                                                label_knob = None
-                                        if label_knob is not None:
-                                            try:
-                                                label_knob.setValue(label_text or "")
-                                            except Exception:
-                                                pass
 
                                     def _ensure_inverse_view_transform(read_node) -> None:
                                         outcome = "unknown"
@@ -3821,7 +3355,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
 
                                     grouped_images: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in image_entries:
-                                        label = _output_label(entry, "Output2D")
+                                        label = output_entry_label(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            camera_label=CAMERA_OUTPUT_LABEL,
+                                            sanitize_name=sanitize_output_name,
+                                            default_prefix="Output2D",
+                                        )
                                         grouped_images.setdefault(label, []).append(entry)
 
                                     x_offset_step = 140
@@ -3851,7 +3391,9 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         if not group_paths:
                                             continue
                                         required_class = "Read"
-                                        read_node = _find_grouped_read(required_class, label)
+                                        read_node = (grouped_candidates.get(required_class) or {}).get(
+                                            (label or "").lower()
+                                        )
                                         if read_node is None:
                                             try:
                                                 read_node = nuke.createNode(required_class)
@@ -3865,8 +3407,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             except Exception as create_error:
                                                 log_debug(f'Failed to create CharonRead2D node: {create_error}', 'ERROR')
                                                 continue
-                                            read_base = _sanitize_name(workflow_display_name, "Workflow")
-                                            label_base = _sanitize_name(label, "Output2D")
+                                            read_base = sanitize_output_name(workflow_display_name, "Workflow")
+                                            label_base = sanitize_output_name(label, "Output2D")
                                             try:
                                                 read_node.setName(f"CR2D_{read_base}_{label_base}")
                                             except Exception:
@@ -3896,7 +3438,17 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         except Exception:
                                             all_outputs_json = navigation_json
 
-                                        outputs_knob, index_knob, label_knob = ensure_batch_navigation_controls(read_node)
+                                        try:
+                                            outputs_knob, index_knob, label_knob = (
+                                                ensure_batch_navigation_controls(read_node)
+                                            )
+                                        except Exception as navigation_error:
+                                            log_debug(
+                                                f'Could not prepare optional batch controls for '
+                                                f'CharonRead2D ({label}): {navigation_error}',
+                                                'WARNING',
+                                            )
+                                            outputs_knob, index_knob, label_knob = None, None, None
                                         default_index = len(group_paths) - 1
                                         if reuse_existing and index_knob is not None:
                                             try:
@@ -3907,7 +3459,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 default_index = existing_index
 
                                         try:
-                                            read_node['file'].setValue(group_paths[default_index])
+                                            assign_read_file(read_node, group_paths[default_index])
                                         except Exception as assign_error:
                                             log_debug(f'Could not assign output path to CharonRead2D ({label}): {assign_error}', 'ERROR')
                                         if outputs_knob is not None:
@@ -3929,7 +3481,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         except Exception:
                                             pass
 
-                                        _ensure_output_label_metadata(read_node, label)
+                                        set_output_label(nuke, read_node, label)
                                         mark_read_node(read_node)
                                         try:
                                             trace_step("mainthread_ivt_check", read_node=read_node.name())
@@ -3952,14 +3504,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 pass
                                         grouped_candidates.setdefault(required_class, {})[label.lower()] = read_node
                                         try:
-                                            apply_status_color(current_node_state, read_node)
+                                            apply_status_color(status_controller.current_state, read_node)
                                         except Exception:
                                             pass
                                         layout_index += 1
 
                                     grouped_meshes: Dict[str, List[Dict[str, Any]]] = {}
                                     for entry in mesh_entries:
-                                        label = _output_label(entry, "Output3D")
+                                        label = output_entry_label(
+                                            entry,
+                                            camera_extensions=CAMERA_OUTPUT_EXTENSIONS,
+                                            camera_label=CAMERA_OUTPUT_LABEL,
+                                            sanitize_name=sanitize_output_name,
+                                            default_prefix="Output3D",
+                                        )
                                         grouped_meshes.setdefault(label, []).append(entry)
 
                                     # Align 3D and camera nodes horizontally with the same step
@@ -3988,7 +3546,9 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         if not group_paths:
                                             continue
                                         required_class = "ReadGeo2"
-                                        read_node = _find_grouped_read(required_class, label)
+                                        read_node = (grouped_candidates.get(required_class) or {}).get(
+                                            (label or "").lower()
+                                        )
                                         if read_node is None:
                                             try:
                                                 read_node = nuke.createNode(required_class)
@@ -4008,8 +3568,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             except Exception:
                                                 pass
                                         try:
-                                            read_base = _sanitize_name(workflow_display_name, "Workflow")
-                                            label_base = _sanitize_name(label, "Output3D")
+                                            read_base = sanitize_output_name(workflow_display_name, "Workflow")
+                                            label_base = sanitize_output_name(label, "Output3D")
                                             read_node.setName(f"CR3D_{read_base}_{label_base}")
                                         except Exception:
                                             try:
@@ -4096,13 +3656,17 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         except Exception:
                                             pass
                                         try:
-                                            ensure_read_node_info(read_node, read_id_mesh, current_node_state)
+                                            ensure_read_node_info(
+                                                read_node,
+                                                read_id_mesh,
+                                                status_controller.current_state,
+                                            )
                                         except Exception:
                                             pass
 
                                         try:
-                                            read_base = _sanitize_name(workflow_display_name, "Workflow")
-                                            label_base = _sanitize_name(label, "Output3D")
+                                            read_base = sanitize_output_name(workflow_display_name, "Workflow")
+                                            label_base = sanitize_output_name(label, "Output3D")
                                             read_node.setName(f"CR3D_{read_base}_{label_base}")
                                         except Exception:
                                             try:
@@ -4111,11 +3675,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 pass
 
                                         try:
-                                            color_value = status_to_tile_color(current_node_state)
+                                            color_value = status_to_tile_color(status_controller.current_state)
                                             read_node['tile_color'].setValue(color_value)
                                         except Exception:
                                             pass
-                                        mesh_gl_color = status_to_gl_color(current_node_state)
+                                        mesh_gl_color = status_to_gl_color(status_controller.current_state)
                                         if mesh_gl_color is not None:
                                             try:
                                                 read_node['gl_color'].setValue(mesh_gl_color)
@@ -4125,11 +3689,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 except Exception:
                                                     pass
                                         try:
-                                            apply_status_color(current_node_state, read_node)
+                                            apply_status_color(status_controller.current_state, read_node)
                                         except Exception:
                                             pass
                                         layout_index += 1
-                                        _ensure_output_label_metadata(read_node, label)
+                                        set_output_label(nuke, read_node, label)
                                         try:
                                             read_node.setMetaData('charon/batch_outputs', navigation_json)
                                         except Exception:
@@ -4293,7 +3857,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                         pass
                                                 try:
                                                     camera_folder = os.path.basename(os.path.dirname(camera_path_norm)) or ""
-                                                    camera_label = _sanitize_name(camera_folder, 'Cam')
+                                                    camera_label = sanitize_output_name(camera_folder, 'Cam')
                                                     cam_node.setName(f"CRCAM_{camera_label}")
                                                 except Exception:
                                                     try:
@@ -4321,7 +3885,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         "mainthread_import_completed",
                                         duration_sec=f"{time.time() - ingest_started_at:.2f}",
                                     )
-                                    cleanup_files()
+                                    cleanup_result_handoff(
+                                        result_file,
+                                        rendered_files.values(),
+                                        log_debug,
+                                    )
                                     trace_step("mainthread_import_cleanup_done")
 
                                 trace_step("mainthread_import_dispatch")
@@ -4332,144 +3900,41 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 )
                                 trace_step("mainthread_import_returned")
 
-                                def check_auto_contact_sheet():
-                                    trace_step("mainthread_contact_sheet_enter")
-                                    auto_contact_sheet = bool(
-                                        getattr(config, "AUTO_CREATE_CONTACT_SHEET", False)
-                                    )
-                                    if not auto_contact_sheet:
-                                        log_debug(
-                                            "Auto contact-sheet creation is disabled; skipping."
-                                        )
-                                        trace_step("mainthread_contact_sheet_skipped")
-                                        return
-                                    try:
-                                        if entries:
-                                            write_metadata('charon/batch_outputs', json.dumps(entries))
-                                    except Exception as meta_err:
-                                        log_debug(f"Failed to write batch outputs metadata: {meta_err}", "WARNING")
-
-                                    try:
-                                        create_contact_sheet_from_charonop(node)
-                                    except Exception as cs_err:
-                                        log_debug(f"Contact Sheet creation failed: {cs_err}", "WARNING")
-                                        trace_step("mainthread_contact_sheet_error", error=str(cs_err))
-                                    else:
-                                        trace_step("mainthread_contact_sheet_completed")
-
                                 trace_step("mainthread_contact_sheet_dispatch")
                                 run_on_nuke_main_thread_blocking(
-                                    check_auto_contact_sheet,
+                                    partial(
+                                        run_auto_contact_sheet,
+                                        node,
+                                        entries,
+                                        enabled=bool(
+                                            getattr(config, "AUTO_CREATE_CONTACT_SHEET", False)
+                                        ),
+                                        write_metadata=write_metadata,
+                                        create_contact_sheet=create_contact_sheet_from_charonop,
+                                        log_debug=log_debug,
+                                        trace_step=trace_step,
+                                    ),
                                     nuke_module=nuke,
                                     label="check_auto_contact_sheet",
                                 )
                                 trace_step("mainthread_contact_sheet_returned")
 
-                                def handle_recursion():
-                                    trace_step("mainthread_recursion_enter")
-                                    try:
-                                        is_recursive = bool(node.knob('charon_recursive_enable').value())
-                                        iterations = int(node.knob('charon_recursive_iterations').value())
-                                        current = int(node.knob('charon_recursive_current').value())
-                                        
-                                        if is_recursive and current < iterations - 1:
-                                            last_output = result_data.get('output_path')
-                                            log_debug(f"Recursive Mode: Iteration {current + 1}/{iterations} finished. Starting next...")
-                                            _handle_recursive_updates(node, last_output)
-                                            
-                                            # Short wait to allow Nuke to refresh the graph
-                                            time.sleep(2.0)
-                                            
-                                            # Trigger next iteration
-                                            process_charonop_node(is_recursive_call=True, node_override=node)
-                                        elif is_recursive:
-                                            log_debug("Recursive Mode: All iterations completed.")
-                                            try:
-                                                # Cleanup Recursive Nodes & Reset Attribute
-                                                loop_start = node.knob('charon_recursive_loop_start').value()
-                                                if loop_start:
-                                                    read_name = 'Read_Recursive_' + loop_start
-                                                    read_node = nuke.toNode(read_name)
-                                                    start_node = nuke.toNode(loop_start)
-                                                    
-                                                    if read_node and start_node:
-                                                        final_source_node = read_node
-                                                        ivt_node = None
-                                                        
-                                                        # Identify IVT
-                                                        deps = read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True)
-                                                        for d in deps:
-                                                            if "InverseViewTransform" in d.name():
-                                                                ivt_node = d
-                                                                final_source_node = ivt_node
-                                                                break
-                                                        
-                                                        # Collect all dependents of Read and IVT
-                                                        restore_candidates = list(read_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True))
-                                                        if ivt_node:
-                                                            restore_candidates.extend(ivt_node.dependent(nuke.INPUTS | nuke.HIDDEN_INPUTS, forceEvaluate=True))
-                                                        
-                                                        restore_candidates = list(set(restore_candidates))
-                                                        
-                                                        for dep in restore_candidates:
-                                                            if dep == ivt_node: continue
-                                                            for i in range(dep.inputs()):
-                                                                inp = dep.input(i)
-                                                                if inp == final_source_node or inp == read_node:
-                                                                    dep.setInput(i, start_node)
-                                                        
-                                                        # Reconnect CharonOp inputs
-                                                        for i in range(node.inputs()):
-                                                            inp = node.input(i)
-                                                            if inp == final_source_node or inp == read_node:
-                                                                node.setInput(i, start_node)
-
-                                                        # Delete nodes
-                                                        if ivt_node:
-                                                            nuke.delete(ivt_node)
-                                                        nuke.delete(read_node)
-                                                
-                                                # Reset Attribute
-                                                try:
-                                                    store_knob = node.knob('charon_recursive_attr_start')
-                                                    attr_start = store_knob.value() if store_knob else None
-                                                    
-                                                    if attr_start is not None and attr_start != "":
-                                                        attr_name = node.knob('charon_recursive_attribute').value()
-                                                        if attr_name:
-                                                            target_knob = None
-                                                            if '.' in attr_name:
-                                                                parts = attr_name.split('.', 1)
-                                                                tn = nuke.toNode(parts[0])
-                                                                if tn and parts[1] in tn.knobs():
-                                                                    target_knob = tn[parts[1]]
-                                                            elif attr_name in node.knobs():
-                                                                target_knob = node[attr_name]
-                                                            
-                                                            if target_knob:
-                                                                val = attr_start
-                                                                try:
-                                                                    if '.' in val: val = float(val)
-                                                                    else: val = int(val)
-                                                                except: pass
-                                                                target_knob.setValue(val)
-                                                except Exception as attr_err:
-                                                    log_debug(f"Failed to reset attribute: {attr_err}", "WARNING")
-
-                                                node.knob('charon_recursive_current').setValue(0)
-                                            except Exception as cleanup_err:
-                                                log_debug(f"Cleanup failed: {cleanup_err}", "ERROR")
-                                    except Exception as rec_err:
-                                        import traceback
-                                        traceback.print_exc()
-                                        log_debug(f"Recursive trigger failed: {rec_err}", "WARNING")
-                                        trace_step("mainthread_recursion_error", error=str(rec_err))
-                                    else:
-                                        trace_step("mainthread_recursion_completed")
-
                                 trace_step("mainthread_recursion_dispatch")
                                 run_on_nuke_main_thread_blocking(
-                                    handle_recursion,
+                                    partial(
+                                        handle_recursive_completion,
+                                        nuke,
+                                        node,
+                                        result_data,
+                                        update_recursive_inputs=_handle_recursive_updates,
+                                        process_next=partial(
+                                            process_charonop_node,
+                                            is_recursive_call=True,
+                                            node_override=node,
+                                        ),
+                                        log_debug=log_debug,
+                                        trace_step=trace_step,
+                                    ),
                                     nuke_module=nuke,
                                     label="handle_recursion",
                                 )
@@ -4486,7 +3951,11 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     write_metadata('charon/batch_outputs', json.dumps(entries))
                                 except Exception:
                                     pass
-                                cleanup_files()
+                                cleanup_result_handoff(
+                                    result_file,
+                                    rendered_files.values(),
+                                    log_debug,
+                                )
                                 trace_step("cleanup_done_no_auto_import")
                         else:
                             error_msg = result_data.get('error', 'Unknown error')
@@ -4912,7 +4381,7 @@ def _create_generic_result_group(charon_node, image_paths, columns_override=None
     
     for i, path in enumerate(image_paths):
         r = nuke.createNode("Read")
-        r['file'].setValue(path.replace('\\', '/'))
+        assign_read_file(r, path)
         r['on_error'].setValue("nearest frame")
         r.setXYpos(i * 150, -300) # Spacing adjustment
         

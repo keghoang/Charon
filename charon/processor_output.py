@@ -39,6 +39,95 @@ def write_result_manifest(path: str, payload: Dict[str, Any]) -> None:
             pass
 
 
+def read_result_manifest(path: str) -> Optional[Dict[str, Any]]:
+    """Read a published processor result, or return ``None`` until it is ready."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("Processor result manifest must contain a JSON object.")
+    return payload
+
+
+def resolve_result_entries(payload: Dict[str, Any]) -> Tuple[List[Any], Any]:
+    """Normalize legacy single-output and current batched result manifests."""
+    entries = payload.get("outputs")
+    if not isinstance(entries, list) or not entries:
+        entries = [payload]
+    total_batches = payload.get("batch_total") or len(entries)
+    return entries, total_batches
+
+
+def limit_output_entries(entries: Iterable[Any], maximum: int) -> Tuple[List[Any], int]:
+    """Keep the newest import entries and report how many older entries were dropped."""
+    limited = list(entries)
+    if maximum <= 0 or len(limited) <= maximum:
+        return limited, 0
+    dropped = len(limited) - maximum
+    return limited[-maximum:], dropped
+
+
+def cleanup_result_handoff(
+    result_path: str,
+    rendered_paths: Iterable[str],
+    log_debug: Callable,
+) -> None:
+    """Remove a consumed result manifest while retaining rendered debug inputs."""
+    try:
+        if os.path.exists(result_path):
+            os.remove(result_path)
+    except Exception as exc:
+        log_debug(f"Could not remove result file: {exc}", "WARNING")
+    try:
+        for temp_path in list(rendered_paths):
+            if os.path.exists(temp_path):
+                log_debug(f"Preserved temp file for debugging: {temp_path}")
+    except Exception as exc:
+        log_debug(f"Could not clean up files: {exc}", "WARNING")
+
+
+def run_auto_contact_sheet(
+    source_node,
+    entries: Iterable[Any],
+    *,
+    enabled: bool,
+    write_metadata: Callable,
+    create_contact_sheet: Callable,
+    log_debug: Callable,
+    trace_step: Callable,
+) -> bool:
+    """Persist batch outputs and optionally create their Nuke contact sheet."""
+    trace_step("mainthread_contact_sheet_enter")
+    if not enabled:
+        log_debug("Auto contact-sheet creation is disabled; skipping.")
+        trace_step("mainthread_contact_sheet_skipped")
+        return False
+    entry_list = list(entries)
+    if entry_list:
+        try:
+            write_metadata("charon/batch_outputs", json.dumps(entry_list))
+        except Exception as exc:
+            log_debug(f"Failed to write batch outputs metadata: {exc}", "WARNING")
+    try:
+        create_contact_sheet(source_node)
+    except Exception as exc:
+        log_debug(f"Contact Sheet creation failed: {exc}", "WARNING")
+        trace_step("mainthread_contact_sheet_error", error=str(exc))
+        return False
+    trace_step("mainthread_contact_sheet_completed")
+    return True
+
+
+def sanitize_output_name(value: str, default: str = "Workflow") -> str:
+    text = (value or "").strip() or default
+    sanitized = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "_"
+        for character in text
+    )
+    return (sanitized.strip("_") or default)[:64]
+
+
 def is_ignored_output_path(path: Optional[str], ignore_prefix: str) -> bool:
     """Return whether a generated file should be skipped by Charon output import."""
     if not path:

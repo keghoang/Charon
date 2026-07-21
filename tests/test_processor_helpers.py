@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from charon.processor_output import (
     collect_output_artifacts,
@@ -12,6 +13,7 @@ from charon.processor_output import (
     resolve_local_output_candidate,
 )
 from charon.processor_status import (
+    ProcessorStatusController,
     StatusPayloadRepository,
     initialize_status_payload,
     lifecycle_from_progress,
@@ -41,6 +43,56 @@ class _StatusNode:
 
 
 class ProcessorHelperTests(unittest.TestCase):
+    def test_processor_has_no_retired_output_sanitizer_reference(self):
+        processor_source = (
+            Path(__file__).resolve().parents[1] / "charon" / "processor.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("_sanitize_name", processor_source)
+
+    def test_status_controller_updates_node_payload_and_output(self):
+        node = _StatusNode()
+        node.knob = lambda name: {
+            "charon_progress": _ValueKnob(),
+            "charon_status": _ValueKnob(),
+        }.get(name)
+        repository_payloads = []
+
+        class Repository:
+            @staticmethod
+            def load():
+                return {}
+
+            @staticmethod
+            def save(payload):
+                repository_payloads.append(payload)
+
+        outputs = []
+        colors = []
+        controller = ProcessorStatusController(
+            node,
+            object(),
+            Repository(),
+            run_id="run-1",
+            run_started_at=10.0,
+            resolve_auto_import=lambda: True,
+            update_last_output=outputs.append,
+            apply_status_color=colors.append,
+            log_debug=lambda *_args: None,
+        )
+
+        lifecycle = controller.update(
+            1.0,
+            "Completed",
+            extra={"output_path": "result.png"},
+        )
+
+        self.assertEqual(lifecycle, "Completed")
+        self.assertEqual(controller.current_state, "Completed")
+        self.assertEqual(outputs, ["result.png"])
+        self.assertEqual(colors, ["Completed"])
+        self.assertEqual(repository_payloads[0]["state"], "Completed")
+
     def test_initialize_status_payload_retains_history(self):
         payload = initialize_status_payload(
             {"runs": [{"id": "prior"}]},

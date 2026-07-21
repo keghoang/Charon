@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Optional
 from ..qt_compat import QtWidgets, QtCore, QtGui
 from .. import scene_nodes_runtime as runtime
 from ..charon_logger import system_warning
+from ..processor_read_nodes import assign_read_file
 
 # Import config with fallback
 try:
@@ -497,7 +498,7 @@ class TinyModeWidget(QtWidgets.QWidget):
         def create_read():
             try:
                 read_node = nuke.createNode("Read")
-                read_node["file"].setValue(normalized)
+                assign_read_file(read_node, normalized)
                 if getattr(info, "node", None):
                     read_node.setXpos(info.node.xpos() + 200)
                     read_node.setYpos(info.node.ypos())

@@ -56,6 +56,8 @@ charon/
 |-- processor_node_state.py
 |-- processor_output.py
 |-- processor_prompt_cache.py
+|-- processor_read_nodes.py
+|-- processor_recursion.py
 |-- processor_recovery.py
 |-- processor_status.py
 |-- processor_submission.py
@@ -132,6 +134,11 @@ Notes:
   Ordered processor diagnostics and trace-file placement.
 - `processor_node_state.py`
   Node identity access plus linked-output discovery, migration, and anchor repair.
+- `processor_read_nodes.py`
+  Read/ReadGeo labels, grouping, info controls, link/unlink state, and placeholder
+  handling.
+- `processor_recursion.py`
+  Recursive iteration dispatch and final Nuke graph/attribute restoration.
 - `processor_prompt_cache.py`
   Node-backed converted-prompt path and workflow-hash persistence.
 - `background_jobs.py`

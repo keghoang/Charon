@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import json
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -58,6 +59,93 @@ class StatusPayloadRepository:
             runs = []
         payload["runs"] = runs
         return runs
+
+
+class ProcessorStatusController:
+    """Own progress dispatch, lifecycle state, colors, and durable status updates."""
+
+    def __init__(
+        self,
+        node,
+        nuke_module,
+        repository: StatusPayloadRepository,
+        *,
+        run_id: str,
+        run_started_at: float,
+        resolve_auto_import,
+        update_last_output,
+        apply_status_color,
+        log_debug,
+        initial_state: str = "Ready",
+    ) -> None:
+        self._node = node
+        self._nuke = nuke_module
+        self._repository = repository
+        self._run_id = run_id
+        self._run_started_at = run_started_at
+        self._resolve_auto_import = resolve_auto_import
+        self._update_last_output = update_last_output
+        self._apply_status_color = apply_status_color
+        self._log_debug = log_debug
+        self.current_state = initial_state
+        self._last_color_state = initial_state
+
+    def update(self, progress, status="Processing", error=None, extra=None) -> str:
+        try:
+            numeric_progress = float(progress)
+        except Exception:
+            numeric_progress = 0.0
+        clamped_progress = max(-1.0, min(numeric_progress, 1.0))
+        if clamped_progress >= 0.999:
+            clamped_progress = 1.0
+
+        if threading.current_thread() is not threading.main_thread():
+            safe_extra = dict(extra) if isinstance(extra, dict) else extra
+            try:
+                self._nuke.executeInMainThread(
+                    lambda: self.update(clamped_progress, status, error, safe_extra)
+                )
+            except Exception as exc:
+                try:
+                    self._log_debug(
+                        f"Failed to dispatch progress update to main thread: {exc}",
+                        "WARNING",
+                    )
+                except Exception:
+                    pass
+            return self.current_state
+
+        try:
+            self._node.knob("charon_progress").setValue(clamped_progress)
+            self._node.knob("charon_status").setValue(status)
+        except Exception:
+            pass
+
+        lifecycle = lifecycle_from_progress(clamped_progress, status)
+        self.current_state = lifecycle
+        if lifecycle != self._last_color_state:
+            self._last_color_state = lifecycle
+            self._apply_status_color(lifecycle)
+
+        payload = self._repository.load()
+        if isinstance(extra, dict) and "output_path" in extra:
+            self._update_last_output(extra.get("output_path"))
+        if lifecycle == "Error":
+            self._update_last_output(None)
+        payload = update_status_payload(
+            payload,
+            lifecycle=lifecycle,
+            message=status,
+            progress=clamped_progress,
+            run_id=self._run_id,
+            run_started_at=self._run_started_at,
+            auto_import=self._resolve_auto_import(),
+            extra=extra,
+            error=error,
+        )
+        self._repository.save(payload)
+        self._log_debug(f"Updated progress: {clamped_progress:.1%} - {status}")
+        return lifecycle
 
 
 def initialize_status_payload(

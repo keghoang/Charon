@@ -109,6 +109,26 @@ async def export_workflow(playwright, workflow_path: Path, output_path: Path) ->
             "Object.keys(window.LiteGraph.registered_node_types).length > 0",
             timeout=240000,
         )
+        # ComfyUI exposes app.graph before extension setup and its default workflow
+        # restoration have completed. Loading during that window is silently
+        # overwritten by the startup workflow a few moments later.
+        await page.wait_for_timeout(5000)
+        await page.wait_for_function(
+            """() => {
+              const types = window.LiteGraph?.registered_node_types || {};
+              const graph = window.comfyAPI?.app?.app?.graph;
+              const signature = `${Object.keys(types).length}:${graph?._nodes?.length ?? -1}`;
+              const now = Date.now();
+              const state = window.__charonFrontendSettle;
+              if (!state || state.signature !== signature) {
+                window.__charonFrontendSettle = { signature, since: now };
+                return false;
+              }
+              return Object.keys(types).length > 0 && now - state.since >= 2000;
+            }""",
+            timeout=120000,
+            polling=250,
+        )
 
         with open(workflow_path, "r", encoding="utf-8") as handle:
             workflow_json = json.load(handle)
@@ -116,9 +136,45 @@ async def export_workflow(playwright, workflow_path: Path, output_path: Path) ->
         prompt = await page.evaluate(
             """async ({ workflow }) => {
               const app = window.comfyAPI.app.app;
-              await app.loadGraphData(workflow, true);
-              const res = await app.graphToPrompt(app.graph);
-              return res.output;
+              const expectedNodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+              const expected = new Map(
+                expectedNodes
+                  .filter((node) => node && node.id !== undefined && node.id !== null)
+                  .map((node) => [String(node.id), String(node.type || "")])
+              );
+              if (!expected.size) {
+                throw new Error("Requested workflow contains no graph nodes");
+              }
+              app.graph.clear();
+              const loadResult = app.loadGraphData(workflow, true);
+              if (loadResult && typeof loadResult.then === "function") {
+                await loadResult;
+              }
+              const deadline = Date.now() + 60000;
+              let mismatch = "graph did not load";
+              while (Date.now() < deadline) {
+                const graphNodes = Array.isArray(app.graph?._nodes) ? app.graph._nodes : [];
+                const actual = new Map(
+                  graphNodes.map((node) => [String(node.id), String(node.type || "")])
+                );
+                const missing = [];
+                const wrongTypes = [];
+                for (const [id, type] of expected) {
+                  if (!actual.has(id)) missing.push(id);
+                  else if (type && actual.get(id) !== type) wrongTypes.push(id);
+                }
+                if (!missing.length && !wrongTypes.length && actual.size === expected.size) {
+                  await new Promise((resolve) => requestAnimationFrame(resolve));
+                  await new Promise((resolve) => requestAnimationFrame(resolve));
+                  const res = await app.graphToPrompt(app.graph);
+                  return res.output;
+                }
+                mismatch = `missing=${missing.slice(0, 8).join(",")} ` +
+                  `wrongTypes=${wrongTypes.slice(0, 8).join(",")} ` +
+                  `expected=${expected.size} actual=${actual.size}`;
+                await new Promise((resolve) => setTimeout(resolve, 100));
+              }
+              throw new Error(`Loaded graph did not match requested workflow: ${mismatch}`);
             }""",
             {"workflow": workflow_json},
         )

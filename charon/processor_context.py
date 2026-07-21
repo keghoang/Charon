@@ -15,6 +15,22 @@ class ProcessorRunContext:
     parameter_values: Dict[str, Any]
 
 
+def capture_node_coordinates(
+    node,
+    *,
+    log_warning: Optional[Callable[[str], None]] = None,
+) -> tuple[int, int]:
+    def _capture() -> tuple[int, int]:
+        try:
+            return int(node.xpos()), int(node.ypos())
+        except Exception as exc:
+            if log_warning:
+                log_warning(f"Node position unavailable: {exc}")
+            return 0, 0
+
+    return run_on_main_thread(_capture)
+
+
 def resolve_node_auto_import(node) -> bool:
     """Resolve auto-import from the node knob, then metadata, defaulting on."""
     def _resolve() -> bool:

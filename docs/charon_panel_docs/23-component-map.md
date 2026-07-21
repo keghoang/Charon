@@ -64,13 +64,19 @@ submit, monitor, retrieve, import, and finalize.
 - `processor_node_state.py`: host metadata writes; node identity initialization,
   deduplication, and migration; linked-output lookup, anchor repair, and status
   color propagation
+- `processor_read_nodes.py`: Read/ReadGeo labels and info controls, grouped-node
+  indexing, and link, unlink, placeholder creation, and placeholder removal
+  transactions
+- `processor_recursion.py`: recursive next-run dispatch plus final Nuke graph and
+  attribute restoration
 - `processor_conversion.py`: typed cache resolution and converted-prompt file
   serialization
 - `processor_prompt_cache.py`: node-backed converted-prompt path/hash persistence
 - `processor_submission.py`: per-batch prompt construction and submission
 - `processor_status.py`: lifecycle transitions and node-backed status repository
-- `processor_output.py`: result-manifest allocation/atomic publication plus
-  output collection and classification
+- `processor_output.py`: result-manifest allocation, atomic publication,
+  readiness/schema checks, batch normalization, import caps, output collection,
+  classification, cleanup, and contact-sheet dispatch
 - `processor_recovery.py`: queue-aware timeouts, bounded downloads, history
   reuse, and local output recovery
 - `processor_inputs.py`: crop and input-value normalization

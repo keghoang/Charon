@@ -23,6 +23,46 @@ def _is_api_workflow(ui_workflow) -> bool:
     )
 
 
+def validate_converted_workflow(ui_workflow, converted_workflow) -> None:
+    """Reject browser exports that do not originate from the requested UI graph."""
+    if not isinstance(converted_workflow, dict) or not converted_workflow:
+        raise RuntimeError("Browser export returned an empty or invalid API workflow.")
+    if _is_api_workflow(ui_workflow):
+        return
+    source_nodes = ui_workflow.get("nodes") if isinstance(ui_workflow, dict) else None
+    if not isinstance(source_nodes, list) or not source_nodes:
+        raise RuntimeError("UI workflow does not contain nodes for conversion validation.")
+    source_by_id = {
+        str(node.get("id")): node
+        for node in source_nodes
+        if isinstance(node, dict) and node.get("id") is not None
+    }
+    unknown_ids = []
+    type_mismatches = []
+    for node_id, converted_node in converted_workflow.items():
+        source_node = source_by_id.get(str(node_id))
+        if source_node is None:
+            unknown_ids.append(str(node_id))
+            continue
+        expected_type = str(source_node.get("type") or "")
+        actual_type = (
+            str(converted_node.get("class_type") or "")
+            if isinstance(converted_node, dict)
+            else ""
+        )
+        if expected_type and actual_type != expected_type:
+            type_mismatches.append(f"{node_id}: {actual_type or '<missing>'} != {expected_type}")
+    if unknown_ids or type_mismatches:
+        details = []
+        if unknown_ids:
+            details.append("unknown node IDs " + ", ".join(unknown_ids[:8]))
+        if type_mismatches:
+            details.append("node type mismatches " + ", ".join(type_mismatches[:5]))
+        raise RuntimeError(
+            "Browser export does not match the requested UI workflow: " + "; ".join(details)
+        )
+
+
 def convert_workflow(ui_workflow, comfy_path="", comfy_nodes_module=None):
     if not isinstance(ui_workflow, dict):
         return ui_workflow
@@ -95,6 +135,7 @@ module.run_export_sync(workflow_path, output_path, comfy_dir=comfy_dir)
             converted = json.load(handle)
         if not isinstance(converted, dict):
             raise RuntimeError("Browser export returned an unexpected payload.")
+        validate_converted_workflow(ui_workflow, converted)
         return converted
     except ProcessExecutionError as exc:
         detail = exc.result.tail()

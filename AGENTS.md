@@ -6,7 +6,7 @@
   - `main.py`, `__init__.py` - launch helpers for embedding or standalone use.
   - `workflow_runtime.py`, `workflow_pipeline.py`, `workflow_analysis.py`, `workflow_browser_exporter.py` - discovery, conversion, prompt analysis, and the browser-based converter harness.
   - `processor.py`, `node_factory.py`, `scene_nodes_runtime.py` - CharonOp creation plus ComfyUI processing.
-  - `processor_context.py`, `processor_conversion.py`, `processor_output.py`, `processor_status.py`, `processor_submission.py` - testable processor helpers kept free of Nuke UI mutations.
+  - `processor_context.py`, `processor_conversion.py`, `processor_output.py`, `processor_read_nodes.py`, `processor_recursion.py`, `processor_status.py`, `processor_submission.py` - testable processor helpers and explicit Nuke adapter boundaries.
   - `paths.py`, `preferences.py`, `config.py` - filesystem and configuration single sources of truth.
   - `ui/` - PySide6 widgets for the production panel.
   - `execution/`, `settings/` - script engine helpers and persisted preferences.
@@ -68,7 +68,7 @@
 - `paths.py` governs filesystem locations - extend it rather than hard-coding paths. Ensure the ComfyUI knob points to the portable install so `resolve_comfy_environment` finds `python_embeded`.
 - Dependencies must be installed into the ComfyUI bundle; `nodes.init_extra_nodes(init_custom_nodes=True)` expects a complete environment.
 - Preferences and caches persist under `%LOCALAPPDATA%\Charon\plugins\charon\`.
-- Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it uses ComfyUI's standard `127.0.0.1:8188` endpoint, verifies the listener through `/system_stats`, and launches a headless instance only when the port is free.
+- Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it uses ComfyUI's standard `127.0.0.1:8188` endpoint, verifies the listener through `/system_stats`, and launches a headless instance only when the port is free. The exporter must wait for frontend/custom-node startup to settle and verify exported node IDs/types against the requested UI workflow before caching.
 - Workflows that emit 3D outputs (e.g., `.glb`) are stored under the `_CHARON/3D` tree; `.glb` assets are auto-converted to `.obj` via `trimesh` using the ComfyUI embedded Python. On launch, Charon checks the ComfyUI env for `trimesh` and Playwright and prompts to install if missing. CharonRead nodes will use ReadGeo for these assets.
 
 ## Consolidation Status (2025-10-24)
@@ -88,8 +88,9 @@ The legacy `charon_core` package has been retired. All runtime code now lives in
    - `charon.processor` owns ComfyUI submission. Workflows convert only when still in UI format, then submit via shared helpers. `spawn_charon_node` injects this processor.
 7. Shared Output Management - in progress
    - `paths.py` owns output allocation; `processor_output.py` owns result-manifest
-     allocation, atomic publication, artifact classification, and local-path
-     normalization. Project-storage alignment still requires production review.
+     allocation, atomic publication/readback, batch normalization, artifact
+     classification, and local-path normalization. Project-storage alignment
+     still requires production review.
 8. Instrumentation & Manual QA - in progress
    - `processor_trace.py` owns ordered step logs and trace-file placement. The LTX
      validation flow is production-confirmed; the full Grab/Process loop and

@@ -40,12 +40,16 @@ module for workflow, validation, execution, UI, and storage changes.
 
 Current progress (2026-07-20): 3D Nuke operations, callback scripts, and camera
 rig resources are outside `CharonWindow`. Processor recovery, prompt conversion,
-status/cache persistence, output manifests, tracing, worker launch, main-thread
-dispatch, and initial node-link rules have named modules and headless tests.
+status/cache persistence, output manifest publication/readback, tracing, worker
+launch, main-thread dispatch, and Read/ReadGeo lifecycle rules have named modules
+and headless tests.
 Duplicate-node identity policy is now behind fake-Nuke contract tests. Output
 lookup and status propagation are also behind a linked-output repository and
-fake-Nuke tests. Output ingestion and the worker/watcher phases remain the
-largest Nuke-bound coordinator sections.
+fake-Nuke tests. Recursive completion is now an explicit Nuke adapter, and the
+worker has no internal closures. Output ingestion plus the worker and watcher
+thread bodies remain the largest coordinator sections. Browser conversion now
+waits for ComfyUI frontend startup to settle and rejects exports or cached
+prompts that do not match the requested UI workflow.
 
 ## Phase 5: Operational hardening
 

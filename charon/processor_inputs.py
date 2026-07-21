@@ -2,10 +2,34 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 CropBox = Tuple[float, float, float, float]
+
+
+def assign_uploaded_input(
+    workflow: Dict[str, Any],
+    target_node_id: Any,
+    filename: str,
+    target_socket: Optional[str] = None,
+) -> bool:
+    """Assign an uploaded filename to a workflow node's compatible input socket."""
+    node_entry = workflow.get(str(target_node_id))
+    if not isinstance(node_entry, dict):
+        return False
+    inputs = node_entry.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        return False
+    if target_socket and target_socket in inputs:
+        inputs[target_socket] = filename
+        return True
+    for socket_name in ("image", "input", "mask"):
+        if socket_name in inputs and not isinstance(inputs.get(socket_name), list):
+            inputs[socket_name] = filename
+            return True
+    inputs["image"] = filename
+    return True
 
 
 def coerce_crop_box(raw: Any) -> Optional[CropBox]:
