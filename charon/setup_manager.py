@@ -101,11 +101,21 @@ class SetupManager:
             return False
         try:
             subprocess.run(
-                [self.python_exe, "-m", "playwright", "--version"],
+                [
+                    self.python_exe,
+                    "-c",
+                    (
+                        "import os\n"
+                        "from playwright.sync_api import sync_playwright\n"
+                        "with sync_playwright() as p:\n"
+                        "    executable = p.chromium.executable_path\n"
+                        "raise SystemExit(0 if executable and os.path.isfile(executable) else 1)\n"
+                    ),
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=True,
-                timeout=10,
+                timeout=5,
             )
             return True
         except Exception:

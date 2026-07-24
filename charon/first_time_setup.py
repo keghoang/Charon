@@ -101,18 +101,23 @@ def ensure_requirements_with_log(parent=None) -> bool:
     - If charon_log.json is missing OR any dependency is missing -> run First-Time Setup (forced).
     - Write charon_log.json with the probe results.
     """
-    # OPTIMIZATION: Fast path if already verified
-    if (preferences.get_preference(PREF_DEPENDENCIES_VERIFIED, False) and 
-        preferences.get_preference(FIRST_TIME_SETUP_KEY, False) and 
-        not is_force_first_time_setup_enabled()):
-        return True
-
     # Resolve Comfy environment
     prefs = preferences.load_preferences()
     comfy_path = prefs.get("comfyui_launch_path") or get_default_comfy_launch_path()
-    
-    # 1. Initialize Manager
     manager = SetupManager(comfy_path)
+
+    # Keep the verified-install fast path, but always validate the browser
+    # binary. The Python package can remain installed while Playwright's
+    # per-user browser cache is absent, stale, or removed.
+    if (
+        preferences.get_preference(PREF_DEPENDENCIES_VERIFIED, False)
+        and preferences.get_preference(FIRST_TIME_SETUP_KEY, False)
+        and not is_force_first_time_setup_enabled()
+        and manager._playwright_available()
+    ):
+        return True
+
+    # 1. Initialize Manager
     comfy_dir = manager.comfy_dir
     log_path = _charon_log_path(comfy_dir)
 

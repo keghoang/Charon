@@ -12,8 +12,6 @@ from .paths import resolve_comfy_environment as resolve_comfy_filesystem
 
 
 COMFY_PATH_PREFERENCE = "comfyui_launch_path"
-COMFY_URL_PREFERENCE = "comfyui_url_base"
-COMFY_URL_ENVIRONMENT = "CHARON_COMFY_URL"
 
 
 def normalize_comfy_url(value: Optional[str]) -> str:
@@ -88,12 +86,9 @@ def resolve_comfy_runtime(
     if not configured_path and use_preferences:
         configured_path = _coerce_configured_path(prefs.get(COMFY_PATH_PREFERENCE))
 
-    configured_url = str(base_url or "").strip()
-    if not configured_url:
-        configured_url = str(os.getenv(COMFY_URL_ENVIRONMENT) or "").strip()
-    if not configured_url and use_preferences:
-        configured_url = str(prefs.get(COMFY_URL_PREFERENCE) or "").strip()
-    normalized_url = normalize_comfy_url(configured_url or config.COMFY_URL_BASE)
+    # Charon intentionally supports one local ComfyUI endpoint. ``base_url``
+    # remains in the signature during migration but cannot redirect execution.
+    normalized_url = config.COMFY_URL_BASE
 
     path_info = resolve_comfy_filesystem(configured_path)
     return ComfyEnvironment(

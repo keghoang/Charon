@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from charon.setup_manager import SetupManager
 
@@ -58,6 +59,30 @@ class SetupManagerTests(unittest.TestCase):
 
             self.assertEqual(destination, str(partial.resolve()))
             self.assertFalse(partial.exists())
+
+    def test_playwright_probe_checks_chromium_executable_without_launching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SetupManager(self._portable_layout(tmp))
+            completed = mock.Mock(returncode=0)
+
+            with mock.patch("charon.setup_manager.subprocess.run", return_value=completed) as run:
+                self.assertTrue(manager._playwright_available())
+
+            command = run.call_args.args[0]
+            self.assertEqual(command[:2], [manager.python_exe, "-c"])
+            self.assertIn("p.chromium.executable_path", command[2])
+            self.assertNotIn("p.chromium.launch", command[2])
+            self.assertEqual(run.call_args.kwargs["timeout"], 5)
+
+    def test_playwright_probe_reports_missing_browser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SetupManager(self._portable_layout(tmp))
+
+            with mock.patch(
+                "charon.setup_manager.subprocess.run",
+                side_effect=OSError("browser executable missing"),
+            ):
+                self.assertFalse(manager._playwright_available())
 
 
 if __name__ == "__main__":

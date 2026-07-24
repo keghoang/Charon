@@ -3,13 +3,15 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 LOG_FILENAME = "conversion_log.md"
 CONVERTED_SUFFIX = "_converted.json"
 CACHE_FOLDER_NAME = ".charon_cache"
+CONVERSION_CACHE_SCHEMA = 2
+PRESERVED_CACHE_ENTRIES = {"validation", "workflow_state.json"}
 MAX_PROMPT_BASENAME_LENGTH = 60
 WINDOWS_RESERVED_BASENAMES = {
     "con",
@@ -132,7 +134,26 @@ def compute_workflow_hash(workflow_payload: Dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def load_cached_conversion(folder_path: str, workflow_hash: str) -> Optional[Dict[str, str]]:
+def compute_comfy_cache_identity(system_stats: Any, comfy_dir: str) -> str:
+    """Fingerprint the ComfyUI installation and package versions that export prompts."""
+    stats = system_stats if isinstance(system_stats, dict) else {}
+    system = stats.get("system") if isinstance(stats.get("system"), dict) else {}
+    identity = {
+        "schema": CONVERSION_CACHE_SCHEMA,
+        "comfy_dir": os.path.normcase(os.path.abspath(str(comfy_dir or ""))),
+        "comfyui_version": system.get("comfyui_version"),
+        "required_frontend_version": system.get("required_frontend_version"),
+        "packages": system.get("comfy_package_versions") or [],
+    }
+    serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def load_cached_conversion(
+    folder_path: str,
+    workflow_hash: str,
+    cache_identity: str = "",
+) -> Optional[Dict[str, str]]:
     """
     Return info about a cached conversion if the stored hash matches and the prompt exists.
     """
@@ -147,16 +168,26 @@ def load_cached_conversion(folder_path: str, workflow_hash: str) -> Optional[Dic
 
     hash_line = None
     prompt_line = None
+    schema_line = None
+    identity_line = None
     for line in content.splitlines():
         striped = line.strip()
         if striped.startswith("- workflow_hash:"):
             hash_line = striped.split(":", 1)[1].strip()
         elif striped.startswith("- prompt_file:"):
             prompt_line = striped.split(":", 1)[1].strip()
+        elif striped.startswith("- cache_schema:"):
+            schema_line = striped.split(":", 1)[1].strip()
+        elif striped.startswith("- comfy_identity:"):
+            identity_line = striped.split(":", 1)[1].strip()
 
     if not hash_line or not prompt_line:
         return None
+    if schema_line != str(CONVERSION_CACHE_SCHEMA):
+        return None
     if hash_line != workflow_hash:
+        return None
+    if cache_identity and identity_line != cache_identity:
         return None
 
     prompt_path = _conversion_dir(folder_path) / prompt_line
@@ -170,7 +201,13 @@ def load_cached_conversion(folder_path: str, workflow_hash: str) -> Optional[Dic
     }
 
 
-def write_conversion_cache(folder_path: str, workflow_path: str, workflow_hash: str, prompt_path: str) -> str:
+def write_conversion_cache(
+    folder_path: str,
+    workflow_path: str,
+    workflow_hash: str,
+    prompt_path: str,
+    cache_identity: str = "",
+) -> str:
     """
     Record the conversion info and ensure the converted prompt lives under .charon_cache.
     Returns the stored prompt path.
@@ -188,10 +225,12 @@ def write_conversion_cache(folder_path: str, workflow_path: str, workflow_hash: 
         except FileNotFoundError:
             raise
 
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     log_lines = [
         "# Conversion Cache",
+        f"- cache_schema: {CONVERSION_CACHE_SCHEMA}",
         f"- workflow_hash: {workflow_hash}",
+        f"- comfy_identity: {cache_identity}",
         f"- converted_at: {timestamp}",
         f"- prompt_file: {target_path.name}",
     ]
@@ -219,7 +258,7 @@ def clear_conversion_cache(folder_path: str) -> None:
 
     try:
         for entry in list(conversion_dir.iterdir()):
-            if entry.name.lower() == "validation":
+            if entry.name.lower() in PRESERVED_CACHE_ENTRIES:
                 continue
             try:
                 if entry.is_dir():

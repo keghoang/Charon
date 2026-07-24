@@ -7,6 +7,86 @@ import uuid
 from typing import Callable, Dict, Iterable, Optional
 
 
+def _repair_invalid_read_colorspace(read_node) -> Optional[str]:
+    """Replace a stale Read colorspace that is absent from the active OCIO config."""
+    try:
+        colorspace_knob = read_node.knob("colorspace")
+    except Exception:
+        colorspace_knob = None
+    if colorspace_knob is None:
+        return None
+
+    try:
+        current = str(colorspace_knob.value() or "").strip()
+    except Exception:
+        current = ""
+    try:
+        values_getter = getattr(colorspace_knob, "values", None)
+        options = [str(value).strip() for value in values_getter()] if callable(values_getter) else []
+    except Exception:
+        options = []
+    if not options or current in options:
+        return None
+
+    option_by_lower = {option.lower(): option for option in options if option}
+    preferred_names = (
+        "Utility - sRGB - Texture",
+        "Input - Generic - sRGB - Texture",
+        "sRGB - Texture",
+        "sRGB",
+        "Output - Rec.709",
+        "Rec.709",
+    )
+    replacement = next(
+        (
+            option_by_lower[name.lower()]
+            for name in preferred_names
+            if name.lower() in option_by_lower
+        ),
+        None,
+    )
+    if replacement is None:
+        replacement = next(
+            (
+                option
+                for option in options
+                if "srgb" in option.lower() and "texture" in option.lower()
+            ),
+            None,
+        )
+    if replacement is None:
+        replacement = next(
+            (
+                option
+                for option in options
+                if "rec.709" in option.lower() or "rec709" in option.lower()
+            ),
+            None,
+        )
+    if replacement is None:
+        replacement = next(
+            (option for option in options if "default" in option.lower()),
+            None,
+        )
+    if replacement is None:
+        replacement = next(
+            (
+                option
+                for option in options
+                if option and not option.startswith("-")
+            ),
+            None,
+        )
+    if replacement is None:
+        return None
+
+    try:
+        colorspace_knob.setValue(replacement)
+    except Exception:
+        return None
+    return replacement
+
+
 def assign_read_file(read_node, path: str) -> None:
     """Assign a Read file through Nuke's native user-text parsing path.
 
@@ -20,8 +100,9 @@ def assign_read_file(read_node, path: str) -> None:
     from_user_text = getattr(file_knob, "fromUserText", None)
     if callable(from_user_text):
         from_user_text(normalized_path)
-        return
-    file_knob.setValue(normalized_path)
+    else:
+        file_knob.setValue(normalized_path)
+    _repair_invalid_read_colorspace(read_node)
 
 
 def batch_navigation_controls(_read_node):

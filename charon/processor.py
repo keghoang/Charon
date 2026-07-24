@@ -12,6 +12,7 @@ from functools import partial
 from typing import Any, Dict, List, Optional, Tuple
 
 from .conversion_cache import (
+    compute_comfy_cache_identity,
     compute_workflow_hash,
     load_cached_conversion,
 )
@@ -88,8 +89,6 @@ from .processor_recovery import (
     recover_artifacts_from_output_dir,
     recover_matching_history_artifacts,
     recover_prefixed_history_artifacts,
-    resolve_batch_timeout,
-    resolve_result_watch_timeout,
 )
 from .processor_read_nodes import (
     assign_read_file,
@@ -2032,10 +2031,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         comfy_env = resolve_comfy_environment(comfy_path) if comfy_path else {}
         comfy_dir = comfy_env.get("comfy_dir") if isinstance(comfy_env, dict) else None
         comfy_output_root = ""
+        conversion_cache_identity = ""
         if comfy_dir:
             candidate_root = os.path.join(comfy_dir, "output")
             if os.path.isdir(candidate_root):
                 comfy_output_root = candidate_root
+            try:
+                system_stats = comfy_client.get_system_stats()
+                if isinstance(system_stats, dict):
+                    conversion_cache_identity = compute_comfy_cache_identity(
+                        system_stats,
+                        comfy_dir,
+                    )
+            except Exception as exc:
+                log_debug(f"Could not fingerprint ComfyUI for conversion caching: {exc}", "WARNING")
 
         result_file = allocate_result_manifest_path(temp_root)
 
@@ -2070,10 +2079,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             store_cached_prompt(converted_prompt_path, workflow_hash)
                     needs_conversion_local = False
 
-                if needs_conversion_local and workflow_hash and workflow_cache_folder:
+                if (
+                    needs_conversion_local
+                    and workflow_hash
+                    and workflow_cache_folder
+                    and conversion_cache_identity
+                ):
                     trace_step("conversion_cache_lookup", workflow_hash=(workflow_hash or "")[:12], has_folder=int(bool(workflow_cache_folder)))
                     try:
-                        cache_hit = load_cached_conversion(workflow_cache_folder, workflow_hash)
+                        cache_hit = load_cached_conversion(
+                            workflow_cache_folder,
+                            workflow_hash,
+                            conversion_cache_identity,
+                        )
                     except Exception as exc:
                         log_debug(f'Conversion cache read failed: {exc}', 'WARNING')
                         cache_hit = None
@@ -2122,6 +2140,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 workflow_hash=workflow_hash,
                                 temp_root=temp_root,
                                 current_run_id=current_run_id,
+                                cache_identity=conversion_cache_identity,
                             )
                         except Exception as exc:
                             log_debug(f'Failed to cache converted workflow: {exc}', 'WARNING')
@@ -2132,6 +2151,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                 workflow_hash=None,
                                 temp_root=temp_root,
                                 current_run_id=current_run_id,
+                                cache_identity="",
                             )
 
                         conversion_extra.update({
@@ -2381,11 +2401,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         pass
 
                     start_time = time.time()
-                    timeout = resolve_batch_timeout(
-                        comfy_client,
-                        base_timeout=getattr(config, "COMFY_BATCH_TIMEOUT_SEC", 300),
-                        grace_per_job=getattr(config, "COMFY_QUEUE_GRACE_SEC", 15),
-                    )
                     poll_iteration = 0
                     next_poll_trace_at = start_time
                     update_progress(
@@ -2399,7 +2414,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         },
                     )
 
-                    while time.time() - start_time < timeout:
+                    while True:
                         poll_iteration += 1
                         now_poll = time.time()
                         if now_poll >= next_poll_trace_at:
@@ -2836,9 +2851,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             else:
                                 status_str = None
                         time.sleep(1.0)
-                    else:
-                        raise Exception('Processing timed out')
-
                 if not batch_outputs:
                     trace_step("no_outputs_generated")
                     raise Exception('No outputs were generated by ComfyUI')
@@ -2982,15 +2994,9 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         trace_step("background_thread_started")
 
         def result_watcher():
-            watch_start = time.time()
-            watch_timeout = resolve_result_watch_timeout(
-                batch_count,
-                base_timeout=getattr(config, "COMFY_RESULT_WATCH_TIMEOUT_SEC", 300),
-                grace=getattr(config, "COMFY_RESULT_WATCH_GRACE_SEC", 60),
-            )
             last_read_error = 0.0
-            trace_step("result_watcher_started", timeout_sec=watch_timeout)
-            while time.time() - watch_start < watch_timeout:
+            trace_step("result_watcher_started")
+            while True:
                 if os.path.exists(result_file):
                     try:
                         result_data = read_result_manifest(result_file)
@@ -3978,15 +3984,6 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         continue
                     break
                 time.sleep(1.0)
-            else:
-                log_debug('Timed out waiting for result file.', 'WARNING')
-                trace_step("result_watcher_timeout", timeout_sec=watch_timeout)
-                update_progress(
-                    -1.0,
-                    'Error: timed out waiting for result file',
-                    error='Timed out waiting for result file.',
-                )
-
         start_daemon_job(
             result_watcher,
             thread_name=f"charon-result-watcher-{current_run_id[:8]}",

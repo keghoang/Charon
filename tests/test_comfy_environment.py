@@ -47,10 +47,10 @@ class ComfyEnvironmentTests(unittest.TestCase):
             self.assertEqual(result.comfy_dir, comfy_dir)
             self.assertEqual(result.models_dir, models_dir)
             self.assertEqual(result.python_exe, python_exe)
-            self.assertEqual(result.base_url, "http://render-node:9000")
-            self.assertEqual(result.server_address, "render-node:9000")
+            self.assertEqual(result.base_url, "http://127.0.0.1:8188")
+            self.assertEqual(result.server_address, "127.0.0.1:8188")
 
-    def test_explicit_values_override_environment_and_preferences(self):
+    def test_endpoint_is_fixed_despite_environment_preferences_and_arguments(self):
         with mock.patch.dict(os.environ, {"CHARON_COMFY_URL": "env-host:8188"}):
             with mock.patch(
                 "charon.comfy_environment.preferences.load_preferences",
@@ -61,7 +61,7 @@ class ComfyEnvironmentTests(unittest.TestCase):
                     base_url="explicit-host:9000",
                 )
 
-        self.assertEqual(result.base_url, "http://explicit-host:9000")
+        self.assertEqual(result.base_url, "http://127.0.0.1:8188")
         self.assertEqual(result.configured_path, "configured-path")
 
 

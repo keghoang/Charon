@@ -288,6 +288,7 @@ async def main():
         "missing_models": [],
         "model_paths": {},
         "model_capture": {"invoked": False},
+        "prompt_export": {"ok": False, "error": "Preflight did not run."},
     }
 
     async with async_playwright() as p:
@@ -518,6 +519,65 @@ async def main():
                         }
                     }
 
+                    let promptExport = {
+                        ok: false,
+                        error: missing.length
+                            ? "Prompt export skipped because required node types are missing."
+                            : "ComfyUI frontend did not return an API prompt.",
+                        mismatches: [],
+                    };
+                    if (missing.length === 0) {
+                        try {
+                            await new Promise((resolve) => requestAnimationFrame(resolve));
+                            await new Promise((resolve) => requestAnimationFrame(resolve));
+                            const promptResult = await app.graphToPrompt(app.graph);
+                            const output = promptResult?.output;
+                            if (!output || typeof output !== "object" || Array.isArray(output)) {
+                                throw new Error("ComfyUI frontend returned an empty or invalid API prompt.");
+                            }
+
+                            const sourceById = new Map(
+                                nodesArray
+                                    .filter((node) => node?.id !== undefined && node?.id !== null)
+                                    .map((node) => [String(node.id), String(node.type || node.class_type || "")])
+                            );
+                            const mismatches = [];
+                            for (const [nodeId, exportedNode] of Object.entries(output)) {
+                                const expectedType = sourceById.get(String(nodeId));
+                                const actualType = exportedNode && typeof exportedNode === "object"
+                                    ? String(exportedNode.class_type || "")
+                                    : "";
+                                if (!expectedType) {
+                                    mismatches.push({
+                                        id: String(nodeId),
+                                        expected: "<source node missing>",
+                                        actual: actualType || "<missing>",
+                                    });
+                                } else if (actualType !== expectedType) {
+                                    mismatches.push({
+                                        id: String(nodeId),
+                                        expected: expectedType,
+                                        actual: actualType || "<missing>",
+                                    });
+                                }
+                            }
+                            promptExport = {
+                                ok: mismatches.length === 0,
+                                error: mismatches.length
+                                    ? "ComfyUI frontend exported malformed API nodes."
+                                    : "",
+                                mismatches,
+                                node_count: Object.keys(output).length,
+                            };
+                        } catch (err) {
+                            promptExport = {
+                                ok: false,
+                                error: String(err?.message || err),
+                                mismatches: [],
+                            };
+                        }
+                    }
+
                     return {
                         missing,
                         registered_count: registered.size,
@@ -528,6 +588,7 @@ async def main():
                         model_capture: {
                             invoked: capturedModels.seen || Array.isArray(resolvedMissingModels),
                         },
+                        prompt_export: promptExport,
                     };
                 }''',
                 {"workflow": workflow, "mode": MODE},
@@ -671,11 +732,10 @@ def validate_comfy_environment(
         _write_validation_debug_payload(result)
         return result
 
-    runtime = resolve_comfy_runtime(
-        comfy_path,
-        ping_url,
-        use_preferences=False,
-    )
+    # ComfyUI's endpoint is a fixed Charon integration contract. The path is
+    # configurable, but validation and execution must always address 8188.
+    ping_url = DEFAULT_PING_URL
+    runtime = resolve_comfy_runtime(comfy_path, ping_url, use_preferences=False)
     env_info = runtime.as_path_info()
     ping_url = runtime.base_url
     if include_environment:
@@ -688,6 +748,7 @@ def validate_comfy_environment(
                 base_url=runtime.base_url,
             )
         )
+        issues.append(_validate_server_identity(ping_url, env_info))
     custom_nodes_issue, browser_payload = _validate_custom_nodes_browser(
         env_info,
         workflow_bundle,
@@ -1059,6 +1120,32 @@ def _validate_custom_nodes_browser(
                 data=data,
             ), payload
 
+        prompt_export = payload.get("prompt_export") or {}
+        if not prompt_export.get("ok"):
+            mismatches = prompt_export.get("mismatches") or []
+            detail_lines = []
+            for entry in mismatches[:12]:
+                if not isinstance(entry, dict):
+                    continue
+                detail_lines.append(
+                    f"{entry.get('id', '?')}: {entry.get('actual', '<missing>')} != "
+                    f"{entry.get('expected', '<unknown>')}"
+                )
+            error = str(prompt_export.get("error") or "ComfyUI frontend export failed.")
+            detail_lines.append(error)
+            detail_lines.append(
+                "Update or restart the configured ComfyUI backend/frontend, then validate again."
+            )
+            data["prompt_export"] = prompt_export
+            return ValidationIssue(
+                key="custom_nodes",
+                label="ComfyUI workflow export",
+                ok=False,
+                summary="ComfyUI could not serialize this workflow into a valid API prompt.",
+                details=detail_lines,
+                data=data,
+            ), payload
+
         summary = "All custom nodes registered in the active ComfyUI session."
         if registered:
             summary += f" ({registered} node types loaded.)"
@@ -1072,6 +1159,100 @@ def _validate_custom_nodes_browser(
         ), payload
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _normalized_identity_path(value: Any) -> str:
+    candidate = str(value or "").strip().strip('"')
+    if not candidate:
+        return ""
+    return os.path.normcase(os.path.abspath(os.path.normpath(candidate)))
+
+
+def _reported_identity_matches(expected: str, reported: Any) -> bool:
+    candidate = str(reported or "").strip().strip('"')
+    if not candidate:
+        return False
+    normalized = os.path.normcase(os.path.normpath(candidate))
+    if os.path.isabs(normalized):
+        return _normalized_identity_path(normalized) == expected
+
+    drive, _tail = os.path.splitdrive(normalized)
+    relative_key = normalized.replace("\\", "/").lstrip("./")
+    expected_key = expected.replace("\\", "/")
+    if drive or "/" not in relative_key or relative_key.startswith("../"):
+        return False
+    return expected_key.endswith("/" + relative_key)
+
+
+def _validate_server_identity(ping_url: str, env_info: Dict[str, Any]) -> ValidationIssue:
+    """Confirm the ComfyUI server on fixed port 8188 belongs to the selected install."""
+    comfy_dir = str(env_info.get("comfy_dir") or "").strip()
+    expected_main = _normalized_identity_path(os.path.join(comfy_dir, "main.py"))
+    client = ComfyUIClient(ping_url, connect_timeout=3, request_timeout=5)
+    stats = client.get_system_stats()
+    if not isinstance(stats, dict):
+        return ValidationIssue(
+            key="runtime_identity",
+            label="Comfy runtime identity",
+            ok=False,
+            summary=f"Could not identify the ComfyUI server at {ping_url}.",
+            details=["Start the configured ComfyUI installation and validate again."],
+        )
+
+    system = stats.get("system") if isinstance(stats.get("system"), dict) else {}
+    argv = system.get("argv") if isinstance(system.get("argv"), list) else []
+    main_candidates = [
+        str(value or "").strip().strip('"')
+        for value in argv
+        if str(value or "").strip().lower().endswith("main.py")
+    ]
+    versions = {
+        "comfyui": system.get("comfyui_version"),
+        "frontend_required": system.get("required_frontend_version"),
+        "packages": system.get("comfy_package_versions") or [],
+    }
+    data = {
+        "base_url": ping_url,
+        "expected_main": expected_main,
+        "reported_main": main_candidates[0] if main_candidates else "",
+        "versions": versions,
+    }
+
+    if not expected_main or not main_candidates:
+        return ValidationIssue(
+            key="runtime_identity",
+            label="Comfy runtime identity",
+            ok=False,
+            summary="ComfyUI did not report enough information to verify its installation.",
+            details=[
+                f"Expected server entry point: {expected_main or '<unresolved>'}",
+                "Update ComfyUI or start it from the launch file configured in Charon.",
+            ],
+            data=data,
+        )
+
+    if not any(_reported_identity_matches(expected_main, value) for value in main_candidates):
+        return ValidationIssue(
+            key="runtime_identity",
+            label="Comfy runtime identity",
+            ok=False,
+            summary="Port 8188 is serving a different ComfyUI installation.",
+            details=[
+                f"Configured: {expected_main}",
+                f"Running: {main_candidates[0]}",
+                "Close the running ComfyUI process and start the installation configured in Charon.",
+            ],
+            data=data,
+        )
+
+    return ValidationIssue(
+        key="runtime_identity",
+        label="Comfy runtime identity",
+        ok=True,
+        summary="Port 8188 matches the configured ComfyUI installation.",
+        details=[],
+        data=data,
+    )
 
 
 def _validate_models_browser(

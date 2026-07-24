@@ -46,11 +46,21 @@ def _playwright_available(python_exe: str | None) -> bool:
         return False
     try:
         completed = subprocess.run(
-            [python_exe, "-m", "playwright", "--version"],
+            [
+                python_exe,
+                "-c",
+                (
+                    "import os\n"
+                    "from playwright.sync_api import sync_playwright\n"
+                    "with sync_playwright() as p:\n"
+                    "    executable = p.chromium.executable_path\n"
+                    "raise SystemExit(0 if executable and os.path.isfile(executable) else 1)\n"
+                ),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
-            timeout=15,
+            timeout=5,
         )
         return completed.returncode == 0
     except Exception:

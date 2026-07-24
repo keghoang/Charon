@@ -50,6 +50,83 @@ def _comfy_health_ok(port: int, timeout: float = 3.0) -> bool:
     )
 
 
+def _normalized_path(value: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(os.path.normpath(str(value))))
+
+
+def _reported_path_matches(expected: str, reported: str | Path) -> bool:
+    """Match absolute argv paths exactly and relative argv paths by suffix."""
+    candidate = str(reported or "").strip().strip('"')
+    if not candidate:
+        return False
+    normalized = os.path.normcase(os.path.normpath(candidate))
+    if os.path.isabs(normalized):
+        return _normalized_path(normalized) == expected
+
+    # ComfyUI portable launchers commonly report ``ComfyUI\main.py``. Its
+    # process working directory is not exposed by /system_stats, so resolving
+    # it against Charon's cwd invents a path inside the shared code checkout.
+    drive, _tail = os.path.splitdrive(normalized)
+    relative_key = normalized.replace("\\", "/").lstrip("./")
+    expected_key = expected.replace("\\", "/")
+    if drive or "/" not in relative_key or relative_key.startswith("../"):
+        return False
+    return expected_key.endswith("/" + relative_key)
+
+
+def _verify_server_identity(comfy_dir: Path, port: int = DEFAULT_PORT) -> dict:
+    """Reject a healthy port-8188 server launched from a different ComfyUI tree."""
+    url = f"http://127.0.0.1:{port}/system_stats"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception as exc:
+        raise RuntimeError(f"Could not identify the ComfyUI server on port {port}: {exc}") from exc
+
+    system = payload.get("system") if isinstance(payload, dict) else None
+    system = system if isinstance(system, dict) else {}
+    argv = system.get("argv") if isinstance(system.get("argv"), list) else []
+    reported = [
+        str(value or "").strip().strip('"')
+        for value in argv
+        if str(value or "").strip().lower().endswith("main.py")
+    ]
+    expected = _normalized_path(comfy_dir / "main.py")
+    if not reported:
+        raise RuntimeError(
+            "ComfyUI on port 8188 did not report its main.py path; "
+            "update ComfyUI or start the installation configured in Charon."
+        )
+    if not any(_reported_path_matches(expected, value) for value in reported):
+        raise RuntimeError(
+            "Port 8188 is serving a different ComfyUI installation. "
+            f"Configured: {expected}. Running: {reported[0]}. "
+            "Close the running server and start the configured installation."
+        )
+    return payload
+
+
+def _wait_for_server_identity(
+    comfy_dir: Path,
+    port: int = DEFAULT_PORT,
+    timeout: float = 60.0,
+) -> dict:
+    """Wait for a newly launched server to expose system identity metadata."""
+    deadline = time.time() + timeout
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            return _verify_server_identity(comfy_dir, port)
+        except RuntimeError as exc:
+            last_error = exc
+            if "different ComfyUI installation" in str(exc):
+                raise
+            time.sleep(0.5)
+    raise RuntimeError(
+        f"ComfyUI on port {port} did not become identifiable: {last_error}"
+    ) from last_error
+
+
 def _wait_for_port(proc: subprocess.Popen, port: int, timeout: float = 180.0) -> bool:
     """Wait until a TCP port accepts connections or the process exits."""
     deadline = time.time() + timeout
@@ -197,6 +274,10 @@ def run_export_sync(workflow_path: str, output_path: str, comfy_dir: str) -> Non
     if not reuse_existing:
         proc = start_comfy_server(Path(comfy_dir))
     try:
+        if proc:
+            _wait_for_server_identity(Path(comfy_dir), DEFAULT_PORT)
+        else:
+            _verify_server_identity(Path(comfy_dir), DEFAULT_PORT)
         from playwright.async_api import async_playwright
 
         async def _runner() -> None:

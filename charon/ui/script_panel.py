@@ -26,6 +26,7 @@ from ..dependency_check import ensure_manager_security_level
 from .model_upload_dialog import ModelUploadDialog
 from ..validation_repository import (
     WorkflowValidationRepository,
+    build_validation_override,
     derive_validation_state,
 )
 from ..workflow_local_store import (
@@ -867,14 +868,16 @@ class ScriptPanel(QtWidgets.QWidget):
         """Force validation state to passed for a workflow."""
         if not script_path:
             return
-        payload = {
-            "state": "validated",
-            "message": "Validation overridden",
-            "timestamp": time.time(),
-            "overridden": True,
-            "issues": [],
-            "comfy_path": self._resolve_comfy_path(),
-        }
+        cached = self._read_validation_cache(script_path) or {}
+        current_payload = cached.get("payload") if isinstance(cached, dict) else None
+        try:
+            payload = build_validation_override(
+                current_payload,
+                comfy_path=self._resolve_comfy_path(),
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Override Blocked", str(exc))
+            return
         try:
             self.script_model.set_validation_state(script_path, "validated", payload=payload)
         except Exception as exc:
@@ -1122,9 +1125,14 @@ class ScriptPanel(QtWidgets.QWidget):
                         unresolved.append(entry)
                     if unresolved:
                         issue["ok"] = False
-                    elif "ok" not in issue:
+                    else:
                         issue["ok"] = True
                 elif key == "custom_nodes":
+                    prompt_export = data.get("prompt_export")
+                    if isinstance(prompt_export, dict) and not prompt_export.get("ok", False):
+                        issue["ok"] = False
+                        all_ok = False
+                        continue
                     missing_packs = data.get("missing_packs") or []
                     unresolved = [
                         pack
@@ -1134,7 +1142,7 @@ class ScriptPanel(QtWidgets.QWidget):
                     ]
                     if unresolved:
                         issue["ok"] = False
-                    elif "ok" not in issue:
+                    else:
                         issue["ok"] = True
                 if not issue.get("ok", False):
                     all_ok = False

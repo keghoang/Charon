@@ -55,7 +55,13 @@ def resolve_cached_prompt(
         normalized_hash = ""
 
     payload = None
-    if current_hash and normalized_path and normalized_hash == current_hash:
+    source_is_api = bool(is_api_prompt(workflow_data))
+    if normalized_path and not source_is_api:
+        log_debug("Ignoring unversioned node prompt cache for UI workflow")
+        store_cache("", "")
+        normalized_path = ""
+        normalized_hash = ""
+    if current_hash and normalized_path and normalized_hash == current_hash and source_is_api:
         if os.path.exists(normalized_path):
             try:
                 with open(normalized_path, "r", encoding="utf-8") as cached_handle:
@@ -103,9 +109,10 @@ def write_converted_prompt_payload(
     workflow_hash: Optional[str],
     temp_root: str,
     current_run_id: str,
+    cache_identity: str = "",
 ) -> str:
     """Persist a converted prompt to the conversion cache or debug fallback."""
-    if workflow_hash and workflow_cache_folder:
+    if workflow_hash and workflow_cache_folder and cache_identity:
         target_path = desired_prompt_path(workflow_cache_folder, workflow_path or "", workflow_hash)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with open(target_path, "w", encoding="utf-8") as handle:
@@ -115,6 +122,7 @@ def write_converted_prompt_payload(
             workflow_path or "",
             workflow_hash,
             str(target_path),
+            cache_identity,
         )
         return stored_path.replace("\\", "/")
 

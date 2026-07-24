@@ -37,7 +37,7 @@ class WorkflowLocalStoreTests(unittest.TestCase):
 
                     self.assertFalse(load_workflow_state(remote_folder).get("validated"))
 
-    def test_changed_comfy_endpoint_invalidates_validated_override(self):
+    def test_changed_legacy_comfy_endpoint_does_not_invalidate_validated_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = os.path.join(tmp, "workflows")
             remote_folder = os.path.join(repo_root, "artist", "workflow")
@@ -62,7 +62,7 @@ class WorkflowLocalStoreTests(unittest.TestCase):
                     preferences.set_preference("comfyui_url_base", "second-host:8188")
                     synchronize_remote_payload(remote_folder, payload)
 
-                    self.assertFalse(load_workflow_state(remote_folder).get("validated"))
+                    self.assertTrue(load_workflow_state(remote_folder).get("validated"))
 
     def test_changed_comfy_path_invalidates_resolve_status(self):
         with tempfile.TemporaryDirectory() as tmp:

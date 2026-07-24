@@ -3,11 +3,43 @@ from unittest import mock
 
 from charon.validation_repository import (
     WorkflowValidationRepository,
+    build_validation_override,
     derive_validation_state,
 )
 
 
 class ValidationRepositoryTests(unittest.TestCase):
+    def test_override_preserves_existing_validation_diagnostics(self):
+        source = {
+            "issues": [
+                {
+                    "key": "models",
+                    "ok": False,
+                    "data": {"missing_models": [{"name": "model.safetensors"}]},
+                }
+            ]
+        }
+
+        overridden = build_validation_override(source, comfy_path="ComfyUI")
+
+        self.assertTrue(overridden["overridden"])
+        self.assertEqual(overridden["issues"], source["issues"])
+        self.assertEqual(overridden["comfy_path"], "ComfyUI")
+
+    def test_override_cannot_bypass_comfy_prompt_export_failure(self):
+        payload = {
+            "issues": [
+                {
+                    "key": "custom_nodes",
+                    "ok": False,
+                    "data": {"prompt_export": {"ok": False}},
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(ValueError, "cannot be overridden"):
+            build_validation_override(payload)
+
     def test_derives_issue_and_restart_states(self):
         self.assertEqual(
             derive_validation_state({"issues": [{"ok": False}]}),

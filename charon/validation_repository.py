@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import os
+import time
 from typing import Any, Dict, Optional
 
 from .workflow_local_store import (
@@ -14,6 +16,35 @@ from .workflow_local_store import (
 VALIDATION_STATES = frozenset(
     {"idle", "validating", "installing", "validated", "needs_resolve"}
 )
+
+
+def build_validation_override(
+    payload: Optional[Dict[str, Any]],
+    *,
+    comfy_path: str = "",
+) -> Dict[str, Any]:
+    """Preserve diagnostics while allowing only non-runtime validation overrides."""
+    result = copy.deepcopy(payload) if isinstance(payload, dict) else {}
+    for issue in result.get("issues") or []:
+        if not isinstance(issue, dict) or issue.get("ok", False):
+            continue
+        data = issue.get("data") if isinstance(issue.get("data"), dict) else {}
+        prompt_export = data.get("prompt_export")
+        export_failed = isinstance(prompt_export, dict) and not prompt_export.get("ok", False)
+        if issue.get("key") == "runtime_identity" or export_failed:
+            raise ValueError(
+                "ComfyUI runtime identity and workflow export failures cannot be overridden."
+            )
+    result.update(
+        {
+            "state": "validated",
+            "message": "Validation overridden",
+            "timestamp": time.time(),
+            "overridden": True,
+            "comfy_path": comfy_path,
+        }
+    )
+    return result
 
 
 def derive_validation_state(

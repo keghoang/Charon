@@ -52,7 +52,7 @@ class ProcessorConversionTests(unittest.TestCase):
                 json.dump(payload, handle)
 
             resolution = resolve_cached_prompt(
-                {"ui": {}},
+                {"1": {"class_type": "Cached"}},
                 workflow_hash="workflow-hash",
                 cached_path=prompt_path,
                 cached_hash="workflow-hash",
@@ -62,6 +62,24 @@ class ProcessorConversionTests(unittest.TestCase):
             )
 
         self.assertEqual(resolution.payload, payload)
+
+    def test_resolve_cached_prompt_does_not_reuse_node_cache_for_ui_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_path = os.path.join(tmp, "prompt.json")
+            with open(prompt_path, "w", encoding="utf-8") as handle:
+                json.dump({"1": {"class_type": "Cached"}}, handle)
+
+            resolution = resolve_cached_prompt(
+                {"nodes": [{"id": 1, "type": "Current"}]},
+                workflow_hash="workflow-hash",
+                cached_path=prompt_path,
+                cached_hash="workflow-hash",
+                is_api_prompt=self._is_api_prompt,
+                store_cache=lambda *_args: None,
+                log_debug=lambda *_args: None,
+            )
+
+        self.assertIsNone(resolution.payload)
 
     def test_resolve_cached_prompt_clears_missing_file(self):
         stores = []
