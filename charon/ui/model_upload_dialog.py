@@ -7,9 +7,11 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from ..qt_compat import QtCore, QtGui, QtWidgets
 from ..charon_logger import system_debug, system_warning, system_error
+from ..model_manifest import shared_relative_path, write_model_manifest
 from ..model_transfer_manager import TransferState, manager as transfer_manager
 from .. import config
 from ..path_safety import ensure_path_inside
+from ..workflow_local_store import clear_validation_artifacts
 
 # Reuse styling from validation dialog for consistency
 COLORS = {
@@ -215,6 +217,7 @@ class ModelUploadDialog(QtWidgets.QDialog):
     def __init__(
         self,
         models: List[Tuple[str, str]],  # List of (source_path, category)
+        workflow_folder: Optional[str] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -225,6 +228,8 @@ class ModelUploadDialog(QtWidgets.QDialog):
         # Determine Global Repo Models Path
         # Assuming models/ sibling to workflows/
         self.global_models_root = Path(config.get_shared_models_root())
+        self.workflow_folder = os.path.abspath(workflow_folder) if workflow_folder else ""
+        self._manifest_entries: List[Dict[str, Any]] = []
 
         self.models_to_upload: List[ModelRow] = []
         self._setup_ui()
@@ -323,10 +328,28 @@ class ModelUploadDialog(QtWidgets.QDialog):
             row = ModelRow(str(source), str(dest), exists)
             self.models_to_upload.append(row)
             self.list_layout.insertWidget(self.list_layout.count() - 1, row)
+            shared_path = shared_relative_path(str(dest), str(self.global_models_root))
+            if shared_path:
+                manifest_category = str(category or "").replace("\\", "/").strip("/")
+                if "/" in manifest_category:
+                    manifest_category = manifest_category.split("/", 1)[0]
+                try:
+                    size = os.path.getsize(source)
+                except OSError:
+                    size = None
+                entry: Dict[str, Any] = {
+                    "name": file_name,
+                    "category": manifest_category,
+                    "shared_path": shared_path,
+                }
+                if isinstance(size, int):
+                    entry["size"] = size
+                self._manifest_entries.append(entry)
 
         if count_uploadable == 0:
             self.btn_upload.setText("Nothing to Upload")
             self.btn_upload.setEnabled(False)
+            self._persist_manifest_if_complete()
         else:
             self.btn_upload.setText(f"Upload {count_uploadable} Files")
 
@@ -367,6 +390,32 @@ class ModelUploadDialog(QtWidgets.QDialog):
         if all_done:
             self.btn_upload.setText("Upload Complete")
             self.btn_cancel.setText("Close")
+            self._persist_manifest_if_complete()
+
+    def _persist_manifest_if_complete(self) -> None:
+        if not self.workflow_folder or not self._manifest_entries:
+            return
+        for row in self.models_to_upload:
+            try:
+                if not os.path.isfile(row.dest_path):
+                    return
+                if os.path.getsize(row.source_path) != os.path.getsize(row.dest_path):
+                    system_warning(
+                        "Skipping model manifest update because shared model size differs: "
+                        f"{row.dest_path}"
+                    )
+                    return
+            except OSError:
+                return
+        try:
+            manifest_path = write_model_manifest(
+                self.workflow_folder,
+                self._manifest_entries,
+            )
+            clear_validation_artifacts(self.workflow_folder)
+            system_debug(f"Updated workflow model manifest: {manifest_path}")
+        except Exception as exc:
+            system_warning(f"Failed to update workflow model manifest: {exc}")
 
     def closeEvent(self, event) -> None:
         # Cancel all active transfers

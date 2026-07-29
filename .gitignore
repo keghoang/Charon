@@ -4,3 +4,4 @@ __pycache__/
 debug/
 packaging/*.rxt
 .charon_cache/
+backup/

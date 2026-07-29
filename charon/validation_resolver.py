@@ -13,6 +13,8 @@ from . import config
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
 from .comfy_environment import resolve_comfy_runtime
+from .model_manifest import category_from_shared_path
+from .model_paths import category_aliases
 from .path_safety import ensure_path_inside
 from .paths import resolve_comfy_environment
 
@@ -158,6 +160,28 @@ def determine_expected_model_path(
     )
 
 
+def reference_for_shared_model(
+    reference: Dict[str, Any],
+    shared_model_path: str,
+    models_root: str,
+) -> Dict[str, Any]:
+    """Return a reference whose category preserves the shared repository layout."""
+    updated = dict(reference or {})
+    shared_category = category_from_shared_path(
+        shared_model_path,
+        get_shared_models_root(),
+    )
+    if not shared_category:
+        return updated
+    updated["shared_category"] = shared_category
+    updated["category"] = _target_category_alias(shared_category, models_root)
+    attempted = list(updated.get("attempted_categories") or [])
+    if updated["category"] not in attempted:
+        attempted.insert(0, updated["category"])
+    updated["attempted_categories"] = attempted
+    return updated
+
+
 def resolve_missing_models(
     issue_data: Dict[str, Any],
     comfy_path: str,
@@ -235,13 +259,26 @@ def resolve_missing_models(
             result.resolved.append(f"{dest_file} already present.")
             continue
 
+        candidate_rel = os.path.relpath(os.path.abspath(candidate), os.path.abspath(models_root))
+        inside_models_root = candidate_rel != os.pardir and not candidate_rel.startswith(
+            os.pardir + os.sep
+        )
         try:
             os.makedirs(dest_dir, exist_ok=True)
-            system_debug(
-                f"Copying model '{dest_file}' from '{candidate}' to '{target_path}'."
-            )
-            shutil.copy2(candidate, target_path)
-            result.resolved.append(f"Copied {dest_file} to models directory.")
+            if inside_models_root:
+                # A misplaced file inside the models tree is moved rather than
+                # copied so we don't duplicate multi-GB checkpoints on disk.
+                system_debug(
+                    f"Moving model '{dest_file}' from '{candidate}' to '{target_path}'."
+                )
+                shutil.move(candidate, target_path)
+                result.resolved.append(f"Moved {dest_file} into place.")
+            else:
+                system_debug(
+                    f"Copying model '{dest_file}' from '{candidate}' to '{target_path}'."
+                )
+                shutil.copy2(candidate, target_path)
+                result.resolved.append(f"Copied {dest_file} to models directory.")
         except Exception as exc:  # pragma: no cover - filesystem guard
             message = f"Failed to copy '{dest_file}': {exc}"
             system_warning(message)
@@ -251,6 +288,76 @@ def resolve_missing_models(
         result.notes.append("No model fixes were necessary.")
 
     return result
+
+
+def relocate_model_to_category(
+    candidate_path: str,
+    reference: Dict[str, Any],
+    models_root: str,
+) -> Tuple[str, bool]:
+    """Move a model found in the wrong category folder into the expected one.
+
+    Returns ``(final_path, moved)``. The file is only moved when the reference's
+    category is backed by the workflow's model manifest (``manifest_category``)
+    — a category merely inferred from node names is not authoritative enough to
+    justify moving files, and two workflows with conflicting inferred
+    categories would otherwise move the same model back and forth. Files
+    outside ``models_root``, already-correct files, and alias categories
+    (clip/text_encoders, unet/diffusion_models) are left untouched. If a
+    correctly placed copy already exists, that copy is returned without
+    touching the stray.
+    """
+    category = _safe_str(reference.get("manifest_category")).strip().strip("/\\")
+    if not category or not models_root or not candidate_path:
+        return candidate_path, False
+
+    models_root_abs = os.path.abspath(models_root)
+    candidate_abs = os.path.abspath(candidate_path)
+    try:
+        rel = os.path.relpath(candidate_abs, models_root_abs)
+    except ValueError:
+        return candidate_path, False
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
+        # Never move files that live outside the models directory.
+        return candidate_path, False
+
+    actual_category = rel.replace("\\", "/").split("/", 1)[0].lower()
+    if actual_category in category_aliases(category):
+        return candidate_path, False
+
+    target_dir = os.path.join(models_root_abs, _target_category_alias(category, models_root_abs))
+    target_path = os.path.join(target_dir, os.path.basename(candidate_abs))
+    try:
+        target_path = ensure_path_inside(target_path, models_root_abs, label="Model destination")
+    except ValueError:
+        return candidate_path, False
+    if os.path.normcase(target_path) == os.path.normcase(candidate_abs):
+        return candidate_path, False
+    if os.path.exists(target_path):
+        return target_path, False
+
+    os.makedirs(target_dir, exist_ok=True)
+    shutil.move(candidate_abs, target_path)
+    system_warning(
+        f"Relocated model '{os.path.basename(target_path)}' from "
+        f"'{os.path.dirname(candidate_abs)}' to '{target_dir}' to match its "
+        f"'{category}' category."
+    )
+    return target_path, True
+
+
+def _target_category_alias(category: str, models_root: str) -> str:
+    aliases = {
+        "clip": ("clip", "text_encoders"),
+        "text_encoders": ("text_encoders", "clip"),
+        "unet": ("unet", "diffusion_models"),
+        "diffusion_models": ("diffusion_models", "unet"),
+    }
+    choices = aliases.get(category, (category,))
+    for choice in choices:
+        if models_root and os.path.isdir(os.path.join(models_root, choice)):
+            return choice
+    return choices[0]
 
 
 def resolve_missing_custom_nodes(
@@ -585,6 +692,21 @@ def _expected_model_path(
                 candidate_dir,
                 models_root,
                 label="Model category",
+            )
+        except ValueError:
+            continue
+        if os.path.isdir(candidate_dir) and candidate_dir not in candidate_dirs:
+            candidate_dirs.append(candidate_dir)
+
+    for directory in attempted_directories or reference.get("attempted_directories") or []:
+        normalized_directory = _safe_str(directory)
+        if not normalized_directory:
+            continue
+        try:
+            candidate_dir = ensure_path_inside(
+                normalized_directory,
+                models_root,
+                label="ComfyUI model directory",
             )
         except ValueError:
             continue

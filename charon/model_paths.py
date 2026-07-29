@@ -6,6 +6,23 @@ import os
 from typing import Optional, Tuple
 
 
+# Categories ComfyUI treats as the same folder list (legacy/new names).
+CATEGORY_ALIASES = {
+    "clip": ("clip", "text_encoders"),
+    "text_encoders": ("text_encoders", "clip"),
+    "unet": ("unet", "diffusion_models"),
+    "diffusion_models": ("diffusion_models", "unet"),
+}
+
+
+def category_aliases(category: Optional[str]) -> Tuple[str, ...]:
+    """Return the set of folder names ComfyUI accepts for a model category."""
+    normalized = (category or "").strip().strip("/\\").lower()
+    if not normalized:
+        return ()
+    return CATEGORY_ALIASES.get(normalized, (normalized,))
+
+
 MODEL_CATEGORY_PREFIXES = frozenset(
     {
         "diffusion_models",
@@ -24,6 +41,7 @@ MODEL_CATEGORY_PREFIXES = frozenset(
         "embeddings",
         "controlnet",
         "hypernetworks",
+        "latent_upscale_models",
         "upscale_models",
         "upscale",
         "motion_models",

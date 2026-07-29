@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .charon_logger import system_debug, system_warning
+from .model_paths import MODEL_CATEGORY_PREFIXES, category_aliases
 from .workflow_local_store import (
     get_validated_workflow_path,
     load_validation_resolve_status,
@@ -221,6 +222,7 @@ def _match_found_path(
 ) -> Optional[str]:
     target_base = os.path.basename(original_name).lower()
     target_category = (category or "").strip().lower()
+    allowed_categories = category_aliases(target_category)
     best: Optional[str] = None
 
     for path in found_paths:
@@ -235,11 +237,17 @@ def _match_found_path(
             continue
         rel = _relativize_model_path(abs_candidate, models_root)
         rel_lower = rel.lower()
-        if target_category and (
-            rel_lower.startswith(f"{target_category}/")
-            or rel_lower.startswith(f"models/{target_category}/")
-        ):
-            return abs_candidate
+        if target_category:
+            if any(
+                rel_lower.startswith(f"{allowed}/")
+                or rel_lower.startswith(f"models/{allowed}/")
+                for allowed in allowed_categories
+            ):
+                return abs_candidate
+            # A basename match in a different category folder would produce a
+            # value ComfyUI rejects (each loader only lists its own folder), so
+            # never fall back to it.
+            continue
         if best is None:
             best = abs_candidate
 
@@ -259,7 +267,7 @@ def _normalize_resolved_value(
     hints: set[str] = set()
     category_normalized = category.strip().lower() if category else ""
     if category_normalized:
-        hints.add(category_normalized)
+        hints.update(category_aliases(category_normalized))
     for value in attempted_categories or []:
         candidate = str(value or "").strip().lower()
         if candidate:
@@ -277,8 +285,15 @@ def _normalize_resolved_value(
     segments = [segment for segment in normalized.split("/") if segment]
     is_absolute = normalized.startswith("//") or os.path.isabs(normalized)
     if segments and not is_absolute and len(segments) > 1:
-        if segments[0].lower() in hints:
+        head = segments[0].lower()
+        if head in hints:
             segments = segments[1:]
+        elif head in MODEL_CATEGORY_PREFIXES:
+            # The file lives in a category folder the target loader does not
+            # read; emitting "othercategory/name" would fail ComfyUI's
+            # per-folder validation, so skip the replacement entirely and let
+            # validation flag the model as misplaced/missing instead.
+            return ""
     if segments:
         normalized = "/".join(segments)
 

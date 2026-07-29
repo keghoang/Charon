@@ -719,7 +719,21 @@ class SceneNodesPanel(QtWidgets.QWidget):
                  return
 
             QtWidgets.QApplication.restoreOverrideCursor()
-            dialog = ModelUploadDialog(models_to_process, parent=self)
+            workflow_folder = ""
+            try:
+                source_knob = info.node.knob("charon_source_workflow_path")
+                if source_knob is not None:
+                    workflow_folder = str(source_knob.value() or "").strip()
+            except Exception:
+                workflow_folder = ""
+            workflow_folder = workflow_folder or info.workflow_path
+            if workflow_folder and os.path.isfile(workflow_folder):
+                workflow_folder = os.path.dirname(workflow_folder)
+            dialog = ModelUploadDialog(
+                models_to_process,
+                workflow_folder=workflow_folder,
+                parent=self,
+            )
             dialog.exec_()
 
         except Exception as exc:

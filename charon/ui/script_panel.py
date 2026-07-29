@@ -853,7 +853,11 @@ class ScriptPanel(QtWidgets.QWidget):
                  return
 
             QtWidgets.QApplication.restoreOverrideCursor()
-            dialog = ModelUploadDialog(models_to_process, parent=self)
+            dialog = ModelUploadDialog(
+                models_to_process,
+                workflow_folder=script_path,
+                parent=self,
+            )
             exec_dialog(dialog)
 
         except Exception as exc:

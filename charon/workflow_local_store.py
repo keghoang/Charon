@@ -13,6 +13,7 @@ from . import config, preferences
 from .charon_logger import system_debug, system_warning
 from .conversion_cache import clear_conversion_cache, compute_workflow_hash
 from .json_io import atomic_write_json
+from .model_manifest import model_manifest_hash
 from .path_safety import is_path_inside, relative_path_from_root
 from .comfy_environment import resolve_comfy_runtime
 
@@ -391,6 +392,7 @@ def compute_validation_signature(remote_folder: str) -> str:
         "comfy_dir": _normalize_signature_path(comfy_dir),
         "python_exe": _normalize_signature_path(str(runtime.python_exe or "")),
         "metadata_hash": _metadata_hash(remote_folder),
+        "model_manifest_hash": model_manifest_hash(remote_folder),
         "custom_nodes": _directory_inventory(os.path.join(comfy_dir, "custom_nodes")),
         "model_roots": _directory_inventory(models_dir),
     }

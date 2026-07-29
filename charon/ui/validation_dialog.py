@@ -18,6 +18,8 @@ from ..validation_resolver import (
     find_local_model_matches,
     find_shared_model_matches,
     install_custom_nodes_via_playwright,
+    reference_for_shared_model,
+    relocate_model_to_category,
     resolve_missing_custom_nodes,
     resolve_missing_models,
     select_first_model_match,
@@ -2807,6 +2809,9 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
     def _handle_transfer_success(self, row_info: Dict[str, Any], state: TransferState) -> None:
         destination = state.destination
+        if isinstance(self._payload, dict):
+            self._payload["restart_required"] = True
+            self._payload["requires_restart"] = True
         models_root = row_info.get("models_root") or ""
         comfy_dir = (self._comfy_info or {}).get("comfy_dir") or ""
         reference = row_info.get("reference") or {}
@@ -3447,16 +3452,35 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "[Validation] Multiple local model matches found; choosing first | "
                 f"row={row} selected='{selected}' matches={local_matches}"
             )
+        relocated = False
+        if selected:
+            # A match in the wrong category folder (e.g. a checkpoint sitting in
+            # models/vae) must be moved into the folder the loader actually
+            # reads; otherwise the workflow value fails ComfyUI validation.
+            try:
+                selected, relocated = relocate_model_to_category(
+                    selected, reference, models_root
+                )
+            except OSError as exc:
+                system_warning(
+                    "[Validation] Failed to relocate misplaced model | "
+                    f"row={row} path='{selected}' error='{exc}'"
+                )
+                selected = None
         if selected:
             system_debug(
                 "[Validation] Auto-resolve: local selection made | "
-                f"row={row} selected='{selected}'"
+                f"row={row} selected='{selected}' relocated={relocated}"
             )
             workflow_value = self._compute_workflow_value(reference, selected, models_root, comfy_dir)
             display_text = self._format_model_display_path(selected, models_root)
             success, message = self._apply_model_override(original_name, workflow_value)
             if success:
-                note = f"Selected local model: {display_text}"
+                note = (
+                    f"Moved local model into place: {display_text}"
+                    if relocated
+                    else f"Selected local model: {display_text}"
+                )
                 row_info["resolve_method"] = row_info.get("resolve_method") or note
                 self._set_issue_row_subtitle(row_info, note)
                 self._mark_model_resolved(
@@ -3525,6 +3549,18 @@ class ValidationResolveDialog(QtWidgets.QDialog):
 
         # 3) Global repo
         shared_matches = find_shared_model_matches(file_name)
+        preferred_shared_path = str(reference.get("shared_path") or "").replace("\\", "/")
+        if preferred_shared_path:
+            shared_matches.sort(
+                key=lambda path: (
+                    0
+                    if str(path).replace("\\", "/").lower().endswith(
+                        preferred_shared_path.lower()
+                    )
+                    else 1,
+                    str(path).lower(),
+                )
+            )
         system_debug(
             "[Validation] Auto-resolve: shared repo lookup complete | "
             f"row={row} matches={len(shared_matches) if shared_matches else 0}"
@@ -3540,6 +3576,8 @@ class ValidationResolveDialog(QtWidgets.QDialog):
                 "[Validation] Auto-resolve: shared repo selection made | "
                 f"row={row} selected='{selected}'"
             )
+            reference = reference_for_shared_model(reference, selected, models_root)
+            row_info["reference"] = reference
             expected_path = determine_expected_model_path(reference, models_root, comfy_dir)
             system_debug(
                 "[Validation] Auto-resolve: computed expected path from shared repo | "

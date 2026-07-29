@@ -16,10 +16,11 @@ from . import config, preferences
 from .charon_logger import system_debug, system_error, system_info, system_warning
 from .comfy_client import ComfyUIClient
 from .comfy_environment import resolve_comfy_runtime
+from .model_manifest import load_model_manifest, manifest_entry_for_name
 from .model_paths import derive_workflow_value_from_path
 from .paths import get_charon_temp_dir, resolve_comfy_environment
 from .validation_resolver import locate_manager_cli
-from .workflow_graph import iter_workflow_node_dicts
+from .workflow_graph import iter_workflow_node_dicts, iter_workflow_nodes
 
 
 DEFAULT_PING_URL = config.COMFY_URL_BASE
@@ -222,7 +223,19 @@ try:
                 resolved_category = category
 
         if not resolved_path:
-            fallback_categories = ["checkpoints", "loras", "unet", "vae", "clip", "embeddings"]
+            fallback_categories = [
+                "checkpoints",
+                "diffusion_models",
+                "unet",
+                "loras",
+                "vae",
+                "text_encoders",
+                "clip",
+                "clip_vision",
+                "latent_upscale_models",
+                "upscale_models",
+                "embeddings",
+            ]
             safe_fallbacks = [c for c in fallback_categories if c != category]
             for fallback in safe_fallbacks:
                 path = _try_resolve(fallback, name, attempted, attempted_dirs)
@@ -1630,7 +1643,15 @@ def _validate_models(
                 continue
             reference = references[idx] if idx < len(references) else None
             reference_name = reference.get("name") if isinstance(reference, dict) else ""
-            if _resolved_path_matches_reference(reference_name, path, models_root):
+            reference_category = (
+                reference.get("category") if isinstance(reference, dict) else ""
+            )
+            if _resolved_path_matches_reference(
+                reference_name,
+                path,
+                models_root,
+                reference_category=reference_category,
+            ):
                 filtered_resolved[idx] = path
             else:
                 invalid_resolutions.append(
@@ -2588,9 +2609,15 @@ def _collect_model_references(
         return []
 
     references: Dict[Tuple[str, str], Dict[str, str]] = {}
+    manifest = load_model_manifest(workflow_bundle.get("folder"))
 
-    for node in iter_workflow_node_dicts(workflow):
-        _collect_references_from_node(node, references)
+    for node_id, node in iter_workflow_nodes(workflow):
+        _collect_references_from_node(
+            node,
+            references,
+            node_id=node_id,
+            manifest=manifest,
+        )
 
     return list(references.values())
 
@@ -2598,6 +2625,9 @@ def _collect_model_references(
 def _collect_references_from_node(
     node: Any,
     references: Dict[Tuple[str, str], Dict[str, str]],
+    *,
+    node_id: str = "",
+    manifest: Optional[Dict[str, Any]] = None,
 ) -> None:
     if not isinstance(node, dict):
         return
@@ -2606,23 +2636,55 @@ def _collect_references_from_node(
         return
 
     widget_values = node.get("widgets_values") or []
-    for value in _iterate_strings(widget_values):
-        if _looks_like_model_file(value):
-            _store_model_reference(references, value, node_type)
+    widget_fields = _widget_input_fields(node_type)
+    if isinstance(widget_values, (list, tuple)):
+        for widget_index, widget_value in enumerate(widget_values):
+            input_name = (
+                widget_fields[widget_index]
+                if widget_index < len(widget_fields)
+                else f"widget_{widget_index}"
+            )
+            for value in _iterate_strings(widget_value):
+                if _looks_like_model_file(value):
+                    _store_model_reference(
+                        references,
+                        value,
+                        node_type,
+                        node_id=node_id,
+                        input_name=input_name,
+                        manifest=manifest,
+                    )
 
     inputs = node.get("inputs")
     if isinstance(inputs, list):
         for entry in inputs:
             if isinstance(entry, dict):
+                input_name = str(
+                    entry.get("name") or entry.get("label") or ""
+                ).strip()
                 default = entry.get("default")
                 for value in _iterate_strings(default):
                     if _looks_like_model_file(value):
-                        _store_model_reference(references, value, node_type)
+                        _store_model_reference(
+                            references,
+                            value,
+                            node_type,
+                            node_id=node_id,
+                            input_name=input_name,
+                            manifest=manifest,
+                        )
     elif isinstance(inputs, dict):
-        for value in inputs.values():
+        for input_name, value in inputs.items():
             for string in _iterate_strings(value):
                 if _looks_like_model_file(string):
-                    _store_model_reference(references, string, node_type)
+                    _store_model_reference(
+                        references,
+                        string,
+                        node_type,
+                        node_id=node_id,
+                        input_name=str(input_name),
+                        manifest=manifest,
+                    )
 
 
 def _collect_node_types(
@@ -2654,16 +2716,39 @@ def _store_model_reference(
     storage: Dict[Tuple[str, str], Dict[str, str]],
     file_name: str,
     node_type: str,
+    *,
+    node_id: str = "",
+    input_name: str = "",
+    manifest: Optional[Dict[str, Any]] = None,
 ) -> None:
-    category = _category_for_node(node_type, file_name)
+    inferred_category = _category_for_node(
+        node_type,
+        file_name,
+        input_name=input_name,
+    )
+    manifest_entry = manifest_entry_for_name(
+        manifest or {},
+        file_name,
+        category=inferred_category,
+    )
+    category = str(
+        (manifest_entry or {}).get("category")
+        or inferred_category
+    )
     key = (file_name.lower(), category)
     if key in storage:
         return
-    storage[key] = {
+    reference = {
         "name": file_name,
         "category": category,
         "node_type": node_type,
+        "node_id": node_id,
+        "input_name": input_name,
     }
+    if manifest_entry:
+        reference["shared_path"] = str(manifest_entry.get("shared_path") or "")
+        reference["manifest_category"] = category
+    storage[key] = reference
 
 
 def _iterate_strings(value: Any) -> Iterable[str]:
@@ -2683,12 +2768,36 @@ def _looks_like_model_file(value: str) -> bool:
     return any(lowered.endswith(ext) for ext in MODEL_EXTENSIONS)
 
 
-def _category_for_node(node_type: str, file_name: str) -> str:
+def _category_for_node(
+    node_type: str,
+    file_name: str,
+    *,
+    input_name: str = "",
+) -> str:
     token = node_type.lower()
     name_lower = file_name.lower()
+    field = input_name.lower().strip()
+
+    if field:
+        if "text_encoder" in field or field.startswith("clip_name"):
+            return "text_encoders"
+        if "checkpoint" in field or field.startswith("ckpt"):
+            return "checkpoints"
+        if "latent" in field and "upscale" in field:
+            return "latent_upscale_models"
+        if "upscale" in field:
+            return "upscale_models"
+        if "lora" in field:
+            return "loras"
+        if "vae" in field:
+            return "vae"
+        if "control" in field:
+            return "controlnet"
 
     if "style" in token:
         return "style_models"
+    if "latent" in token and "upscale" in token:
+        return "latent_upscale_models"
     if "upscale" in token:
         return "upscale_models"
     if "clip_vision" in token or "clip_vision" in name_lower:
@@ -2715,6 +2824,16 @@ def _category_for_node(node_type: str, file_name: str) -> str:
     if "embedding" in token or "embedding" in name_lower:
         return "embeddings"
     return "checkpoints"
+
+
+def _widget_input_fields(node_type: str) -> Tuple[str, ...]:
+    """Known frontend widget order for loaders with multiple model inputs."""
+    return {
+        "LTXAVTextEncoderLoader": ("text_encoder", "ckpt_name", "device"),
+        "LTXVAudioVAELoader": ("ckpt_name",),
+        "LatentUpscaleModelLoader": ("model_name",),
+        "CheckpointLoaderSimple": ("ckpt_name",),
+    }.get(node_type, ())
 
 
 def _find_model_file(
@@ -2793,7 +2912,12 @@ def _lookup_model_in_index(
         first_match = os.path.abspath(matches[0])
         if models_root:
             # Check if the resolved path matches what the workflow specified
-            if not _resolved_path_matches_reference(name, first_match, models_root):
+            if not _resolved_path_matches_reference(
+                name,
+                first_match,
+                models_root,
+                reference_category=reference.get("category"),
+            ):
                 # File exists but in wrong location - don't return it
                 return False, None
         return True, first_match
@@ -2843,6 +2967,8 @@ def _resolved_path_matches_reference(
     reference_name: Optional[str],
     resolved_path: str,
     models_root: str,
+    *,
+    reference_category: Optional[str] = None,
 ) -> bool:
     reference_name = (reference_name or "").strip()
     if not reference_name:
@@ -2867,6 +2993,24 @@ def _resolved_path_matches_reference(
         reference_rel = resolved_path
 
     reference_rel = reference_rel.replace("\\", "/").strip("/")
+    if reference_rel == ".." or reference_rel.startswith("../"):
+        return False
+
+    expected_category = str(reference_category or "").strip().lower()
+    if expected_category:
+        actual_category = reference_rel.split("/", 1)[0].lower()
+        aliases = {
+            "clip": {"clip", "text_encoders"},
+            "text_encoders": {"text_encoders", "clip"},
+            "unet": {"unet", "diffusion_models"},
+            "diffusion_models": {"diffusion_models", "unet"},
+        }
+        allowed_categories = aliases.get(
+            expected_category,
+            {expected_category},
+        )
+        if actual_category not in allowed_categories:
+            return False
     
     # If reference has no slash, it means the file should be directly in the category folder.
     # Check that resolved path doesn't have additional subdirectories beyond the category.
