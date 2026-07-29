@@ -21,7 +21,9 @@ COMFY_ENABLE_HISTORY_RECOVERY = False
 STATUS_COLOR_UPDATE_INTERVAL_SEC = 0.5
 AUTO_IMPORT_MAX_OUTPUTS = 200
 AUTO_IMPORT_MAX_PER_GROUP = 120
-AUTO_CREATE_CONTACT_SHEET = True
+# Off by default: contact sheets get heavy with frame-range/batch outputs.
+# The Create Contact Sheet button on CharonOp builds one on demand.
+AUTO_CREATE_CONTACT_SHEET = False
 AUTO_IMPORT_ATTACH_IVT = True
 CONTACT_SHEET_MAX_IMAGES = 48
 CONTACT_SHEET_SCAN_OUTPUT_DIR = False

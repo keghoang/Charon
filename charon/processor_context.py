@@ -70,6 +70,29 @@ def resolve_batch_count(node) -> int:
     return 1
 
 
+def resolve_frame_range(node):
+    """Return (first, last) when Use Frame Range is enabled, else ``None``.
+
+    Older CharonOp nodes saved before the frame-range knobs existed resolve to
+    ``None`` and keep the single-frame behaviour. An inverted range is swapped.
+    """
+    try:
+        toggle = node.knob("charon_use_frame_range")
+        if toggle is None or not bool(int(toggle.value())):
+            return None
+        first_knob = node.knob("charon_frame_first")
+        last_knob = node.knob("charon_frame_last")
+        if first_knob is None or last_knob is None:
+            return None
+        first = int(first_knob.value())
+        last = int(last_knob.value())
+        if last < first:
+            first, last = last, first
+        return first, last
+    except Exception:
+        return None
+
+
 def resolve_nuke_script_name(nuke_module) -> str:
     """Resolve the active Nuke script basename on the host main thread."""
     def _resolve() -> str:

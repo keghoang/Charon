@@ -310,6 +310,54 @@ def create_charon_group_node(
     batch_knob.setFlag(nuke.STARTLINE)
     node.addKnob(batch_knob)
 
+    try:
+        script_first = int(nuke.root().firstFrame())
+        script_last = int(nuke.root().lastFrame())
+    except Exception:
+        script_first, script_last = 1, 1
+
+    use_frame_range_knob = nuke.Boolean_Knob("charon_use_frame_range", "Use Frame Range", False)
+    use_frame_range_knob.setFlag(nuke.NO_ANIMATION)
+    use_frame_range_knob.setFlag(nuke.STARTLINE)
+    try:
+        use_frame_range_knob.setTooltip(
+            "Execute the workflow once per frame between in/out. "
+            "Outputs come back as a .####. numbered sequence matching the input frames. "
+            "Batch Count is ignored while this is enabled."
+        )
+    except Exception:
+        pass
+    node.addKnob(use_frame_range_knob)
+
+    frame_first_knob = nuke.Int_Knob("charon_frame_first", "in")
+    frame_first_knob.setFlag(nuke.NO_ANIMATION)
+    frame_first_knob.setFlag(nuke.STARTLINE)
+    try:
+        frame_first_knob.setValue(script_first)
+    except Exception:
+        pass
+    try:
+        frame_first_knob.setTooltip("First frame to execute when Use Frame Range is enabled.")
+    except Exception:
+        pass
+    node.addKnob(frame_first_knob)
+
+    frame_last_knob = nuke.Int_Knob("charon_frame_last", "out")
+    frame_last_knob.setFlag(nuke.NO_ANIMATION)
+    try:
+        frame_last_knob.clearFlag(nuke.STARTLINE)
+    except Exception:
+        pass
+    try:
+        frame_last_knob.setValue(script_last)
+    except Exception:
+        pass
+    try:
+        frame_last_knob.setTooltip("Last frame to execute when Use Frame Range is enabled.")
+    except Exception:
+        pass
+    node.addKnob(frame_last_knob)
+
     use_crop_knob = nuke.Boolean_Knob("charon_use_crop", "Use Crop", False)
     use_crop_knob.setFlag(nuke.NO_ANIMATION)
     use_crop_knob.setFlag(nuke.STARTLINE)

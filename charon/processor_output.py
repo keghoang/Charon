@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+
+_FRAME_SUFFIX_PATTERN = re.compile(r"\.(\d{4,})(\.[A-Za-z0-9]+)$")
 
 
 def allocate_result_manifest_path(
@@ -161,6 +165,50 @@ def resolve_local_output_candidate(output_root: str, filename: str, subfolder: s
         parts.append(subfolder)
     parts.append(filename)
     return os.path.normpath(os.path.join(*parts))
+
+
+def summarize_sequence_entries(entries: Iterable[Any]) -> Optional[Dict[str, Any]]:
+    """Return frame-sequence info for a group of output entries, or ``None``.
+
+    A group forms a sequence when every entry carries a ``frame`` value and its
+    ``output_path`` ends with a ``.<frame>.<ext>`` suffix. The returned dict has
+    ``pattern`` (path with the frame digits replaced by ``#`` padding),
+    ``first``, ``last``, and ``count``. Groups with fewer than two distinct
+    frames are treated as stills.
+    """
+    frames: List[int] = []
+    sample_path = ""
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        frame = entry.get("frame")
+        path = entry.get("output_path")
+        if frame is None or not path:
+            return None
+        try:
+            frame_number = int(frame)
+        except (TypeError, ValueError):
+            return None
+        frames.append(frame_number)
+        if not sample_path or frame_number == min(frames):
+            sample_path = str(path)
+    unique_frames = sorted(set(frames))
+    if len(unique_frames) < 2:
+        return None
+    normalized = sample_path.replace("\\", "/")
+    match = _FRAME_SUFFIX_PATTERN.search(normalized)
+    if not match:
+        return None
+    padding = "#" * len(match.group(1))
+    pattern = (
+        normalized[: match.start()] + f".{padding}{match.group(2)}"
+    )
+    return {
+        "pattern": pattern,
+        "first": unique_frames[0],
+        "last": unique_frames[-1],
+        "count": len(unique_frames),
+    }
 
 
 def progress_for_batch(batch_index: int, local_progress: float, per_batch_progress: float) -> float:

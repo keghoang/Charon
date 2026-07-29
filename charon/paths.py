@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import uuid
-from typing import Optional, Tuple, TypedDict
+from typing import Dict, Optional, Tuple, TypedDict
 
 from .utilities import get_current_user_slug
 
@@ -344,9 +344,37 @@ def _ensure_directory(path: str) -> None:
         raise
 
 
-def _allocate_versioned_output_file(base_output_dir: str, extension: str) -> str:
-    """Reserve the next CharonOutput path atomically to avoid concurrent collisions."""
+def _allocate_versioned_output_file(
+    base_output_dir: str,
+    extension: str,
+    frame: Optional[int] = None,
+    version_registry: Optional[Dict[str, int]] = None,
+) -> str:
+    """Reserve the next CharonOutput path atomically to avoid concurrent collisions.
+
+    When ``frame`` is given the filename carries a ``.<frame:04d>.`` suffix so a
+    range of frames forms a Nuke-readable sequence. ``version_registry`` (a dict
+    owned by the caller, keyed by directory) pins the version number across the
+    frames of one run — without it every frame would bump the version counter
+    and the frames would never line up as one sequence.
+    """
     prefix = OUTPUT_PREFIX
+    frame_token = f".{int(frame):04d}" if frame is not None else ""
+
+    if frame is not None and version_registry is not None:
+        pinned = version_registry.get(base_output_dir)
+        if pinned is not None:
+            _ensure_directory(base_output_dir)
+            filename = f"{prefix}{pinned:03d}{frame_token}{extension.lower()}"
+            candidate = os.path.join(base_output_dir, filename)
+            try:
+                fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+            except FileExistsError:
+                # Same run re-processing a frame; overwriting is intended.
+                pass
+            return candidate
+
     version_pattern = re.compile(rf"{re.escape(prefix)}(\d+)", re.IGNORECASE)
     highest_version = 0
     try:
@@ -361,7 +389,7 @@ def _allocate_versioned_output_file(base_output_dir: str, extension: str) -> str
         _ensure_directory(base_output_dir)
 
     for version in range(highest_version + 1, highest_version + 10000):
-        filename = f"{prefix}{version:03d}{extension.lower()}"
+        filename = f"{prefix}{version:03d}{frame_token}{extension.lower()}"
         candidate = os.path.join(base_output_dir, filename)
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         try:
@@ -370,6 +398,8 @@ def _allocate_versioned_output_file(base_output_dir: str, extension: str) -> str
             continue
         else:
             os.close(fd)
+            if frame is not None and version_registry is not None:
+                version_registry[base_output_dir] = version
             return candidate
     raise RuntimeError(f"Could not allocate a unique Charon output path in {base_output_dir}")
 
@@ -379,6 +409,8 @@ def allocate_custom_output_path(
     extension: Optional[str] = None,
     output_name: Optional[str] = None,
     output_subfolder: Optional[str] = None,
+    frame: Optional[int] = None,
+    version_registry: Optional[Dict[str, int]] = None,
 ) -> str:
     extension = (extension or "").strip() or ".png"
     if not extension.startswith("."):
@@ -392,7 +424,12 @@ def allocate_custom_output_path(
 
     _ensure_directory(base_output_dir)
 
-    return _allocate_versioned_output_file(base_output_dir, extension)
+    return _allocate_versioned_output_file(
+        base_output_dir,
+        extension,
+        frame=frame,
+        version_registry=version_registry,
+    )
 
 
 def allocate_charon_output_path(
@@ -404,6 +441,8 @@ def allocate_charon_output_path(
     category: Optional[str] = None,
     output_name: Optional[str] = None,
     output_subfolder: Optional[str] = None,
+    frame: Optional[int] = None,
+    version_registry: Optional[Dict[str, int]] = None,
 ) -> str:
     """
     Determine the versioned output path for a CharonOp run.
@@ -456,4 +495,9 @@ def allocate_charon_output_path(
 
     _ensure_directory(base_output_dir)
 
-    return _allocate_versioned_output_file(base_output_dir, extension)
+    return _allocate_versioned_output_file(
+        base_output_dir,
+        extension,
+        frame=frame,
+        version_registry=version_registry,
+    )

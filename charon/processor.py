@@ -42,6 +42,7 @@ from .processor_context import (
     capture_node_coordinates,
     capture_processor_run_context,
     resolve_batch_count,
+    resolve_frame_range,
     resolve_node_auto_import,
     resolve_nuke_script_name,
     resolve_workflow_display_name,
@@ -81,6 +82,7 @@ from .processor_output import (
     run_auto_contact_sheet,
     resolve_local_output_candidate,
     sanitize_output_name,
+    summarize_sequence_entries,
     write_result_manifest,
 )
 from .processor_recovery import (
@@ -1551,6 +1553,13 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         refresh_linked_output_info(nuke, node, charon_node_id)
         user_slug = get_current_user_slug()
         batch_count = resolve_batch_count(node)
+        frame_range = resolve_frame_range(node)
+        if frame_range is not None and batch_count > 1:
+            log_debug(
+                f"Use Frame Range is enabled; ignoring Batch Count {batch_count} "
+                f"and executing frames {frame_range[0]}-{frame_range[1]} instead."
+            )
+            batch_count = 1
         nuke_script_name = resolve_nuke_script_name(nuke)
         link_anchor_value = ensure_link_anchor_value(
             node,
@@ -1904,13 +1913,20 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
         if render_jobs:
             trace_step("input_rendering_started", jobs=len(render_jobs))
             current_frame = int(nuke.frame())
+            if frame_range is not None:
+                render_first, render_last = frame_range
+            else:
+                render_first, render_last = current_frame, current_frame
             for job in render_jobs:
                 idx = job['index']
                 mapping = job.get('mapping', {})
                 input_node = job['node']
                 friendly_name = mapping.get('name', f'Input {idx + 1}') if isinstance(mapping, dict) else f'Input {idx + 1}'
                 safe_tag = ''.join(c if c.isalnum() else '_' for c in friendly_name).strip('_') or f'input_{idx + 1}'
-                temp_path = os.path.join(temp_dir, f'charon_{safe_tag}_{str(uuid.uuid4())[:8]}.png')
+                frame_token = '.%04d' if frame_range is not None else ''
+                temp_path = os.path.join(
+                    temp_dir, f'charon_{safe_tag}_{str(uuid.uuid4())[:8]}{frame_token}.png'
+                )
                 temp_path_nuke = temp_path.replace('\\', '/')
 
                 source_node = input_node
@@ -1986,7 +2002,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                 write_node['file'].setValue(temp_path_nuke)
                 write_node['file_type'].setValue('png')
                 try:
-                    nuke.execute(write_node, current_frame, current_frame)
+                    nuke.execute(write_node, render_first, render_last)
                 finally:
                     try:
                         nuke.delete(write_node)
@@ -2238,122 +2254,161 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         f'Parameter overrides updated {len(applied_overrides)} inputs before submission.'
                     )
 
-                uploaded_assets = {}
-                upload_retries = max(1, int(getattr(config, "COMFY_UPLOAD_RETRIES", 3)))
-                upload_retry_delay = float(getattr(config, "COMFY_UPLOAD_RETRY_DELAY_SEC", 1.0))
-                for job in render_jobs:
-                    idx = job['index']
-                    temp_path = rendered_files.get(idx)
-                    mapping = job.get('mapping', {})
-                    friendly_name = mapping.get('name', f'Input {idx + 1}') if isinstance(mapping, dict) else f'Input {idx + 1}'
-                    if not temp_path or not os.path.exists(temp_path):
-                        raise Exception(f"Temp file missing for '{friendly_name}'")
-                    trace_step(
-                        "input_upload_start",
-                        index=idx,
-                        name=friendly_name,
-                        file=temp_path.replace("\\", "/"),
-                        retries=upload_retries,
-                    )
-                    uploaded_filename = None
-                    last_upload_error = ""
-                    for upload_attempt in range(upload_retries):
+                def _upload_and_assign(files_by_index, target_workflow, report_progress=True):
+                    """Upload rendered inputs and wire their Comfy names into the prompt."""
+                    uploaded_assets = {}
+                    upload_retries = max(1, int(getattr(config, "COMFY_UPLOAD_RETRIES", 3)))
+                    upload_retry_delay = float(getattr(config, "COMFY_UPLOAD_RETRY_DELAY_SEC", 1.0))
+                    for job in render_jobs:
+                        idx = job['index']
+                        temp_path = files_by_index.get(idx)
+                        mapping = job.get('mapping', {})
+                        friendly_name = mapping.get('name', f'Input {idx + 1}') if isinstance(mapping, dict) else f'Input {idx + 1}'
+                        if not temp_path or not os.path.exists(temp_path):
+                            raise Exception(f"Temp file missing for '{friendly_name}'")
                         trace_step(
-                            "input_upload_attempt",
-                            index=idx,
-                            attempt=upload_attempt + 1,
-                            total_attempts=upload_retries,
-                        )
-                        try:
-                            uploaded_filename = comfy_client.upload_image(temp_path)
-                        except Exception as upload_exc:
-                            uploaded_filename = None
-                            last_upload_error = str(upload_exc)
-                        if not uploaded_filename and not last_upload_error:
-                            try:
-                                last_upload_error = str(getattr(comfy_client, "last_error", "") or "")
-                            except Exception:
-                                last_upload_error = ""
-                        if uploaded_filename:
-                            break
-                        if not last_upload_error:
-                            last_upload_error = "empty_upload_response"
-                        if upload_attempt < upload_retries - 1:
-                            time.sleep(upload_retry_delay)
-                    if not uploaded_filename:
-                        trace_step(
-                            "input_upload_failed",
+                            "input_upload_start",
                             index=idx,
                             name=friendly_name,
-                            error=last_upload_error or "unknown_upload_error",
+                            file=temp_path.replace("\\", "/"),
+                            retries=upload_retries,
                         )
-                        raise Exception(
-                            f"Failed to upload '{friendly_name}' to ComfyUI after {upload_retries} attempt(s). "
-                            f"Last error: {last_upload_error or 'unknown'}"
-                        )
-                    uploaded_assets[idx] = uploaded_filename
-                    log_debug(f"Uploaded '{friendly_name}' as {uploaded_filename}")
-                    trace_step("input_uploaded", index=idx, uploaded_name=uploaded_filename)
-                    progress = 0.2 + (0.2 * (len(uploaded_assets) / len(render_jobs)))
-                    update_progress(progress, f'Uploaded {len(uploaded_assets)}/{len(render_jobs)} images')
-                    trace_step("input_upload_progress_updated", index=idx, progress=round(progress, 4))
-
-                if isinstance(input_mapping, list):
-                    for job in render_jobs:
-                        mapping = job.get('mapping', {})
-                        idx = job['index']
-                        uploaded_filename = uploaded_assets.get(idx)
-                        if not uploaded_filename:
-                            continue
-                        node_id = mapping.get('node_id')
-                        source = mapping.get('source')
-                        if source == 'set_node':
-                            identifier = mapping.get('identifier')
-                            normalized = normalize_identifier(identifier)
-                            target = set_targets.get(normalized)
-                            if target:
-                                assign_uploaded_input(workflow_copy, target[0], uploaded_filename)
-                                continue
-                            if node_id is not None:
-                                set_entry = workflow_copy.get(str(node_id))
-                                if isinstance(set_entry, dict):
-                                    for value in set_entry.get('inputs', {}).values():
-                                        if isinstance(value, list) and len(value) >= 1:
-                                            assign_uploaded_input(workflow_copy, value[0], uploaded_filename)
-                        elif node_id is not None:
-                            assign_uploaded_input(workflow_copy, node_id, uploaded_filename)
-                        else:
-                            for target_id, target_data in workflow_copy.items():
-                                if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
-                                    assign_uploaded_input(workflow_copy, target_id, uploaded_filename)
-                                    break
-                elif render_jobs:
-                    filename = uploaded_assets.get(primary_index)
-                    if filename:
-                        for target_id, target_data in workflow_copy.items():
-                            if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
-                                assign_uploaded_input(workflow_copy, target_id, filename)
+                        uploaded_filename = None
+                        last_upload_error = ""
+                        for upload_attempt in range(upload_retries):
+                            trace_step(
+                                "input_upload_attempt",
+                                index=idx,
+                                attempt=upload_attempt + 1,
+                                total_attempts=upload_retries,
+                            )
+                            try:
+                                uploaded_filename = comfy_client.upload_image(temp_path)
+                            except Exception as upload_exc:
+                                uploaded_filename = None
+                                last_upload_error = str(upload_exc)
+                            if not uploaded_filename and not last_upload_error:
+                                try:
+                                    last_upload_error = str(getattr(comfy_client, "last_error", "") or "")
+                                except Exception:
+                                    last_upload_error = ""
+                            if uploaded_filename:
                                 break
+                            if not last_upload_error:
+                                last_upload_error = "empty_upload_response"
+                            if upload_attempt < upload_retries - 1:
+                                time.sleep(upload_retry_delay)
+                        if not uploaded_filename:
+                            trace_step(
+                                "input_upload_failed",
+                                index=idx,
+                                name=friendly_name,
+                                error=last_upload_error or "unknown_upload_error",
+                            )
+                            raise Exception(
+                                f"Failed to upload '{friendly_name}' to ComfyUI after {upload_retries} attempt(s). "
+                                f"Last error: {last_upload_error or 'unknown'}"
+                            )
+                        uploaded_assets[idx] = uploaded_filename
+                        log_debug(f"Uploaded '{friendly_name}' as {uploaded_filename}")
+                        trace_step("input_uploaded", index=idx, uploaded_name=uploaded_filename)
+                        if report_progress:
+                            progress = 0.2 + (0.2 * (len(uploaded_assets) / len(render_jobs)))
+                            update_progress(progress, f'Uploaded {len(uploaded_assets)}/{len(render_jobs)} images')
+                            trace_step("input_upload_progress_updated", index=idx, progress=round(progress, 4))
 
+                    if isinstance(input_mapping, list):
+                        for job in render_jobs:
+                            mapping = job.get('mapping', {})
+                            idx = job['index']
+                            uploaded_filename = uploaded_assets.get(idx)
+                            if not uploaded_filename:
+                                continue
+                            node_id = mapping.get('node_id')
+                            source = mapping.get('source')
+                            if source == 'set_node':
+                                identifier = mapping.get('identifier')
+                                normalized = normalize_identifier(identifier)
+                                target = set_targets.get(normalized)
+                                if target:
+                                    assign_uploaded_input(target_workflow, target[0], uploaded_filename)
+                                    continue
+                                if node_id is not None:
+                                    set_entry = target_workflow.get(str(node_id))
+                                    if isinstance(set_entry, dict):
+                                        for value in set_entry.get('inputs', {}).values():
+                                            if isinstance(value, list) and len(value) >= 1:
+                                                assign_uploaded_input(target_workflow, value[0], uploaded_filename)
+                            elif node_id is not None:
+                                assign_uploaded_input(target_workflow, node_id, uploaded_filename)
+                            else:
+                                for target_id, target_data in target_workflow.items():
+                                    if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
+                                        assign_uploaded_input(target_workflow, target_id, uploaded_filename)
+                                        break
+                    elif render_jobs:
+                        filename = uploaded_assets.get(primary_index)
+                        if filename:
+                            for target_id, target_data in target_workflow.items():
+                                if isinstance(target_data, dict) and target_data.get('class_type') == 'LoadImage':
+                                    assign_uploaded_input(target_workflow, target_id, filename)
+                                    break
 
+                if frame_range is None:
+                    _upload_and_assign(rendered_files, workflow_copy)
+                else:
+                    # Frame-range mode uploads per frame inside the execution
+                    # loop; the rendered temp paths are %04d patterns here.
+                    update_progress(
+                        0.4,
+                        f'Rendered frames {frame_range[0]}-{frame_range[1]}; uploading per frame',
+                    )
 
                 base_prompt = copy.deepcopy(workflow_copy)
                 seed_records = _capture_seed_inputs(base_prompt)
                 batch_outputs: List[Dict[str, Any]] = []
-                per_batch_progress = 0.5 / max(1, batch_count)
+                if frame_range is not None:
+                    execution_units = [
+                        (0, frame)
+                        for frame in range(frame_range[0], frame_range[1] + 1)
+                    ]
+                else:
+                    execution_units = [(index, None) for index in range(batch_count)]
+                per_batch_progress = 0.5 / max(1, len(execution_units))
+                sequence_version_registry: Dict[str, int] = {}
 
                 download_retries = int(getattr(config, "COMFY_DOWNLOAD_RETRIES", 4))
                 download_retry_delay = float(getattr(config, "COMFY_DOWNLOAD_RETRY_DELAY_SEC", 0.75))
                 download_min_bytes = int(getattr(config, "COMFY_DOWNLOAD_MIN_BYTES", 1))
                 download_hard_timeout = float(getattr(config, "COMFY_DOWNLOAD_HARD_TIMEOUT_SEC", 90.0))
 
-                for batch_index in range(batch_count):
-                    trace_step("batch_started", batch=batch_index + 1, total=batch_count)
+                for unit_index, (batch_index, unit_frame) in enumerate(execution_units):
+                    trace_step(
+                        "batch_started",
+                        batch=unit_index + 1,
+                        total=len(execution_units),
+                        frame=unit_frame,
+                    )
                     seed_offset = batch_index * 9973
-                    batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
+                    if unit_frame is not None:
+                        batch_label = f'Frame {unit_frame} ({unit_index + 1}/{len(execution_units)})'
+                    else:
+                        batch_label = f'Batch {batch_index + 1}/{batch_count}' if batch_count > 1 else 'Run'
+                    unit_prompt = base_prompt
+                    if unit_frame is not None:
+                        frame_files = {}
+                        for job in render_jobs:
+                            idx = job['index']
+                            pattern_path = rendered_files.get(idx)
+                            if pattern_path and '%04d' in pattern_path:
+                                frame_files[idx] = pattern_path.replace('%04d', f'{unit_frame:04d}')
+                            else:
+                                frame_files[idx] = pattern_path
+                        unit_prompt = copy.deepcopy(base_prompt)
+                        _upload_and_assign(frame_files, unit_prompt, report_progress=False)
                     try:
                         prompt_payload, normalized_paths, prompt_payload_str = build_batch_prompt(
-                            base_prompt,
+                            unit_prompt,
                             seed_records=seed_records,
                             seed_offset=seed_offset,
                             apply_seed_offset=_apply_seed_offset,
@@ -2361,7 +2416,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                         )
                     except Exception as exc:
                         log_debug(f"Failed to prepare prompt payload: {exc}", "WARNING")
-                        prompt_payload = copy.deepcopy(base_prompt)
+                        prompt_payload = copy.deepcopy(unit_prompt)
                         prompt_payload_str = ""
                         normalized_paths = _normalize_prompt_model_paths(prompt_payload)
                     if normalized_paths:
@@ -2369,7 +2424,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             f"Normalized {normalized_paths} model path value(s) after Nuke reload."
                         )
                     if getattr(config, "DEBUG_MODE", False) or getattr(config, "DEBUG_STEP_TRACE", False):
-                        debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{batch_index}.json').replace('\\', '/')
+                        debug_file = os.path.join(temp_root, 'debug', f'prompt_batch_{unit_index}.json').replace('\\', '/')
                         try:
                             os.makedirs(os.path.dirname(debug_file), exist_ok=True)
                             with open(debug_file, 'w', encoding='utf-8') as df:
@@ -2379,7 +2434,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             log_debug(f"Debug: Failed to write payload file: {de}", "WARNING")
                     
                     update_progress(
-                        progress_for_batch(batch_index, 0.0, per_batch_progress),
+                        progress_for_batch(unit_index, 0.0, per_batch_progress),
                         f'Submitting {batch_label.lower()}',
                     )
                     try:
@@ -2404,7 +2459,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                     poll_iteration = 0
                     next_poll_trace_at = start_time
                     update_progress(
-                        progress_for_batch(batch_index, 0.1, per_batch_progress),
+                        progress_for_batch(unit_index, 0.1, per_batch_progress),
                         f'{batch_label}: queued on ComfyUI',
                         extra={
                             'prompt_id': prompt_id,
@@ -2437,7 +2492,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                             )
                             if progress_val > 0:
                                 mapped_progress = progress_for_batch(
-                                    batch_index,
+                                    unit_index,
                                     0.2 + (progress_val * 0.6),
                                     per_batch_progress,
                                 )
@@ -2588,7 +2643,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         artifact_progress = 0.8 + (0.2 * ((artifact_index + 1) / len(artifacts)))
                                         update_progress(
                                             progress_for_batch(
-                                                batch_index,
+                                                unit_index,
                                                 artifact_progress,
                                                 per_batch_progress,
                                             ),
@@ -2624,6 +2679,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 raw_extension_lower,
                                                 output_node_name,
                                                 output_subfolder=recursive_output_subfolder,
+                                                frame=unit_frame,
+                                                version_registry=sequence_version_registry,
                                             )
                                         else:
                                             allocated_output_path = allocate_charon_output_path(
@@ -2635,6 +2692,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 category,
                                                 output_node_name,
                                                 output_subfolder=recursive_output_subfolder,
+                                                frame=unit_frame,
+                                                version_registry=sequence_version_registry,
                                             )
                                         log_debug(f'Resolved output path: {allocated_output_path}')
                                         source_filename = artifact.get("filename")
@@ -2792,6 +2851,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 'timestamp': time.time(),
                                                 'batch_index': batch_index + 1,
                                                 'batch_total': batch_count,
+                                                'frame': unit_frame,
                                                 'seed_offset': seed_offset,
                                             }
                                             embed_png_metadata(normalized_output_path, metadata_payload)
@@ -2800,6 +2860,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         batch_entry = {
                                             'batch_index': batch_index + 1,
                                             'batch_total': batch_count,
+                                            'frame': unit_frame,
                                             'prompt_id': prompt_id,
                                             'output_path': normalized_output_path,
                                             'elapsed_time': elapsed,
@@ -2836,7 +2897,7 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                         }
                                         update_progress(
                                             progress_for_batch(
-                                                batch_index,
+                                                unit_index,
                                                 1.0,
                                                 per_batch_progress,
                                             ),
@@ -3027,10 +3088,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                     max_auto_import_per_group = int(
                                         getattr(config, "AUTO_IMPORT_MAX_PER_GROUP", 120)
                                     )
-                                    limited_entries, dropped = limit_output_entries(
-                                        entries,
-                                        max_auto_import_outputs,
+                                    has_frame_entries = any(
+                                        isinstance(entry, dict) and entry.get('frame') is not None
+                                        for entry in entries
                                     )
+                                    if has_frame_entries:
+                                        # Frame-range runs import as one sequence per
+                                        # output; capping would truncate the range.
+                                        limited_entries, dropped = list(entries), 0
+                                    else:
+                                        limited_entries, dropped = limit_output_entries(
+                                            entries,
+                                            max_auto_import_outputs,
+                                        )
                                     if dropped:
                                         log_debug(
                                             f"Auto-import capped to last {max_auto_import_outputs} outputs "
@@ -3381,7 +3451,8 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                             entries=len(group_entries),
                                             group_index=group_index + 1,
                                         )
-                                        if (
+                                        sequence_info = summarize_sequence_entries(group_entries)
+                                        if sequence_info is None and (
                                             max_auto_import_per_group > 0
                                             and len(group_entries) > max_auto_import_per_group
                                         ):
@@ -3465,7 +3536,19 @@ def process_charonop_node(is_recursive_call=False, node_override=None):
                                                 default_index = existing_index
 
                                         try:
-                                            assign_read_file(read_node, group_paths[default_index])
+                                            if sequence_info:
+                                                assign_read_file(
+                                                    read_node,
+                                                    f"{sequence_info['pattern']} "
+                                                    f"{sequence_info['first']}-{sequence_info['last']}",
+                                                )
+                                                log_debug(
+                                                    f"Assigned frame sequence to CharonRead2D ({label}): "
+                                                    f"{sequence_info['pattern']} "
+                                                    f"{sequence_info['first']}-{sequence_info['last']}"
+                                                )
+                                            else:
+                                                assign_read_file(read_node, group_paths[default_index])
                                         except Exception as assign_error:
                                             log_debug(f'Could not assign output path to CharonRead2D ({label}): {assign_error}', 'ERROR')
                                         if outputs_knob is not None:
