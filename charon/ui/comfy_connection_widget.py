@@ -3,13 +3,14 @@ import time
 import subprocess
 import threading
 import weakref
-from typing import Optional
+from typing import List, Optional
 
 from ..qt_compat import QtWidgets, QtCore, QtGui
 from ..charon_logger import system_info, system_warning, system_error, system_debug
 from .. import preferences
 from ..comfy_client import ComfyUIClient
 from ..comfy_environment import resolve_comfy_runtime
+from ..custom_node_repair import CustomNodeRepair, repair_tracked_module_shadows
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
 import urllib.request
 import urllib.error
@@ -46,6 +47,9 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._client: Optional[ComfyUIClient] = None
         self._settings = self._load_settings()
         self._comfy_path = self._settings.get(self._PATH_SETTING_KEY, "").strip()
+        self._custom_node_repairs: List[CustomNodeRepair] = []
+        self._repair_restart_notice_pending = False
+        self._repair_custom_node_overlays()
         self._base_url = resolve_comfy_runtime(self._comfy_path).base_url
         self._check_in_progress = False
         self._connected = False
@@ -149,6 +153,42 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         except Exception as exc:  # pragma: no cover - defensive path
             system_warning(f"Could not store ComfyUI setting '{key}': {exc}")
 
+    def _repair_custom_node_overlays(self) -> None:
+        if not self._comfy_path:
+            return
+        try:
+            repairs = repair_tracked_module_shadows(self._comfy_path)
+        except Exception as exc:  # pragma: no cover - defensive path
+            system_warning(f"Could not run custom-node overlay repair: {exc}")
+            return
+        if not repairs:
+            return
+        self._custom_node_repairs.extend(repairs)
+        self._repair_restart_notice_pending = True
+
+    def _offer_restart_after_custom_node_repair(self) -> None:
+        if not self._repair_restart_notice_pending or not self._connected:
+            return
+        self._repair_restart_notice_pending = False
+        plugin_names = sorted(
+            {repair.plugin_name for repair in self._custom_node_repairs},
+            key=str.casefold,
+        )
+        plugin_text = ", ".join(plugin_names) or "a custom node"
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Restart ComfyUI",
+            "Charon repaired stale files left by a custom-node update for "
+            f"{plugin_text}.\n\n"
+            "The running ComfyUI process still has the old Python package loaded. "
+            "Restart ComfyUI now to finish the repair?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
+        )
+        self._custom_node_repairs.clear()
+        if reply == QtWidgets.QMessageBox.Yes:
+            QtCore.QTimer.singleShot(0, self.handle_external_restart_request)
+
     def _prompt_for_path(self) -> None:
         self._set_status("path_required", False)
         QtWidgets.QMessageBox.information(
@@ -178,6 +218,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         self._comfy_path = path
         self._store_setting(self._PATH_SETTING_KEY, path)
 
+        self._repair_custom_node_overlays()
         extend_sys_path_with_comfy(path)
         if not self._watch_timer.isActive():
             self._watch_timer.start()
@@ -189,6 +230,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         if latest_path != (self._comfy_path or ""):
             self._comfy_path = latest_path
             if self._comfy_path:
+                self._repair_custom_node_overlays()
                 extend_sys_path_with_comfy(self._comfy_path)
         if self._managed_process and self._managed_process.poll() is not None:
             self._managed_process = None
@@ -263,6 +305,7 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             if status_changed:
                 system_info("ComfyUI connection established (watcher)")
             self.client_changed.emit(self._client)
+            QtCore.QTimer.singleShot(0, self._offer_restart_after_custom_node_repair)
         else:
             status_changed = self._connected
             self._client = None
@@ -590,6 +633,10 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
             self._reset_failed_restart_launch(restarting)
             return
 
+        self._repair_custom_node_overlays()
+        # A process launched after the repair will import the corrected files.
+        self._repair_restart_notice_pending = False
+        self._custom_node_repairs.clear()
         extend_sys_path_with_comfy(path)
         base_dir = path if os.path.isdir(path) else os.path.dirname(path)
         if not base_dir:

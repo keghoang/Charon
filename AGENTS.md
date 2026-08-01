@@ -8,6 +8,7 @@
   - `processor.py`, `node_factory.py`, `scene_nodes_runtime.py` - CharonOp creation plus ComfyUI processing.
   - `processor_context.py`, `processor_conversion.py`, `processor_output.py`, `processor_read_nodes.py`, `processor_recursion.py`, `processor_status.py`, `processor_submission.py` - testable processor helpers and explicit Nuke adapter boundaries.
   - `paths.py`, `preferences.py`, `config.py` - filesystem and configuration single sources of truth.
+  - `custom_node_repair.py` - manifest-backed repair for stale module/package shadows left by custom-node overlay updates.
   - `ui/` - PySide6 widgets for the production panel.
   - `execution/`, `settings/` - script engine helpers and persisted preferences.
 - Documentation lives under `docs/charon_panel_docs/`; runtime assets are in `charon/resources/`.
@@ -46,6 +47,7 @@
 - Use explicit relative imports inside `charon/` and route user-visible strings through `charon.charon_logger`.
 - Workflow-facing copy must use "workflow" (no residual "script" wording).
 - `.charon.json` stores `workflow_file`, `description`, `dependencies`, `last_changed`, `tags`, `parameters`, `min_vram_gb`, and `is_3d_texturing`; `cm-cli` now populates `dependencies` from workflow metadata (don't hand-enter Git URLs).
+- `.charon.models.json` is an optional generated sidecar that records authoritative shared-model categories; model upload owns it, and contributors should not hand-edit it.
 - `.gitignore` must exclude `__pycache__/` and `*.pyc`.
 
 ## Testing Guidelines
@@ -68,6 +70,7 @@
 - `paths.py` governs filesystem locations - extend it rather than hard-coding paths. Ensure the ComfyUI knob points to the portable install so `resolve_comfy_environment` finds `python_embeded`.
 - Dependencies must be installed into the ComfyUI bundle; `nodes.init_extra_nodes(init_custom_nodes=True)` expects a complete environment.
 - Preferences and caches persist under `%LOCALAPPDATA%\Charon\plugins\charon\`.
+- Recoverable custom-node overlay repairs are quarantined under the preferences root's `repairs/custom_node_module_shadows/` tree.
 - Workflow conversion drives the real ComfyUI frontend via Playwright (`workflow_browser_exporter.py`). The embedded Python auto-installs Playwright/Chromium on first run; it uses ComfyUI's standard `127.0.0.1:8188` endpoint, verifies the listener through `/system_stats`, and launches a headless instance only when the port is free. The exporter must wait for frontend/custom-node startup to settle and verify exported node IDs/types against the requested UI workflow before caching.
 - Workflows that emit 3D outputs (e.g., `.glb`) are stored under the `_CHARON/3D` tree; `.glb` assets are auto-converted to `.obj` via `trimesh` using the ComfyUI embedded Python. On launch, Charon checks the ComfyUI env for `trimesh` and Playwright and prompts to install if missing. CharonRead nodes will use ReadGeo for these assets.
 
