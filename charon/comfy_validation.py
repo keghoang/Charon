@@ -27,7 +27,7 @@ DEFAULT_PING_URL = config.COMFY_URL_BASE
 CACHE_KEY = "comfy_validation_cache"
 BANNER_PREF_KEY = "comfy_validator_banner_dismissed"
 CACHE_TTL_SECONDS = 900  # 15 minutes
-MODEL_EXTENSIONS = (".ckpt", ".safetensors", ".pth", ".pt", ".bin", ".onnx", ".yaml")
+MODEL_EXTENSIONS = (".ckpt", ".safetensors", ".sft", ".pth", ".pt", ".bin", ".onnx", ".gguf", ".yaml")
 IGNORED_NODE_TYPES = {
     "",
     "note",
@@ -79,6 +79,18 @@ try:
 
     from comfy.cli_args import args  # noqa: F401
     import folder_paths
+
+    # Register the user's extra model directories; ComfyUI only loads this
+    # yaml from main.py, so a bare folder_paths import would miss models that
+    # the running server can see.
+    extra_yaml = os.path.join(comfy_dir, "extra_model_paths.yaml")
+    if os.path.exists(extra_yaml):
+        try:
+            from utils.extra_config import load_extra_path_config
+
+            load_extra_path_config(extra_yaml)
+        except Exception:
+            pass
 
     models_dir = os.path.join(comfy_dir, "models")
 
@@ -1643,9 +1655,22 @@ def _validate_models(
                 continue
             reference = references[idx] if idx < len(references) else None
             reference_name = reference.get("name") if isinstance(reference, dict) else ""
-            reference_category = (
-                reference.get("category") if isinstance(reference, dict) else ""
+            manifest_category = (
+                reference.get("manifest_category") if isinstance(reference, dict) else ""
             )
+            if manifest_category:
+                # Manifest-backed categories are authoritative: a file found in
+                # a different folder really is misplaced.
+                reference_category = manifest_category
+            else:
+                # Otherwise the category is only a heuristic guess. ComfyUI's
+                # own resolver knows which folder it actually found the file
+                # in; trust that over the guess so custom loaders whose
+                # category we cannot infer are not reported missing.
+                reference_category = (
+                    resolved_categories.get(idx)
+                    or (reference.get("category") if isinstance(reference, dict) else "")
+                )
             if _resolved_path_matches_reference(
                 reference_name,
                 path,
@@ -1979,7 +2004,9 @@ def _resolve_models_with_comfy(
             command,
             cwd=comfy_dir,
             capture_output=True,
-            timeout=60,
+            # Cold torch imports can take well over a minute on slow machines;
+            # a timeout silently degrades validation to name-based search.
+            timeout=180,
             text=True,
         )
 
@@ -2879,14 +2906,16 @@ def _find_model_file(
 
 def _build_model_index(models_root: str) -> Dict[str, List[str]]:
     index: Dict[str, List[str]] = {}
-    for root, _dirs, files in os.walk(models_root):
+    max_depth = 6
+    for root, dirs, files in os.walk(models_root):
         rel_root = os.path.relpath(root, models_root)
         if rel_root == ".":
             depth = 0
         else:
             depth = rel_root.count(os.sep) + 1
-        if depth > 3:
-            continue
+        if depth >= max_depth:
+            # Stop descending instead of walking (and discarding) deeper trees.
+            dirs[:] = []
         for file_name in files:
             lowered = file_name.lower()
             index.setdefault(lowered, []).append(os.path.join(root, file_name))
@@ -2994,7 +3023,13 @@ def _resolved_path_matches_reference(
 
     reference_rel = reference_rel.replace("\\", "/").strip("/")
     if reference_rel == ".." or reference_rel.startswith("../"):
-        return False
+        # Outside models_root: legitimate for models registered through
+        # extra_model_paths.yaml. ComfyUI resolved it from a folder list it
+        # trusts, so accept it as long as the file name matches; the
+        # category/subfolder layout checks below only apply inside models_root.
+        resolved_filename = os.path.basename(resolved_path)
+        expected_filename = os.path.basename(normalized)
+        return resolved_filename.lower() == expected_filename.lower()
 
     expected_category = str(reference_category or "").strip().lower()
     if expected_category:

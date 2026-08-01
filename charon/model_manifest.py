@@ -117,7 +117,9 @@ def shared_relative_path(path: str, shared_root: str) -> Optional[str]:
 
 def category_from_shared_path(path: str, shared_root: str) -> Optional[str]:
     relative = shared_relative_path(path, shared_root)
-    if not relative:
+    if not relative or "/" not in relative:
+        # A file directly at the shared root has no category folder; without
+        # this guard the file name itself would become the category.
         return None
     category = relative.split("/", 1)[0]
     return _safe_category(category) or None

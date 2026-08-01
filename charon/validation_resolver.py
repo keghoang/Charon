@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import shutil
@@ -441,6 +442,53 @@ def resolve_missing_custom_nodes(
     return result
 
 
+def enable_manager_git_url_install(comfy_dir: Optional[str]) -> Optional[str]:
+    """Opt in to ComfyUI-Manager's Install-via-Git-URL in its config.ini.
+
+    Recent Manager versions (v4+) refuse ``/customnode/install/git_url``
+    unless ``config.ini`` carries ``allow_git_url_install = true`` in the
+    ``[default]`` section (this replaced the old ``security_level`` gate for
+    git URL installs). Returns the config path that was updated, or ``None``
+    when the flag was already set or nothing could be written.
+    """
+    if not comfy_dir:
+        return None
+    candidates = [
+        os.path.join(comfy_dir, "user", "default", "ComfyUI-Manager", "config.ini"),
+        os.path.join(comfy_dir, "custom_nodes", "ComfyUI-Manager", "config.ini"),
+        os.path.join(comfy_dir, "custom_nodes", "comfyui-manager", "config.ini"),
+    ]
+    target = next((path for path in candidates if os.path.isfile(path)), None)
+    if target is None:
+        # Manager >=3 keeps its config under user/default; seed the flag there
+        # when the user directory exists but Manager has not written one yet.
+        user_dir = os.path.join(comfy_dir, "user", "default")
+        if not os.path.isdir(user_dir):
+            return None
+        manager_dir = os.path.join(user_dir, "ComfyUI-Manager")
+        os.makedirs(manager_dir, exist_ok=True)
+        target = os.path.join(manager_dir, "config.ini")
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(target, encoding="utf-8")
+    except (OSError, configparser.Error) as exc:
+        system_warning(f"Could not read ComfyUI-Manager config '{target}': {exc}")
+        return None
+    if not parser.has_section("default"):
+        parser.add_section("default")
+    if parser.get("default", "allow_git_url_install", fallback="").strip().lower() == "true":
+        return None
+    parser.set("default", "allow_git_url_install", "true")
+    try:
+        with open(target, "w", encoding="utf-8") as handle:
+            parser.write(handle)
+    except OSError as exc:
+        system_warning(f"Could not update ComfyUI-Manager config '{target}': {exc}")
+        return None
+    system_info(f"Enabled allow_git_url_install in ComfyUI-Manager config: {target}")
+    return target
+
+
 def locate_manager_cli(comfy_dir: Optional[str]) -> Optional[Tuple[str, str]]:
     if not comfy_dir:
         return None
@@ -618,6 +666,27 @@ asyncio.run(main())
         result.skipped.append(entry)
     for entry in payload.get("failed") or []:
         result.failed.append(entry)
+
+    failure_text = " ".join(str(entry) for entry in result.failed)
+    if "allow_git_url_install" in failure_text:
+        # Newer ComfyUI-Manager gates git URL installs behind an explicit
+        # config flag; enable it so the install works after a restart.
+        updated = enable_manager_git_url_install(comfy_dir)
+        if updated:
+            result.failed.append(
+                "ComfyUI-Manager was blocking Git URL installs; Charon enabled "
+                f"'allow_git_url_install' in {updated}. Restart ComfyUI and resolve again."
+            )
+        else:
+            result.failed.append(
+                "ComfyUI-Manager blocks Git URL installs. Set 'allow_git_url_install = true' "
+                "under [default] in its config.ini and restart ComfyUI."
+            )
+    elif "security_level" in failure_text:
+        result.failed.append(
+            "ComfyUI-Manager's security_level blocks this install. Set 'security_level = weak' "
+            "in its config.ini, restart ComfyUI, retry, then restore the previous level."
+        )
 
     if not result.resolved and not result.failed and not result.skipped:
         result.notes.append("No installation actions were performed.")
