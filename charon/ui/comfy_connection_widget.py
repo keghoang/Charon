@@ -12,6 +12,7 @@ from ..comfy_client import ComfyUIClient
 from ..comfy_environment import resolve_comfy_runtime
 from ..custom_node_repair import CustomNodeRepair, repair_tracked_module_shadows
 from ..paths import extend_sys_path_with_comfy, resolve_comfy_environment
+from ..validation_resolver import enable_manager_git_url_install
 import urllib.request
 import urllib.error
 
@@ -646,6 +647,14 @@ class ComfyConnectionWidget(QtWidgets.QWidget):
         env_prefix = f'set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% {disable_flag}" && '
         comfy_env = resolve_comfy_environment(path)
         comfy_dir = comfy_env.get("comfy_dir") or base_dir
+        # Opt in to ComfyUI-Manager's git-URL installs before boot: newer
+        # Managers default allow_git_url_install to false and only read the
+        # config at startup, so writing it now means the server comes up with
+        # installs already permitted (no failed attempt, no extra restart).
+        try:
+            enable_manager_git_url_install(comfy_dir)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            system_warning(f"Could not update ComfyUI-Manager config: {exc}")
         python_exe = comfy_env.get("python_exe")
         main_py = os.path.join(comfy_dir, "main.py")
 
