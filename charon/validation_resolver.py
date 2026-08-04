@@ -442,6 +442,48 @@ def resolve_missing_custom_nodes(
     return result
 
 
+def existing_custom_node_conflict(comfy_dir: Optional[str], repo: str) -> Optional[str]:
+    """Explain why reinstalling ``repo`` via ComfyUI-Manager cannot succeed.
+
+    A node reported missing while its folder already sits in ``custom_nodes``
+    means the plugin is installed but failed to load (usually an import error
+    or missing pip dependency after an update). ComfyUI-Manager rejects the
+    reinstall with a bare HTTP 400, so surface the real state instead.
+    """
+    if not comfy_dir or not repo:
+        return None
+    name = _repo_display_name(repo)
+    if not name:
+        return None
+    custom_nodes_dir = os.path.join(comfy_dir, "custom_nodes")
+    installed = os.path.join(custom_nodes_dir, name)
+    try:
+        if os.path.isdir(installed):
+            if os.listdir(installed):
+                return (
+                    f"'{name}' is already installed at {installed} but ComfyUI is not "
+                    "loading its nodes. Reinstalling cannot fix this - check the "
+                    "ComfyUI console for the plugin's import error (missing pip "
+                    "dependencies are the usual cause), or delete the folder and "
+                    "resolve again for a clean install."
+                )
+            # An empty leftover folder would still make the Manager refuse the
+            # clone; removing the husk lets the install proceed.
+            os.rmdir(installed)
+    except OSError:
+        pass
+    for disabled in (
+        os.path.join(custom_nodes_dir, ".disabled", name),
+        os.path.join(custom_nodes_dir, f"{name}.disabled"),
+    ):
+        if os.path.isdir(disabled):
+            return (
+                f"'{name}' is installed but disabled ({disabled}). Enable it in "
+                "ComfyUI-Manager instead of reinstalling."
+            )
+    return None
+
+
 def enable_manager_git_url_install(comfy_dir: Optional[str]) -> Optional[str]:
     """Opt in to ComfyUI-Manager's Install-via-Git-URL in its config.ini.
 
@@ -550,10 +592,18 @@ def install_custom_nodes_via_playwright(
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
+        # ComfyUI-Manager refuses to clone over an existing folder with a bare
+        # HTTP 400, hiding the real problem. Detect that state up front and
+        # explain it instead of looping through doomed reinstalls.
+        conflict = existing_custom_node_conflict(comfy_dir, repo)
+        if conflict:
+            result.failed.append(conflict)
+            continue
         unique_repos.append(repo)
 
     if not unique_repos:
-        result.skipped.append("No unique repository URLs to install.")
+        if not result.failed:
+            result.skipped.append("No unique repository URLs to install.")
         return result
 
     temp_dir = tempfile.mkdtemp(prefix="charon_playwright_install_")
@@ -596,13 +646,24 @@ async def main():
             try:
                 response = await page.evaluate(
                     """async (repo) => {
-                        const res = await fetch('/customnode/install/git_url', {
-                            method: 'POST',
-                            body: repo,
-                        });
-                        let text = '';
-                        try { text = await res.text(); } catch (err) {}
-                        return { status: res.status, ok: res.ok, text };
+                        const attempt = async (body, contentType) => {
+                            const options = { method: 'POST', body };
+                            if (contentType) {
+                                options.headers = { 'Content-Type': contentType };
+                            }
+                            const res = await fetch('/customnode/install/git_url', options);
+                            let text = '';
+                            try { text = await res.text(); } catch (err) {}
+                            return { status: res.status, ok: res.ok, text };
+                        };
+                        // Classic Manager expects the raw URL as the body;
+                        // newer Manager requires JSON {"url": ...} and answers
+                        // 400 "Invalid request body" to the raw form.
+                        let response = await attempt(repo);
+                        if (!response.ok && response.text && response.text.indexOf('Invalid request body') !== -1) {
+                            response = await attempt(JSON.stringify({ url: repo }), 'application/json');
+                        }
+                        return response;
                     }""",
                     repo,
                 )
@@ -665,6 +726,15 @@ asyncio.run(main())
     for entry in payload.get("skipped") or []:
         result.skipped.append(entry)
     for entry in payload.get("failed") or []:
+        entry = str(entry)
+        if entry.endswith("status=400"):
+            # ComfyUI-Manager reports clone failures as a bare 400 and only
+            # logs the reason (bad URL, git failure, already exists) to its
+            # own console.
+            entry += (
+                " - ComfyUI-Manager rejected the install; the reason is in "
+                "the ComfyUI console log."
+            )
         result.failed.append(entry)
 
     failure_text = " ".join(str(entry) for entry in result.failed)

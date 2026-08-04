@@ -10,7 +10,10 @@ import os
 import tempfile
 import unittest
 
-from charon.validation_resolver import enable_manager_git_url_install
+from charon.validation_resolver import (
+    enable_manager_git_url_install,
+    existing_custom_node_conflict,
+)
 
 
 def _read_config(path):
@@ -75,6 +78,65 @@ class EnableManagerGitUrlInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertIsNone(enable_manager_git_url_install(tmp))
         self.assertIsNone(enable_manager_git_url_install(None))
+
+
+class ExistingCustomNodeConflictTests(unittest.TestCase):
+    """A node folder already on disk makes Manager reinstalls fail with a
+    bare 400; Charon must explain that state instead of retrying forever."""
+
+    REPO = "https://github.com/DemonGatanjieu/Anomalous_Model_Browser"
+
+    def test_installed_but_not_loading_is_explained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_dir = os.path.join(tmp, "custom_nodes", "Anomalous_Model_Browser")
+            os.makedirs(plugin_dir)
+            with open(os.path.join(plugin_dir, "__init__.py"), "w", encoding="utf-8") as handle:
+                handle.write("boom")
+
+            message = existing_custom_node_conflict(tmp, self.REPO)
+            self.assertIsNotNone(message)
+            self.assertIn("already installed", message)
+            self.assertIn("import error", message)
+
+    def test_disabled_install_is_explained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "custom_nodes", ".disabled", "Anomalous_Model_Browser"))
+            message = existing_custom_node_conflict(tmp, self.REPO)
+            self.assertIsNotNone(message)
+            self.assertIn("disabled", message)
+
+    def test_legacy_disabled_suffix_is_explained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "custom_nodes", "Anomalous_Model_Browser.disabled"))
+            message = existing_custom_node_conflict(tmp, self.REPO)
+            self.assertIsNotNone(message)
+            self.assertIn("disabled", message)
+
+    def test_empty_leftover_folder_is_removed_so_install_can_proceed(self):
+        # The Manager refuses to clone over any existing folder, even an
+        # empty husk; the pre-flight clears the husk instead of reporting a
+        # conflict so the clean install goes through.
+        with tempfile.TemporaryDirectory() as tmp:
+            leftover = os.path.join(tmp, "custom_nodes", "Anomalous_Model_Browser")
+            os.makedirs(leftover)
+            self.assertIsNone(existing_custom_node_conflict(tmp, self.REPO))
+            self.assertFalse(os.path.exists(leftover))
+
+    def test_absent_folder_is_no_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "custom_nodes"))
+            self.assertIsNone(existing_custom_node_conflict(tmp, self.REPO))
+        self.assertIsNone(existing_custom_node_conflict(None, self.REPO))
+        self.assertIsNone(existing_custom_node_conflict("C:/x", ""))
+
+    def test_git_suffix_maps_to_same_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_dir = os.path.join(tmp, "custom_nodes", "Anomalous_Model_Browser")
+            os.makedirs(plugin_dir)
+            with open(os.path.join(plugin_dir, "nodes.py"), "w", encoding="utf-8") as handle:
+                handle.write("x")
+            message = existing_custom_node_conflict(tmp, self.REPO + ".git")
+            self.assertIsNotNone(message)
 
 
 if __name__ == "__main__":
