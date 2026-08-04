@@ -7,8 +7,11 @@ the flag when it detects that failure.
 
 import configparser
 import os
+import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from charon.validation_resolver import (
     enable_manager_git_url_install,
@@ -128,6 +131,67 @@ class ExistingCustomNodeConflictTests(unittest.TestCase):
             self.assertIsNone(existing_custom_node_conflict(tmp, self.REPO))
         self.assertIsNone(existing_custom_node_conflict(None, self.REPO))
         self.assertIsNone(existing_custom_node_conflict("C:/x", ""))
+
+    def _make_broken_install(self, tmp, with_requirements=True):
+        plugin_dir = os.path.join(tmp, "custom_nodes", "Anomalous_Model_Browser")
+        os.makedirs(plugin_dir)
+        with open(os.path.join(plugin_dir, "__init__.py"), "w", encoding="utf-8") as handle:
+            handle.write("import missing_dependency")
+        if with_requirements:
+            with open(os.path.join(plugin_dir, "requirements.txt"), "w", encoding="utf-8") as handle:
+                handle.write("missing_dependency\n")
+        return plugin_dir
+
+    def test_broken_install_with_requirements_is_auto_repaired(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_dir = self._make_broken_install(tmp)
+            calls = []
+
+            def fake_run(command, **kwargs):
+                calls.append(command)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with mock.patch("charon.validation_resolver.subprocess.run", side_effect=fake_run):
+                message = existing_custom_node_conflict(
+                    tmp, self.REPO, python_exe=sys.executable
+                )
+
+            self.assertIsNotNone(message)
+            self.assertIn("reinstalled its Python dependencies", message)
+            self.assertIn("restart", message.lower())
+            self.assertEqual(1, len(calls))
+            self.assertIn("pip", calls[0])
+            self.assertIn(os.path.join(plugin_dir, "requirements.txt"), calls[0])
+
+    def test_failed_repair_reports_pip_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_broken_install(tmp)
+
+            def fake_run(command, **kwargs):
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr="ERROR: No matching distribution found for missing_dependency",
+                )
+
+            with mock.patch("charon.validation_resolver.subprocess.run", side_effect=fake_run):
+                message = existing_custom_node_conflict(
+                    tmp, self.REPO, python_exe=sys.executable
+                )
+
+            self.assertIsNotNone(message)
+            self.assertIn("Automatic dependency repair failed", message)
+            self.assertIn("No matching distribution", message)
+
+    def test_broken_install_without_requirements_keeps_manual_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_broken_install(tmp, with_requirements=False)
+            message = existing_custom_node_conflict(
+                tmp, self.REPO, python_exe=sys.executable
+            )
+            self.assertIsNotNone(message)
+            self.assertIn("already installed", message)
+            self.assertNotIn("Automatic dependency repair", message)
 
     def test_git_suffix_maps_to_same_folder(self):
         with tempfile.TemporaryDirectory() as tmp:

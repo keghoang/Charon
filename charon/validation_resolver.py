@@ -442,13 +442,51 @@ def resolve_missing_custom_nodes(
     return result
 
 
-def existing_custom_node_conflict(comfy_dir: Optional[str], repo: str) -> Optional[str]:
+def repair_custom_node_dependencies(
+    python_exe: Optional[str],
+    plugin_dir: str,
+    timeout: int = 300,
+) -> Optional[Tuple[bool, str]]:
+    """Reinstall a broken plugin's pip requirements with the embedded python.
+
+    Returns ``None`` when there is nothing to repair with (no interpreter or
+    no requirements.txt), otherwise ``(succeeded, detail)``.
+    """
+    requirements = os.path.join(plugin_dir, "requirements.txt")
+    if not python_exe or not os.path.exists(python_exe) or not os.path.isfile(requirements):
+        return None
+    try:
+        completed = subprocess.run(
+            [python_exe, "-m", "pip", "install", "-r", requirements],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=plugin_dir,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "pip install timed out"
+    except Exception as exc:  # pragma: no cover - subprocess guard
+        return False, str(exc)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return False, detail.splitlines()[-1] if detail else "pip install failed"
+    system_info(f"Reinstalled custom-node dependencies from {requirements}")
+    return True, requirements
+
+
+def existing_custom_node_conflict(
+    comfy_dir: Optional[str],
+    repo: str,
+    python_exe: Optional[str] = None,
+) -> Optional[str]:
     """Explain why reinstalling ``repo`` via ComfyUI-Manager cannot succeed.
 
     A node reported missing while its folder already sits in ``custom_nodes``
     means the plugin is installed but failed to load (usually an import error
     or missing pip dependency after an update). ComfyUI-Manager rejects the
-    reinstall with a bare HTTP 400, so surface the real state instead.
+    reinstall with a bare HTTP 400, so surface the real state instead — and
+    when the embedded python is available, repair the usual cause directly by
+    reinstalling the plugin's pip requirements.
     """
     if not comfy_dir or not repo:
         return None
@@ -460,13 +498,24 @@ def existing_custom_node_conflict(comfy_dir: Optional[str], repo: str) -> Option
     try:
         if os.path.isdir(installed):
             if os.listdir(installed):
-                return (
+                repair = repair_custom_node_dependencies(python_exe, installed)
+                if repair is not None and repair[0]:
+                    return (
+                        f"'{name}' was installed but its nodes were not loading. "
+                        "Charon reinstalled its Python dependencies - restart "
+                        "ComfyUI and validate again. If it still fails, check "
+                        "the ComfyUI console for the plugin's import error."
+                    )
+                message = (
                     f"'{name}' is already installed at {installed} but ComfyUI is not "
                     "loading its nodes. Reinstalling cannot fix this - check the "
                     "ComfyUI console for the plugin's import error (missing pip "
                     "dependencies are the usual cause), or delete the folder and "
                     "resolve again for a clean install."
                 )
+                if repair is not None:
+                    message += f" Automatic dependency repair failed: {repair[1]}"
+                return message
             # An empty leftover folder would still make the Manager refuse the
             # clone; removing the husk lets the install proceed.
             os.rmdir(installed)
@@ -593,9 +642,10 @@ def install_custom_nodes_via_playwright(
             continue
         seen.add(normalized)
         # ComfyUI-Manager refuses to clone over an existing folder with a bare
-        # HTTP 400, hiding the real problem. Detect that state up front and
-        # explain it instead of looping through doomed reinstalls.
-        conflict = existing_custom_node_conflict(comfy_dir, repo)
+        # HTTP 400, hiding the real problem. Detect that state up front,
+        # repair the plugin's pip dependencies when possible, and explain the
+        # outcome instead of looping through doomed reinstalls.
+        conflict = existing_custom_node_conflict(comfy_dir, repo, python_exe=python_exe)
         if conflict:
             result.failed.append(conflict)
             continue
