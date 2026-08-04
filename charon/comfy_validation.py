@@ -2231,6 +2231,10 @@ def _validate_custom_nodes(
             )
             missing.append(repo)
         # Also seed mappings directly from aux_id hints even if cm-cli didn't flag the node as unknown.
+        # Seed only: an aux_id stamp is provenance metadata (frontend extensions
+        # like model-browser tools stamp nodes they touch), not evidence the
+        # pack is missing. A node type that loads fine must never drag its
+        # stamped repo into the missing list.
         for node_name, repo in aux_repos.items():
             key = str(node_name or "").strip().lower()
             if not key:
@@ -2242,7 +2246,6 @@ def _validate_custom_nodes(
                     "display": _display_name_for_repo(repo),
                 },
             )
-            missing.append(repo)
         # Preserve inferred mappings for unknown nodes that match installed folders.
         for node_name, folder in unknown_matches.items():
             key = str(node_name or "").strip().lower()
@@ -2598,7 +2601,8 @@ def _match_unknown_nodes_to_aux(
 ) -> Dict[str, str]:
     matches: Dict[str, str] = {}
     for node_name in unknown_nodes or []:
-        repo = aux_repos.get(str(node_name) or "")
+        # aux_repos is keyed by lowercased node type.
+        repo = aux_repos.get(str(node_name or "").strip().lower())
         if repo:
             matches[str(node_name)] = repo
     return matches
